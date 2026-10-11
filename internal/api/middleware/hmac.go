@@ -105,7 +105,10 @@ func HMACMiddleware() gin.HandlerFunc {
 			if errMongo == nil && session.ID != 0 {
 				numan_log.Debug(c).Msg("Session trouvée dans Mongo L2, réhydratation L1...")
 				sessionFound = true
-				_ = cache_service.SetSessionInCache(c, session)
+				err = cache_service.SetSessionInCache(c, session)
+				if err != nil {
+					numan_log.Warn(c).Err(err).Int64("session_id", session.ID).Msg("Warning: Echec update Session Cache L1")
+				}
 			}
 		}
 
@@ -115,8 +118,14 @@ func HMACMiddleware() gin.HandlerFunc {
 			if errPg == nil && session.ID != 0 {
 				numan_log.Debug(c).Msg("Session trouvée dans Postgres L3, réhydratation massive...")
 				sessionFound = true
-				_ = cache_service.SetSessionInCache(c, session)
-				_ = redis.EnqueueDB(c, session.ID, 0, redis.EntitySession, redis.ActionCreate, session, redis.TargetMongo)
+				err = cache_service.SetSessionInCache(c, session)
+				if err != nil {
+					numan_log.Warn(c).Err(err).Int64("session_id", session.ID).Msg("Warning: Echec update Session Cache L1")
+				}
+				err = redis.EnqueueDB(c, session.ID, 0, redis.EntitySession, redis.ActionCreate, session, redis.TargetMongo)
+				if err != nil {
+					numan_log.Warn(c).Err(err).Int64("session_id", session.ID).Msg("Warning: Echec update Session Redis")
+				}
 			}
 		}
 
@@ -143,7 +152,12 @@ func HMACMiddleware() gin.HandlerFunc {
 		// 5. Lecture et Validation HMAC Requête
 		var bodyBytes []byte
 		if c.Request.Body != nil {
-			bodyBytes, _ = io.ReadAll(c.Request.Body)
+			bodyBytes, err = io.ReadAll(c.Request.Body)
+			if err != nil {
+				numan_error.RespondWithError(c, numan_error.NewBadRequest("READ_BODY_ERROR", "Erreur de lecture du body.", err))
+				c.Abort()
+				return
+			}
 			c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		}
 

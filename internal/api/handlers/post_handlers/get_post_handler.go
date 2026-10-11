@@ -4,7 +4,6 @@ import (
 	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	_ "github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/post_models"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"

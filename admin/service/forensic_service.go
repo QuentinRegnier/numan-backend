@@ -4,16 +4,11 @@ import (
 	"bytes"
 	"fmt"
 	"image"
-	_ "image/jpeg" // JPEG (Appareils photos standards)
-	_ "image/png"  // PNG (Captures d'écran standards)
 	"math"
 	"strings"
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	_ "github.com/jdeng/goheif" // HEIC/HEIF (Standard iPhone Apple)
-	_ "golang.org/x/image/tiff" // NOUVEAU : TIFF (Formats bruts ou modifiés via Photoshop)
-	_ "golang.org/x/image/webp" // NOUVEAU : WebP (Captures d'écran / Sauvegardes Android)
 
 	"github.com/gen2brain/avif" // AVIF (Format natif de numan)
 )

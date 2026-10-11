@@ -66,13 +66,25 @@ func FuncLoadConversationPaginated(ctx context.Context, userID int64, limit int6
 			}
 
 			if convSettingsRaw.Valid && convSettingsRaw.String != "" && convSettingsRaw.String != "{}" {
-				_ = json.Unmarshal([]byte(convSettingsRaw.String), &c.Settings)
+				err = json.Unmarshal([]byte(convSettingsRaw.String), &c.Settings)
+				if err != nil {
+					numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des paramètres de conversation")
+					return nil, numan_error.NewInternal()
+				}
 			}
 			if externalLink.Valid && externalLink.String != "" && externalLink.String != "{}" {
-				_ = json.Unmarshal([]byte(externalLink.String), &c.ExternalLink)
+				err = json.Unmarshal([]byte(externalLink.String), &c.ExternalLink)
+				if err != nil {
+					numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des liens externes")
+					return nil, numan_error.NewInternal()
+				}
 			}
 			if memSettingsRaw.Valid && memSettingsRaw.String != "" && memSettingsRaw.String != "{}" {
-				_ = json.Unmarshal([]byte(memSettingsRaw.String), &m.Settings)
+				err = json.Unmarshal([]byte(memSettingsRaw.String), &m.Settings)
+				if err != nil {
+					numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des paramètres du membre")
+					return nil, numan_error.NewInternal()
+				}
 			}
 
 			results = append(results, fullInboxResult{Conversation: c, Member: m})

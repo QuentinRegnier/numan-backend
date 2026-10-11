@@ -3,8 +3,6 @@ package saved_handlers
 import (
 	"net/http"
 
-	_ "github.com/QuentinRegnier/numan-backend/internal/domain/models/post_models"
-
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/saved_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"

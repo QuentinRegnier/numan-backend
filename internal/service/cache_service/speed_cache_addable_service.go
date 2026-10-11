@@ -76,18 +76,34 @@ func GetAddableUsersFromSpeedCache(ctx context.Context, callerID int64, limit in
 						invertedStateValue := variables.RelationStateFriend - relationStateMap[targetID]
 						lexicographicMemberString := fmt.Sprintf("%d_%s_%d", invertedStateValue, strings.ToLower(userLitePayload.Username), userLitePayload.ID)
 
-						_ = redis.ZAdd(ctx, zsetTargetKey, 0, lexicographicMemberString)
+						err := redis.ZAdd(ctx, zsetTargetKey, 0, lexicographicMemberString)
+						if err != nil {
+							numan_log.Warn(ctx).Err(err).Msg("Échec ZADD lors de la reconstruction SpeedAddable")
+							return nil, err
+						}
 					}
 				}
 			}
 
 			// TTL Glissant de 5 minutes
-			_ = redis.Expire(ctx, zsetTargetKey, 5*time.Minute)
+			err := redis.Expire(ctx, zsetTargetKey, 5*time.Minute)
+			if err != nil {
+				numan_log.Warn(ctx).Err(err).Msg("Échec Expire lors de la reconstruction SpeedAddable")
+				return nil, err
+			}
 
 		} else {
 			// Injection du Marqueur de vide pour éviter le Cache-Hole
-			_ = redis.ZAdd(ctx, zsetTargetKey, 0, variables.SpeedCacheEmptyMarker)
-			_ = redis.Expire(ctx, zsetTargetKey, 5*time.Minute)
+			err := redis.ZAdd(ctx, zsetTargetKey, 0, variables.SpeedCacheEmptyMarker)
+			if err != nil {
+				numan_log.Warn(ctx).Err(err).Msg("Échec ZADD du marqueur vide lors de la reconstruction SpeedAddable")
+				return nil, err
+			}
+			err = redis.Expire(ctx, zsetTargetKey, 5*time.Minute)
+			if err != nil {
+				numan_log.Warn(ctx).Err(err).Msg("Échec Expire lors de la reconstruction SpeedAddable")
+				return nil, err
+			}
 		}
 	}
 

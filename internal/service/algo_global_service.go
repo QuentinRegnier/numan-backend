@@ -35,7 +35,7 @@ type ScoreOptions struct {
 //
 // Formule composite complète :
 // S(p, t) = BaseScore(p, t) · ExponentialDecay(p, t) · QualityFactor(p) · DiversityFactor(p)
-func CalculateRecommendationScore(_ int64, options ScoreOptions) float64 {
+func CalculateRecommendationScore(options ScoreOptions) float64 {
 
 	// 1. FACTEUR DE MODÉRATION (phi_mod)
 	if options.IsDeleted {

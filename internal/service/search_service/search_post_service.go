@@ -82,7 +82,7 @@ func SearchPosts(ctx context.Context, callerID int64, input search_models.Search
 	// ── ÉTAPE 2 : RECHERCHE PAR HASHTAG EXACT (#) ───────────────────────────
 
 	if !hasQueryBeenIntercepted && strings.HasPrefix(input.Query, "#") {
-		cleanHashtagSlug := service.NormalizeHashtag(input.Query)
+		cleanHashtagSlug := service.NormalizeHashtag(ctx, input.Query)
 
 		if cleanHashtagSlug != "" {
 			// Si on demande les plus récents, on tape le ZSET ultra-rapide L1

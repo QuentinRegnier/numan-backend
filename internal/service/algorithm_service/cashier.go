@@ -64,7 +64,11 @@ func buildPersonalizedFeed(ctx context.Context, options PersonalizedFeedOptions)
 	}
 
 	// Récupération en masse des scores ZSET
-	rawScores, _ := redis.ZScores(ctx, dailyTrendRedisKey, memberStrings)
+	rawScores, err := redis.ZScores(ctx, dailyTrendRedisKey, memberStrings)
+	if err != nil {
+		numan_log.Error(ctx).Err(err).Str("dailyTrendRedisKey", dailyTrendRedisKey).Msg("buildPersonalizedFeed: Échec de la récupération des scores de tendance")
+		return nil, numan_error.NewInternal()
+	}
 
 	trendScoresMap := make(map[int64]float64, len(postIDs))
 	for i, id := range postIDs {
@@ -116,7 +120,11 @@ func buildPersonalizedFeed(ctx context.Context, options PersonalizedFeedOptions)
 		numan_log.Info(ctx).Int("missing_count", len(missingIDs)).Msg("Cache Miss sur ContentVectors, déclenchement du Fallback L2/L3...")
 
 		// Fallback L2 (Mongo)
-		mongoPosts, _ := mongo.MongoLoadPosts(ctx, missingIDs)
+		mongoPosts, err := mongo.MongoLoadPosts(ctx, missingIDs)
+		if err != nil {
+			numan_log.Error(ctx).Err(err).Msg("buildPersonalizedFeed: Échec du chargement des posts depuis MongoDB")
+			return nil, numan_error.NewInternal()
+		}
 		foundInMongo := make(map[int64]bool)
 
 		for _, post := range mongoPosts {
@@ -144,7 +152,11 @@ func buildPersonalizedFeed(ctx context.Context, options PersonalizedFeedOptions)
 		}
 
 		if len(stillMissingIDs) > 0 {
-			pgPosts, _ := postgres.FuncLoadPosts(ctx, stillMissingIDs, 1, 0)
+			pgPosts, err := postgres.FuncLoadPosts(ctx, stillMissingIDs, 1, 0)
+			if err != nil {
+				numan_log.Error(ctx).Err(err).Msg("buildPersonalizedFeed: Échec du chargement des posts depuis PostgreSQL")
+				return nil, numan_error.NewInternal()
+			}
 			for _, post := range pgPosts {
 				if len(post.Vector) == variables.VectorDimTotal {
 					allCandidates = append(allCandidates, postCandidate{
@@ -182,7 +194,11 @@ func buildPersonalizedFeed(ctx context.Context, options PersonalizedFeedOptions)
 
 	if options.UserConfidence > variables.TDDLSHConfidenceThreshold {
 		lshHash := defaultLSHEngine.computeHash(options.UserVec)
-		lshTargetIDSet, _ := getLSHCandidateIDs(ctx, lshHash)
+		lshTargetIDSet, err := getLSHCandidateIDs(ctx, lshHash)
+		if err != nil {
+			numan_log.Error(ctx).Err(err).Msg("buildPersonalizedFeed: Échec de la récupération des candidats LSH")
+			return nil, numan_error.NewInternal()
+		}
 
 		filtered := make([]postCandidate, 0, len(lshTargetIDSet))
 		for _, candidate := range allCandidates {
@@ -257,7 +273,11 @@ func buildPersonalizedFeed(ctx context.Context, options PersonalizedFeedOptions)
 	// ############################################################################
 
 	// On fige le calcul en RAM pour intercepter les futures requêtes identiques
-	_ = redis.FeedsPersonalized.SetObject(ctx, options.UserID, finalFeedIDs)
+	err = redis.FeedsPersonalized.SetObject(ctx, options.UserID, finalFeedIDs)
+	if err != nil {
+		numan_log.Error(ctx).Err(err).Msg("buildPersonalizedFeed: Échec de la sauvegarde du feed personnalisé")
+		return nil, numan_error.NewInternal()
+	}
 
 	return finalFeedIDs, nil
 }
@@ -279,7 +299,11 @@ func InvalidatePersonalizedFeedCache(ctx context.Context, userID int64, oldVecto
 
 	if euclideanDelta > variables.TDDDeltaInvalid {
 		// Invalidation pure et atomique
-		_ = redis.FeedsPersonalized.DeleteObject(ctx, userID)
+		err := redis.FeedsPersonalized.DeleteObject(ctx, userID)
+		if err != nil {
+			numan_log.Error(ctx).Err(err).Msg("InvalidatePersonalizedFeedCache: Échec de l'invalidation du cache")
+			return false
+		}
 		return true
 	}
 

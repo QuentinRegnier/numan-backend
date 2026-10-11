@@ -36,7 +36,7 @@ type ContentVectorOptions struct {
 
 // StoreContentVector calcule et stocke de manière asynchrone le vecteur ĉ_p du post.
 func StoreContentVector(ctx context.Context, post post_models.PostPayload) {
-	fullVector := ComputeContentVectorFull(post, nil)
+	fullVector := ComputeContentVectorFull(ctx, post, nil)
 
 	payload := contentVectorPayload{
 		Vector:        fullVector,
@@ -91,7 +91,7 @@ func UpdatePostEngagementVector(ctx context.Context, post post_models.PostPayloa
 // ############################################################################
 
 // ComputeContentVectorFull construit le vecteur complet ĉ_p ∈ R^224 normalisé.
-func ComputeContentVectorFull(post post_models.PostPayload, options *ContentVectorOptions) []float32 {
+func ComputeContentVectorFull(ctx context.Context, post post_models.PostPayload, options *ContentVectorOptions) []float32 {
 	fullVector := make([]float32, variables.VectorDimTotal)
 
 	categoricalBlock := fullVector[variables.VectorOffCat : variables.VectorOffCat+variables.VectorDimCat]
@@ -101,7 +101,7 @@ func ComputeContentVectorFull(post post_models.PostPayload, options *ContentVect
 
 	// BLOC 1 : Catégoriel
 	if options != nil && len(options.TagEmbeddings) > 0 {
-		computeCategoricalBlock(post.Hashtags, options.TagEmbeddings, categoricalBlock)
+		computeCategoricalBlock(ctx, post.Hashtags, options.TagEmbeddings, categoricalBlock)
 	}
 
 	// BLOC 2 : Temporel
@@ -122,9 +122,9 @@ func ComputeContentVectorFull(post post_models.PostPayload, options *ContentVect
 }
 
 // computeCategoricalBlock calcule le bloc catégoriel c_p^(cat) ∈ R^128.
-func computeCategoricalBlock(hashtags []string, embeddings map[string][]float32, targetBlock []float32) {
+func computeCategoricalBlock(ctx context.Context, hashtags []string, embeddings map[string][]float32, targetBlock []float32) {
 	for _, tag := range hashtags {
-		normalizedTag := service.NormalizeHashtag(tag)
+		normalizedTag := service.NormalizeHashtag(ctx, tag)
 		embeddingVector, exists := embeddings[normalizedTag]
 
 		if !exists || len(embeddingVector) < variables.VectorDimCat {

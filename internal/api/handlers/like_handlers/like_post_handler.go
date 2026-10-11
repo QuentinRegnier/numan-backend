@@ -68,7 +68,11 @@ func LikePostHandler(c *gin.Context) {
 		return
 	}
 
-	_ = like_service.TogglePostLike(c.Request.Context(), callerID, input)
+	err = like_service.TogglePostLike(c.Request.Context(), callerID, input)
+	if err != nil {
+		numan_error.RespondWithError(c, err)
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Action prise en compte"})
 }

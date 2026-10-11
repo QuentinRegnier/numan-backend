@@ -65,7 +65,11 @@ func updateEdge(ctx context.Context, sourceTag, targetTag string, currentTimesta
 	// 1. Lecture de l'état actuel via la Collection abstraite Redis
 	binaryData, errRedis := redis.GraphEdges.HGet(ctx, sourceTag, targetTag).Bytes()
 	if errRedis == nil {
-		_ = msgpack.Unmarshal(binaryData, &currentEdge)
+		err := msgpack.Unmarshal(binaryData, &currentEdge)
+		if err != nil {
+			numan_log.Error(ctx).Err(err).Msg("Échec de la désérialisation MessagePack pour une arête de graphe")
+			return
+		}
 	}
 
 	// 2. Calcul du Δt en jours

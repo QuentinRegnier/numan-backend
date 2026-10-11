@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/realtime_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/security_service"
@@ -29,21 +30,35 @@ type client struct {
 func (c *client) readPump() {
 	defer func() {
 		c.Hub.Unregister <- c
-		_ = c.Conn.Close()
+		err := c.Conn.Close()
+		if err != nil {
+			numan_log.Error(context.Background()).Err(err).Msg("WS readPump: Erreur lors de la fermeture de la connexion")
+		}
 		// Pas besoin d'appeler de fonction pour dire "offline" !
 		// Si le client crashe ou quitte, les pings JSON s'arrêtent,
 		// et Redis fera expirer le TTL de 90s tout seul. Magique.
 	}()
 
 	c.Conn.SetReadLimit(maxMessageSize)
-	_ = c.Conn.SetReadDeadline(time.Now().Add(pongWait))
+	err := c.Conn.SetReadDeadline(time.Now().Add(pongWait))
+	if err != nil {
+		numan_log.Error(context.Background()).Err(err).Msg("WS readPump: Erreur lors de la définition du ReadDeadline")
+		return
+	}
 
 	// Optionnel : Tu peux garder le SetPongHandler si tu veux supporter les deux méthodes
 	// (Pings natifs ET Pings JSON). C'est ce que je ferais en tant que Senior pour être ultra robuste.
 	c.Conn.SetPongHandler(func(string) error {
-		_ = c.Conn.SetReadDeadline(time.Now().Add(pongWait))
+		err = c.Conn.SetReadDeadline(time.Now().Add(pongWait))
+		if err != nil {
+			numan_log.Error(context.Background()).Err(err).Msg("WS readPump: Erreur lors de la mise à jour du ReadDeadline après PONG")
+			return err
+		}
 		// Si un client envoie un vrai ping natif, on le marque aussi en ligne
-		_ = cache_service.MarkUserOnline(context.Background(), c.UserID)
+		err = cache_service.MarkUserOnline(context.Background(), c.UserID)
+		if err != nil {
+			numan_log.Warn(context.Background()).Err(err).Int64("user_id", c.UserID).Msg("WS readPump: Impossible de marquer l'utilisateur comme en ligne après PONG")
+		}
 		return nil
 	})
 
@@ -55,7 +70,10 @@ func (c *client) readPump() {
 
 		// Dès qu'on reçoit un message (n'importe lequel : typing, message.create, ou ping),
 		// on prolonge le bail de présence. L'activité prouve la présence.
-		_ = cache_service.MarkUserOnline(context.Background(), c.UserID)
+		err = cache_service.MarkUserOnline(context.Background(), c.UserID)
+		if err != nil {
+			numan_log.Warn(context.Background()).Err(err).Int64("user_id", c.UserID).Msg("WS readPump: Impossible de marquer l'utilisateur comme en ligne après réception d'un message")
+		}
 
 		// On envoie le message brut au routeur !
 		c.route(message)
@@ -81,7 +99,11 @@ func (c *client) handleTyping(eventType string, convID int64) {
 	}
 
 	// Délégation au Pub/Sub : Cela va propager l'info dans les canaux Redis des autres utilisateurs[cite: 16].
-	_ = realtime_service.BroadcastToConversation(ctx, convID, eventType, broadcastPayload)
+	err = realtime_service.BroadcastToConversation(ctx, convID, eventType, broadcastPayload)
+	if err != nil {
+		numan_log.Error(ctx).Err(err).Int64("conversation_id", convID).Int64("user_id", c.UserID).Msg("WS handleTyping: Impossible de broadcast l'événement de frappe")
+		return
+	}
 }
 
 // writePump est la seule goroutine qui écrit physiquement sur la connexion TCP
@@ -89,15 +111,25 @@ func (c *client) writePump() {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
-		_ = c.Conn.Close()
+		err := c.Conn.Close()
+		if err != nil {
+			numan_log.Error(context.Background()).Err(err).Msg("WS writePump: Impossible de fermer la connexion")
+		}
 	}()
 
 	for {
 		select {
 		case message, ok := <-c.Send:
-			_ = c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
+			err := c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err != nil {
+				numan_log.Error(context.Background()).Err(err).Msg("WS writePump: Impossible de définir le WriteDeadline")
+				return
+			}
 			if !ok {
-				_ = c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
+				err := c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
+				if err != nil {
+					numan_log.Error(context.Background()).Err(err).Msg("WS writePump: Impossible d'écrire le message de fermeture")
+				}
 				return
 			}
 
@@ -105,11 +137,19 @@ func (c *client) writePump() {
 			if err != nil {
 				return
 			}
-			_, _ = w.Write(message)
+			_, err = w.Write(message)
+			if err != nil {
+				numan_log.Error(context.Background()).Err(err).Msg("WS writePump: Impossible d'écrire le message")
+				return
+			}
 
 			n := len(c.Send)
 			for i := 0; i < n; i++ {
-				_, _ = w.Write(<-c.Send)
+				_, err = w.Write(<-c.Send)
+				if err != nil {
+					numan_log.Error(context.Background()).Err(err).Msg("WS writePump: Impossible d'écrire le message")
+					return
+				}
 			}
 
 			if err := w.Close(); err != nil {
@@ -117,7 +157,11 @@ func (c *client) writePump() {
 			}
 
 		case <-ticker.C:
-			_ = c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
+			err := c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err != nil {
+				numan_log.Error(context.Background()).Err(err).Msg("WS writePump: Impossible de définir le WriteDeadline")
+				return
+			}
 			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}

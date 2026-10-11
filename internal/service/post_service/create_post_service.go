@@ -162,7 +162,7 @@ func CreatePost(ctx context.Context, callerID int64, input post_models.CreatePos
 
 	// ── ÉTAPE 6 : VECTORISATION SÉMANTIQUE SYNCHRONE (O(1)) ─────────────────
 
-	postPayload.Vector = algorithm_service.ComputeContentVectorFull(postPayload, nil)
+	postPayload.Vector = algorithm_service.ComputeContentVectorFull(ctx, postPayload, nil)
 
 	// ── ÉTAPE 7 : CACHE REDIS L1 ET INDEXATION TIMELINE ─────────────────────
 

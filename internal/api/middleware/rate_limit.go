@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/gin-gonic/gin"
 )
@@ -32,7 +33,12 @@ func RateLimiter() gin.HandlerFunc {
 
 		// Si c'est la première requête, on rafraîchit le TTL (10s préconfiguré dans le manager)
 		if count == 1 {
-			_ = redis.RateLimits.RefreshTTL(ctx, clientIP)
+			err = redis.RateLimits.RefreshTTL(ctx, clientIP)
+			if err != nil {
+				numan_log.Warn(ctx).Err(err).Str("client_ip", clientIP).Msg("Impossible de rafraîchir le TTL du rate limit")
+				c.Next()
+				return
+			}
 		}
 
 		// Si on dépasse la limite

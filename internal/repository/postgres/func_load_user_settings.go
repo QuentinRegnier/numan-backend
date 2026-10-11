@@ -43,13 +43,25 @@ func FuncLoadUserSettings(ctx context.Context, userID int64) (user_settings_mode
 
 	// Conversion des JSONB en Map
 	if len(privacyBytes) > 0 {
-		_ = json.Unmarshal(privacyBytes, &s.Privacy)
+		err = json.Unmarshal(privacyBytes, &s.Privacy)
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des paramètres de confidentialité")
+			return s, numan_error.NewInternal()
+		}
 	}
 	if len(notifBytes) > 0 {
-		_ = json.Unmarshal(notifBytes, &s.Notifications)
+		err = json.Unmarshal(notifBytes, &s.Notifications)
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des paramètres de notification")
+			return s, numan_error.NewInternal()
+		}
 	}
 	if len(displayBytes) > 0 {
-		_ = json.Unmarshal(displayBytes, &s.DisplayAndContent)
+		err = json.Unmarshal(displayBytes, &s.DisplayAndContent)
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des paramètres d'affichage et de contenu")
+			return s, numan_error.NewInternal()
+		}
 	}
 
 	return s, nil

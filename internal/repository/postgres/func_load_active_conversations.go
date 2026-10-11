@@ -50,10 +50,18 @@ func FuncLoadActiveConversations(ctx context.Context) ([]lite_models.ConvLiteReq
 				meta.LastMessageID = lastMsgID.Int64
 			}
 			if settingsRaw.Valid && settingsRaw.String != "" && settingsRaw.String != "{}" {
-				_ = json.Unmarshal([]byte(settingsRaw.String), &meta.Settings)
+				err = json.Unmarshal([]byte(settingsRaw.String), &meta.Settings)
+				if err != nil {
+					numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des paramètres de conversation")
+					return nil, numan_error.NewInternal()
+				}
 			}
 			if externalLinksRaw.Valid && externalLinksRaw.String != "" {
-				_ = json.Unmarshal([]byte(externalLinksRaw.String), &meta.ExternalLink)
+				err = json.Unmarshal([]byte(externalLinksRaw.String), &meta.ExternalLink)
+				if err != nil {
+					numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des liens externes")
+					return nil, numan_error.NewInternal()
+				}
 			}
 			results = append(results, meta)
 		}

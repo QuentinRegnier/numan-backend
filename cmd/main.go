@@ -37,10 +37,10 @@ import (
 // @BasePath        /api/v12
 func main() {
 	// 1. Initialise le logger avant toute chose
-	logger.InitLogger()
+	logger.InitLogger(context.Background())
 	// 2. Le 'defer' garantit que même si le serveur crashe (panic),
 	// le buffer de logs sera vidé sur le disque avant de mourir.
-	defer logger.CloseLogger()
+	defer logger.CloseLogger(context.Background())
 
 	logger.Log.Info().Msg("🚀 Démarrage de l'API numan V12")
 
@@ -102,7 +102,10 @@ func main() {
 	service.WarmUpCuckooFilter(context.Background())
 
 	// --- SMART SEEDING DU MOST CACHE ---
-	count, _ := redisgo.ZCard(context.Background(), variables.RedisKeyStrictRecent)
+	count, err := redisgo.ZCard(context.Background(), variables.RedisKeyStrictRecent)
+	if err != nil {
+		log.Printf("Erreur: ZCard: %v", err)
+	}
 
 	if count == 0 {
 		log.Println("⚠️ Cache Redis vide détecté : Lancement du Seeding massif...")
@@ -152,7 +155,10 @@ func main() {
 	docs.InitDocsRoutes(r)
 
 	// Initialiser les Index Mongo
-	_ = mongo.EnsureIndexes(context.Background(), mongo.MongoClient.Database("numan"))
+	err = mongo.EnsureIndexes(context.Background(), mongo.MongoClient.Database("numan"))
+	if err != nil {
+		log.Fatalf("Erreur lors de la création des index MongoDB: %v", err)
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {

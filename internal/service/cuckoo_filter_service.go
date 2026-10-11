@@ -42,13 +42,27 @@ func MarkAsSeen(ctx context.Context, userID int64, postID int64) {
 	}
 
 	// Extension du TTL (Le filtre reste en vie tant que l'utilisateur scrolle activement)
-	_ = redis.CuckooSeen.RefreshTTL(ctx, userID)
+	err = redis.CuckooSeen.RefreshTTL(ctx, userID)
+	if err != nil {
+		numan_log.Warn(ctx).
+			Err(err).
+			Int64("user_id", userID).
+			Msg("Impossible de prolonger le TTL du Cuckoo Filter")
+		return
+	}
 }
 
 // ResetCuckooFilter détruit le filtre RedisBloom de l'utilisateur de la RAM (L1).
 // Utilisé pour l'amnésie algorithmique lors d'un Pull-To-Refresh destructif (/force).
 func ResetCuckooFilter(ctx context.Context, userID int64) {
-	_ = redis.CuckooSeen.DeleteObject(ctx, userID)
+	err := redis.CuckooSeen.DeleteObject(ctx, userID)
+	if err != nil {
+		numan_log.Warn(ctx).
+			Err(err).
+			Int64("user_id", userID).
+			Msg("Impossible de supprimer le Cuckoo Filter")
+		return
+	}
 }
 
 // ############################################################################

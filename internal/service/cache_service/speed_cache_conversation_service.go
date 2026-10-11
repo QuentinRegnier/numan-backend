@@ -72,7 +72,11 @@ func GetInboxView(ctx context.Context, userID int64, paginationLimit int64, pagi
 		memberCompositeKeysList = append(memberCompositeKeysList, fmt.Sprintf("%d:%d", conversationID, userID))
 	}
 
-	memberValuesList, _ := redis.ConvMembers.MGet(ctx, memberCompositeKeysList...)
+	memberValuesList, errMemberGet := redis.ConvMembers.MGet(ctx, memberCompositeKeysList...)
+
+	if errMemberGet != nil {
+		numan_log.Warn(ctx).Err(errMemberGet).Msg("Échec MGET lors de la reconstruction SpeedConversation")
+	}
 
 	foundMetasMap := make(map[int64]lite_models.ConvLiteRequest)
 	foundMembersMap := make(map[int64]lite_models.MemberLiteRequest)
@@ -153,10 +157,16 @@ func GetInboxView(ctx context.Context, userID int64, paginationLimit int64, pagi
 				// AUTO-GUÉRISON SYNCHRONE ET ASYNCHRONE L3 -> L1
 				go func(meta lite_models.ConvLiteRequest, mem lite_models.MemberLiteRequest) {
 					backgroundCtx := context.Background()
-					_ = redis.ConvMeta.SetObject(backgroundCtx, meta.ID, meta)
+					err := redis.ConvMeta.SetObject(backgroundCtx, meta.ID, meta)
+					if err != nil {
+						numan_log.Warn(backgroundCtx).Err(err).Msg("Échec SetObject lors de la reconstruction SpeedConversation")
+					}
 
 					compositeKey := fmt.Sprintf("%d:%d", mem.ConversationID, mem.UserID)
-					_ = redis.ConvMembers.SetObject(backgroundCtx, compositeKey, mem)
+					err = redis.ConvMembers.SetObject(backgroundCtx, compositeKey, mem)
+					if err != nil {
+						numan_log.Warn(backgroundCtx).Err(err).Msg("Échec SetObject lors de la reconstruction SpeedConversation")
+					}
 				}(convLiteRequest, memberLiteRequest)
 			}
 		} else {
@@ -229,11 +239,19 @@ func ProcessNewMessageInSpeedCache(ctx context.Context, messageID int64, convers
 				Settings:      service.ToConversationSettingsLite(mongoConv.Settings),
 				ExternalLink:  mongoConv.ExternalLink,
 			}
-			_ = redis.ConvMeta.SetObject(ctx, conversationID, convLiteRequest)
+			err := redis.ConvMeta.SetObject(ctx, conversationID, convLiteRequest)
+			if err != nil {
+				numan_log.Warn(ctx).Err(err).Msg("Échec SetObject lors de la reconstruction SpeedConversation")
+				return nil, err
+			}
 		}
 	} else {
 		convLiteRequest.LastMessageID = messageID
-		_ = redis.ConvMeta.SetObject(ctx, conversationID, convLiteRequest)
+		err := redis.ConvMeta.SetObject(ctx, conversationID, convLiteRequest)
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Msg("Échec SetObject lors de la reconstruction SpeedConversation")
+			return nil, err
+		}
 	}
 
 	// 2. RÉCUPÉRATION ET AUTO-GUÉRISON DES PARTICIPANTS
@@ -244,7 +262,11 @@ func ProcessNewMessageInSpeedCache(ctx context.Context, messageID int64, convers
 		if errPg == nil {
 			for _, participantID := range postgresParticipantIDs {
 				participantStringsList = append(participantStringsList, strconv.FormatInt(participantID, 10))
-				_ = redis.ConvParticipants.SAdd(ctx, conversationID, participantID) // Réhydrate le SET L1
+				err := redis.ConvParticipants.SAdd(ctx, conversationID, participantID) // Réhydrate le SET L1
+				if err != nil {
+					numan_log.Warn(ctx).Err(err).Msg("Échec SAdd lors de la reconstruction SpeedConversation")
+					return nil, err
+				}
 			}
 		}
 	}
@@ -254,8 +276,16 @@ func ProcessNewMessageInSpeedCache(ctx context.Context, messageID int64, convers
 		currentParticipantID := pkg.ParseInt64(participantString)
 
 		// A. Mise à jour de l'Inbox ZSET pour TOUS les participants (remonte la conv en haut)
-		_ = redis.UserInbox.ZAddWithCap(ctx, currentParticipantID, float64(messageID), conversationID, variables.MaxZsetInbox)
-		_ = redis.InboxActivity.SetPrimitive(ctx, currentParticipantID, time.Now().UnixMilli())
+		err := redis.UserInbox.ZAddWithCap(ctx, currentParticipantID, float64(messageID), conversationID, variables.MaxZsetInbox)
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Msg("Échec ZAddWithCap lors de la reconstruction SpeedConversation")
+			return nil, err
+		}
+		err = redis.InboxActivity.SetPrimitive(ctx, currentParticipantID, time.Now().UnixMilli())
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Msg("Échec SetPrimitive lors de la reconstruction SpeedConversation")
+			return nil, err
+		}
 
 		// B. Incrémentation du compteur de non-lus (Unread) pour les destinataires uniquement
 		if currentParticipantID != senderID {
@@ -277,11 +307,19 @@ func ProcessNewMessageInSpeedCache(ctx context.Context, messageID int64, convers
 						UnreadCount:       pgMemberRecord.UnreadCount + 1,
 						JoinedAt:          pgMemberRecord.JoinedAt,
 					}
-					_ = redis.ConvMembers.SetObject(ctx, compositeMemberKey, memberLiteRequest)
+					err := redis.ConvMembers.SetObject(ctx, compositeMemberKey, memberLiteRequest)
+					if err != nil {
+						numan_log.Warn(ctx).Err(err).Msg("Échec SetObject lors de la reconstruction SpeedConversation")
+						return nil, err
+					}
 				}
 			} else {
 				memberLiteRequest.UnreadCount++
-				_ = redis.ConvMembers.SetObject(ctx, compositeMemberKey, memberLiteRequest)
+				err := redis.ConvMembers.SetObject(ctx, compositeMemberKey, memberLiteRequest)
+				if err != nil {
+					numan_log.Warn(ctx).Err(err).Msg("Échec SetObject lors de la reconstruction SpeedConversation")
+					return nil, err
+				}
 			}
 
 			notifiedUserIDs = append(notifiedUserIDs, currentParticipantID)
@@ -293,7 +331,11 @@ func ProcessNewMessageInSpeedCache(ctx context.Context, messageID int64, convers
 
 // AddMemberToSpeedCache indexe un nouveau membre dans le cache de messagerie L1.
 func AddMemberToSpeedCache(ctx context.Context, memberPayload lite_models.MemberLiteRequest) error {
-	_ = redis.ConvParticipants.SAdd(ctx, memberPayload.ConversationID, memberPayload.UserID)
+	err := redis.ConvParticipants.SAdd(ctx, memberPayload.ConversationID, memberPayload.UserID)
+	if err != nil {
+		numan_log.Warn(ctx).Err(err).Msg("Échec SAdd lors de l'ajout du membre dans le Speed Cache")
+		return err
+	}
 	compositeMemberKey := fmt.Sprintf("%d:%d", memberPayload.ConversationID, memberPayload.UserID)
 
 	if memberPayload.Role >= 0 {
@@ -303,7 +345,7 @@ func AddMemberToSpeedCache(ctx context.Context, memberPayload lite_models.Member
 	errSet := redis.ConvMembers.SetObject(ctx, compositeMemberKey, memberPayload)
 	if errSet != nil {
 		numan_log.Error(ctx).Err(errSet).Msg("Impossible d'ajouter le membre dans le Speed Cache")
-		return numan_error.NewInternal()
+		return errSet
 	}
 
 	return nil
@@ -318,14 +360,26 @@ func RemoveMemberFromSpeedCache(ctx context.Context, conversationID int64, userI
 		updateCommunityMemberCountInSpeedCache(ctx, conversationID, -1)
 	}
 
-	_ = redis.ConvParticipants.SRem(ctx, conversationID, userID)
-	_ = redis.ConvMembers.DeleteObject(ctx, compositeMemberKey)
+	errSRem := redis.ConvParticipants.SRem(ctx, conversationID, userID)
+	if errSRem != nil {
+		numan_log.Warn(ctx).Err(errSRem).Msg("Échec SRem lors de la suppression du membre du Speed Cache")
+		return errSRem
+	}
+	errDelete := redis.ConvMembers.DeleteObject(ctx, compositeMemberKey)
+	if errDelete != nil {
+		numan_log.Warn(ctx).Err(errDelete).Msg("Échec DeleteObject lors de la suppression du membre du Speed Cache")
+		return errDelete
+	}
 
 	errRem := redis.UserInbox.ZRem(ctx, userID, strconv.FormatInt(conversationID, 10))
-	_ = redis.InboxActivity.SetPrimitive(ctx, userID, time.Now().UnixMilli())
-
 	if errRem != nil {
-		return numan_error.NewInternal()
+		numan_log.Warn(ctx).Err(errRem).Msg("Échec ZRem lors de la suppression du membre du Speed Cache")
+		return errRem
+	}
+	err := redis.InboxActivity.SetPrimitive(ctx, userID, time.Now().UnixMilli())
+	if err != nil {
+		numan_log.Warn(ctx).Err(err).Msg("Échec SetPrimitive lors de la suppression du membre du Speed Cache")
+		return err
 	}
 
 	return nil
@@ -349,7 +403,10 @@ func ResetMemberUnreadCountInSpeedCache(ctx context.Context, conversationID int6
 			return numan_error.NewInternal()
 		}
 
-		_ = redis.InboxActivity.SetPrimitive(ctx, userID, time.Now().UnixMilli())
+		err := redis.InboxActivity.SetPrimitive(ctx, userID, time.Now().UnixMilli())
+		if err != nil {
+			return numan_error.NewInternal()
+		}
 	}
 
 	return nil
@@ -396,15 +453,31 @@ func RehydrateConversationItemInSpeedCache(ctx context.Context, fullConversation
 		JoinedAt:          fullMember.JoinedAt,
 	}
 
-	_ = redis.ConvMeta.SetObject(ctx, convLiteRequest.ID, convLiteRequest)
+	err := redis.ConvMeta.SetObject(ctx, convLiteRequest.ID, convLiteRequest)
+	if err != nil {
+		numan_log.Warn(ctx).Err(err).Msg("Échec SetObject lors de la réhydratation de la conversation")
+		return
+	}
 
 	compositeMemberKey := fmt.Sprintf("%d:%d", memberLiteRequest.ConversationID, memberLiteRequest.UserID)
-	_ = redis.ConvMembers.SetObject(ctx, compositeMemberKey, memberLiteRequest)
+	err = redis.ConvMembers.SetObject(ctx, compositeMemberKey, memberLiteRequest)
+	if err != nil {
+		numan_log.Warn(ctx).Err(err).Msg("Échec SetObject lors de la réhydratation du membre")
+		return
+	}
 
-	_ = redis.ConvParticipants.SAdd(ctx, memberLiteRequest.ConversationID, memberLiteRequest.UserID)
+	err = redis.ConvParticipants.SAdd(ctx, memberLiteRequest.ConversationID, memberLiteRequest.UserID)
+	if err != nil {
+		numan_log.Warn(ctx).Err(err).Msg("Échec SAdd lors de la réhydratation des participants")
+		return
+	}
 
 	if convLiteRequest.LastMessageID > 0 {
-		_ = redis.UserInbox.ZAddWithCap(ctx, memberLiteRequest.UserID, float64(convLiteRequest.LastMessageID), convLiteRequest.ID, 100)
+		err = redis.UserInbox.ZAddWithCap(ctx, memberLiteRequest.UserID, float64(convLiteRequest.LastMessageID), convLiteRequest.ID, 100)
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Msg("Échec ZAddWithCap lors de la réhydratation du message")
+			return
+		}
 	}
 }
 
@@ -418,7 +491,7 @@ func seedMessagingSpeedCache(ctx context.Context) error {
 
 	activeConversationsList, errPgConv := postgres.FuncLoadActiveConversations(ctx)
 	if errPgConv != nil {
-		return numan_error.NewInternal()
+		return errPgConv
 	}
 
 	for _, conversationRecord := range activeConversationsList {
@@ -432,12 +505,16 @@ func seedMessagingSpeedCache(ctx context.Context) error {
 			Settings:      conversationRecord.Settings,
 			ExternalLink:  conversationRecord.ExternalLink,
 		}
-		_ = redis.ConvMeta.SetObject(ctx, convLiteRequest.ID, convLiteRequest)
+		err := redis.ConvMeta.SetObject(ctx, convLiteRequest.ID, convLiteRequest)
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Msg("Échec SetObject lors de la réhydratation de la conversation")
+			return err
+		}
 	}
 
 	activeMembersList, errPgMem := postgres.FuncLoadActiveMembers(ctx)
 	if errPgMem != nil {
-		return numan_error.NewInternal()
+		return errPgMem
 	}
 
 	for _, activeMemberRecord := range activeMembersList {
@@ -454,11 +531,23 @@ func seedMessagingSpeedCache(ctx context.Context) error {
 			JoinedAt:          activeMemberRecord.Member.JoinedAt,
 		}
 
-		_ = redis.ConvMembers.SetObject(ctx, compositeMemberKey, memberLiteRequest)
-		_ = redis.ConvParticipants.SAdd(ctx, activeMemberRecord.Member.ConversationID, activeMemberRecord.Member.UserID)
+		err := redis.ConvMembers.SetObject(ctx, compositeMemberKey, memberLiteRequest)
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Msg("Échec SetObject lors de la réhydratation du membre")
+			return err
+		}
+		err = redis.ConvParticipants.SAdd(ctx, activeMemberRecord.Member.ConversationID, activeMemberRecord.Member.UserID)
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Msg("Échec SAdd lors de la réhydratation des participants")
+			return err
+		}
 
 		if activeMemberRecord.LastMessageID.Valid && activeMemberRecord.LastMessageID.Int64 > 0 {
-			_ = redis.UserInbox.ZAddWithCap(ctx, activeMemberRecord.Member.UserID, float64(activeMemberRecord.LastMessageID.Int64), activeMemberRecord.Member.ConversationID, 100)
+			err = redis.UserInbox.ZAddWithCap(ctx, activeMemberRecord.Member.UserID, float64(activeMemberRecord.LastMessageID.Int64), activeMemberRecord.Member.ConversationID, 100)
+			if err != nil {
+				numan_log.Warn(ctx).Err(err).Msg("Échec ZAddWithCap lors de la réhydratation du message")
+				return err
+			}
 		}
 	}
 
@@ -525,14 +614,26 @@ func UpdateMemberSpeedCache(ctx context.Context, memberPayload lite_models.Membe
 
 	errSet := redis.ConvMembers.SetObject(ctx, compositeMemberKey, memberPayload)
 	if errSet != nil {
-		return numan_error.NewInternal()
+		return errSet
 	}
 
 	if memberPayload.Role < 0 {
-		_ = redis.ConvParticipants.SRem(ctx, memberPayload.ConversationID, memberPayload.UserID)
+		err := redis.ConvParticipants.SRem(ctx, memberPayload.ConversationID, memberPayload.UserID)
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Msg("Échec SRem lors de la réhydratation des participants")
+			return err
+		}
 	} else {
-		_ = redis.ConvParticipants.SAdd(ctx, memberPayload.ConversationID, memberPayload.UserID)
-		_ = redis.InboxActivity.SetPrimitive(ctx, memberPayload.UserID, time.Now().UnixMilli())
+		err := redis.ConvParticipants.SAdd(ctx, memberPayload.ConversationID, memberPayload.UserID)
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Msg("Échec SAdd lors de la réhydratation des participants")
+			return err
+		}
+		err = redis.InboxActivity.SetPrimitive(ctx, memberPayload.UserID, time.Now().UnixMilli())
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Msg("Échec SetPrimitive lors de la réhydratation de l'activité de la boîte de réception")
+			return err
+		}
 	}
 
 	return nil
@@ -542,7 +643,7 @@ func UpdateMemberSpeedCache(ctx context.Context, memberPayload lite_models.Membe
 func AddConversationToUserInbox(ctx context.Context, userID int64, conversationID int64, lastMessageID int64) error {
 	errZAdd := redis.UserInbox.ZAddWithCap(ctx, userID, float64(lastMessageID), conversationID, 100)
 	if errZAdd != nil {
-		return numan_error.NewInternal()
+		return errZAdd
 	}
 	return nil
 }
@@ -550,7 +651,10 @@ func AddConversationToUserInbox(ctx context.Context, userID int64, conversationI
 // TouchInboxActivity signale une modification dans la boîte de réception de l'utilisateur.
 func TouchInboxActivity(ctx context.Context, userID int64) int64 {
 	currentTimestampMs := time.Now().UnixMilli()
-	_ = redis.InboxActivity.SetPrimitive(ctx, userID, currentTimestampMs)
+	err := redis.InboxActivity.SetPrimitive(ctx, userID, currentTimestampMs)
+	if err != nil {
+		return -1
+	}
 
 	return currentTimestampMs
 }

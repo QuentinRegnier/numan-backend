@@ -5,6 +5,8 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
@@ -75,7 +77,11 @@ func HandlePullToRefresh(ctx context.Context, opts RefreshOptions) ([]int64, err
 			feedState.Feeds["C"] = feedData{Seed: rand.Int63(), PostIDs: nil, Fused: false}
 
 			seedsArray := [3]int64{feedState.Feeds["A"].Seed, feedState.Feeds["B"].Seed, feedState.Feeds["C"].Seed}
-			magasinierBaskets, _ := collectCandidates(ctx, opts.UserID, seedsArray, opts.Quotas)
+			magasinierBaskets, err := collectCandidates(ctx, opts.UserID, seedsArray, opts.Quotas)
+			if err != nil {
+				numan_log.Error(ctx).Err(err).Msg("distributor: Échec de la collecte des candidats")
+				return nil, numan_error.NewInternal()
+			}
 
 			// Extraction du panier A
 			var initialCandidateIDs []int64
@@ -87,7 +93,10 @@ func HandlePullToRefresh(ctx context.Context, opts RefreshOptions) ([]int64, err
 			opts.PersonalOpts.Seed = feedState.Feeds["A"].Seed
 			opts.PersonalOpts.StartIndex = 0
 
-			freshFeedIDs, _ := buildPersonalizedFeed(ctx, opts.PersonalOpts)
+			freshFeedIDs, err := buildPersonalizedFeed(ctx, opts.PersonalOpts)
+			if err != nil {
+				return nil, err
+			}
 
 			// Injection dans l'état
 			updatedFeedData := feedState.Feeds["A"]
@@ -106,7 +115,10 @@ func HandlePullToRefresh(ctx context.Context, opts RefreshOptions) ([]int64, err
 			}
 		}
 
-		_ = saveUserFeedState(ctx, opts.UserID, feedState)
+		err = saveUserFeedState(ctx, opts.UserID, feedState)
+		if err != nil {
+			return nil, err
+		}
 		opts.LastSeenIndex = 0 // On force à 0, et on laisse couler vers le bloc de Consommation Normal
 	}
 
@@ -174,7 +186,10 @@ func HandlePullToRefresh(ctx context.Context, opts RefreshOptions) ([]int64, err
 	// On greffe les nouveaux posts au flux actif existant
 	activeFeedData.PostIDs = append(activeFeedData.PostIDs, freshlyScoredFeedIDs...)
 	feedState.Feeds[feedState.ActiveFeed] = activeFeedData
-	_ = saveUserFeedState(ctx, opts.UserID, feedState)
+	err = saveUserFeedState(ctx, opts.UserID, feedState)
+	if err != nil {
+		return nil, err
+	}
 
 	newTotalPostsInActiveFeed := len(activeFeedData.PostIDs)
 
@@ -197,7 +212,10 @@ func HandlePullToRefresh(ctx context.Context, opts RefreshOptions) ([]int64, err
 		case "C":
 			feedState.ActiveFeed = "A"
 		}
-		_ = saveUserFeedState(ctx, opts.UserID, feedState)
+		err = saveUserFeedState(ctx, opts.UserID, feedState)
+		if err != nil {
+			return nil, err
+		}
 
 		// On pioche instantanément le haut du nouveau panier
 		rotatedFeedIDs := feedState.Feeds[feedState.ActiveFeed].PostIDs

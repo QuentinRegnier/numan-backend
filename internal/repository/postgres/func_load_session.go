@@ -84,7 +84,11 @@ func FuncLoadSession(ctx context.Context, ID int64, UserId int64, FirebaseInstal
 	}
 
 	if len(deviceInfoBytes) > 0 {
-		_ = json.Unmarshal(deviceInfoBytes, &res.DeviceInfo)
+		err = json.Unmarshal(deviceInfoBytes, &res.DeviceInfo)
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des informations du dispositif")
+			return auth_models.SessionsPayload{}, numan_error.NewInternal()
+		}
 	}
 
 	return res, nil

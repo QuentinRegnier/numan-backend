@@ -48,7 +48,7 @@ func UpdatePost(ctx context.Context, callerID int64, input post_models.UpdatePos
 
 	// ── ÉTAPE 3 : RE-VECTORISATION SYNCHRONE DU CONTENU ─────────────────────
 	// On met à jour le vecteur avec les nouvelles données textuelles/thématiques.
-	postPayload.Vector = algorithm_service.ComputeContentVectorFull(postPayload, nil)
+	postPayload.Vector = algorithm_service.ComputeContentVectorFull(ctx, postPayload, nil)
 
 	// ── ÉTAPE 4 : SAUVEGARDE ET DÉLÉGATION AUX WORKERS BATCH ────────────────
 

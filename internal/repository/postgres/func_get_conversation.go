@@ -46,10 +46,18 @@ func FuncGetConversation(ctx context.Context, convID int64) (conversation_models
 		c.LastMessageID = cLastMsgID.Int64
 	}
 	if settingsRaw.Valid && settingsRaw.String != "" && settingsRaw.String != "{}" {
-		_ = json.Unmarshal([]byte(settingsRaw.String), &c.Settings)
+		err = json.Unmarshal([]byte(settingsRaw.String), &c.Settings)
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des paramètres de conversation")
+			return c, numan_error.NewInternal()
+		}
 	}
 	if externalLinkRaw.Valid && externalLinkRaw.String != "" && externalLinkRaw.String != "{}" {
-		_ = json.Unmarshal([]byte(externalLinkRaw.String), &c.ExternalLink)
+		err = json.Unmarshal([]byte(externalLinkRaw.String), &c.ExternalLink)
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des liens externes")
+			return c, numan_error.NewInternal()
+		}
 	}
 	return c, nil
 }

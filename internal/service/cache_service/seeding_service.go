@@ -34,7 +34,11 @@ func SeedMostCache(ctx context.Context) error {
 		for index, tagValue := range tagsListFromPg {
 			argsForRedis[index] = tagValue
 		}
-		_ = redis.Tags.SAdd(backgroundCtx, "active", argsForRedis...)
+		err := redis.Tags.SAdd(backgroundCtx, "active", argsForRedis...)
+		if err != nil {
+			numan_log.Error(ctx).Err(err).Msg("Échec L3 lors de l'ajout des tags au ZSET")
+			return err
+		}
 	}
 
 	// ── PHASE 2 : HYDRATATION DES POSTS ET CLASSEMENTS (PAR BLOCS) ──────────
@@ -59,8 +63,16 @@ func SeedMostCache(ctx context.Context) error {
 		for _, postPayload := range postsBatchFromPg {
 			UpdatePostRecommendationScore(backgroundCtx, postPayload)
 
-			_ = redis.ZAddWithCap(backgroundCtx, variables.RedisKeyStrictLikes, float64(postPayload.LikeCount), postPayload.ID, variables.MaxStrictElements)
-			_ = redis.ZAddWithCap(backgroundCtx, variables.RedisKeyStrictViews, float64(postPayload.ViewCount), postPayload.ID, variables.MaxStrictElements)
+			err := redis.ZAddWithCap(backgroundCtx, variables.RedisKeyStrictLikes, float64(postPayload.LikeCount), postPayload.ID, variables.MaxStrictElements)
+			if err != nil {
+				numan_log.Error(ctx).Err(err).Msg("Échec L3 lors de l'ajout du post au ZSET des likes stricts")
+				return err
+			}
+			err = redis.ZAddWithCap(backgroundCtx, variables.RedisKeyStrictViews, float64(postPayload.ViewCount), postPayload.ID, variables.MaxStrictElements)
+			if err != nil {
+				numan_log.Error(ctx).Err(err).Msg("Échec L3 lors de l'ajout du post au ZSET des vues strictes")
+				return err
+			}
 		}
 
 		totalPostsProcessed += len(postsBatchFromPg)
@@ -73,10 +85,18 @@ func SeedMostCache(ctx context.Context) error {
 	numan_log.Info(ctx).Msg("Lancement de l'hydratation inversée (Pre-warming L1/L2 pour l'élite)...")
 
 	winningPostIDsMap := make(map[int64]bool)
-	trendKeysList, _ := redis.Keys(backgroundCtx, "most_cache:trend:*")
+	trendKeysList, err := redis.Keys(backgroundCtx, "most_cache:trend:*")
+	if err != nil {
+		numan_log.Error(ctx).Err(err).Msg("Échec L3 lors de la récupération des clés de tendance")
+		return err
+	}
 
 	for _, trendKey := range trendKeysList {
-		idStringsInTrend, _ := redis.ZRange(backgroundCtx, trendKey, 0, -1)
+		idStringsInTrend, err := redis.ZRange(backgroundCtx, trendKey, 0, -1)
+		if err != nil {
+			numan_log.Error(ctx).Err(err).Msg("Échec L3 lors de la récupération des IDs de tendance")
+			return err
+		}
 		parsedIDs := pkg.ParseInt64List(idStringsInTrend)
 		for _, parsedID := range parsedIDs {
 			winningPostIDsMap[parsedID] = true
@@ -93,10 +113,18 @@ func SeedMostCache(ctx context.Context) error {
 		if errPgElite == nil {
 			for _, elitePost := range elitePostsList {
 				// L1 : Sanctuarisation immédiate en RAM
-				_ = object_cache_service.SetPostInObjectCache(backgroundCtx, elitePost)
+				err := object_cache_service.SetPostInObjectCache(backgroundCtx, elitePost)
+				if err != nil {
+					numan_log.Error(ctx).Err(err).Msg("Échec L3 lors de la sanctuarisation du post d'élite")
+					return err
+				}
 
 				// L2 : Délégation pour l'insertion par les workers (BulkWrite Mongo)
-				_ = redis.EnqueueDB(backgroundCtx, elitePost.ID, elitePost.UserID, redis.EntityPost, redis.ActionUpdate, elitePost, redis.TargetMongo)
+				err = redis.EnqueueDB(backgroundCtx, elitePost.ID, elitePost.UserID, redis.EntityPost, redis.ActionUpdate, elitePost, redis.TargetMongo)
+				if err != nil {
+					numan_log.Error(ctx).Err(err).Msg("Échec L3 lors de l'insertion du post d'élite")
+					return err
+				}
 			}
 			numan_log.Info(ctx).Int("count", len(elitePostsList)).Msg("Posts d'élite sanctuarisés dans l'Object Cache L1 et en cours d'insertion L2.")
 		}
@@ -107,16 +135,28 @@ func SeedMostCache(ctx context.Context) error {
 
 	if errPgRecent == nil {
 		for _, recentPost := range recentPostsFromPg {
-			documentMap, _ := pkg.ToMap(recentPost)
+			documentMap, err := pkg.ToMap(recentPost)
+			if err != nil {
+				numan_log.Warn(ctx).Err(err).Int64("post_id", recentPost.ID).Msg("Échec de la conversion du post récent en map pour MongoDB")
+				continue
+			}
 			if documentMap != nil {
-				_ = mongo.Posts.Set(documentMap)
+				err = mongo.Posts.Set(documentMap)
+				if err != nil {
+					numan_log.Warn(ctx).Err(err).Int64("post_id", recentPost.ID).Msg("Échec de la synchronisation du post récent dans le Warm Storage MongoDB")
+					continue
+				}
 			}
 		}
 		numan_log.Info(ctx).Int("count", len(recentPostsFromPg)).Msg("Posts récents synchronisés dans le Warm Storage MongoDB.")
 	}
 
 	// Déverrouillage de l'API
-	_ = redis.SystemStatus.SetPrimitive(backgroundCtx, "maintenance", "off")
+	err = redis.SystemStatus.SetPrimitive(backgroundCtx, "maintenance", "off")
+	if err != nil {
+		numan_log.Error(ctx).Err(err).Msg("Impossible de désactiver le mode maintenance dans Redis")
+		return err
+	}
 	numan_log.Info(ctx).Msg("Mode maintenance désactivé. L'API est opérationnelle.")
 
 	return nil
@@ -137,7 +177,11 @@ func seedCommunitySpeedCache(ctx context.Context) error {
 
 	totalLoaded := 0
 	for _, communityPayload := range activeCommunitiesFromPg {
-		_ = StoreCommunityLiteInSpeedCache(ctx, communityPayload)
+		err := StoreCommunityLiteInSpeedCache(ctx, communityPayload)
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Msg("Échec lors du stockage de la communauté dans le SPEED Cache")
+			continue
+		}
 		totalLoaded++
 	}
 
@@ -162,7 +206,11 @@ func SeedSpeedCache(ctx context.Context) error {
 		}
 
 		for _, userPayload := range usersBatchFromPg {
-			_ = storeUserLiteInSpeedCache(backgroundCtx, userPayload)
+			err := storeUserLiteInSpeedCache(backgroundCtx, userPayload)
+			if err != nil {
+				numan_log.Warn(ctx).Err(err).Int64("user_id", userPayload.ID).Msg("Échec lors du stockage de l'utilisateur dans le SPEED Cache")
+				continue
+			}
 		}
 
 		offsetUsers += len(usersBatchFromPg)
@@ -184,7 +232,11 @@ func SeedSpeedCache(ctx context.Context) error {
 		}
 
 		for _, relationRecord := range relationsBatchFromPg {
-			_ = UpdateRelationState(backgroundCtx, relationRecord.TargetID, relationRecord.CallerID, relationRecord.State, domain.TimeToMillis(relationRecord.CreatedAt))
+			err := UpdateRelationState(backgroundCtx, relationRecord.TargetID, relationRecord.CallerID, relationRecord.State, domain.TimeToMillis(relationRecord.CreatedAt))
+			if err != nil {
+				numan_log.Warn(ctx).Err(err).Int64("callerID", relationRecord.CallerID).Int64("targetID", relationRecord.TargetID).Msg("Échec lors de la mise à jour de la relation dans le SPEED Cache")
+				continue
+			}
 		}
 
 		offsetRelations += len(relationsBatchFromPg)
@@ -229,7 +281,11 @@ func SeedUserCache(ctx context.Context) error {
 		}
 
 		for _, timelineRecord := range timelineSeedsFromPg {
-			_ = AddPostToUserProfile(backgroundCtx, timelineRecord.UserID, timelineRecord.PostID, float64(timelineRecord.CreatedAt.UnixMilli()))
+			err := AddPostToUserProfile(backgroundCtx, timelineRecord.UserID, timelineRecord.PostID, float64(timelineRecord.CreatedAt.UnixMilli()))
+			if err != nil {
+				numan_log.Warn(ctx).Err(err).Int64("post_id", timelineRecord.PostID).Msg("Échec lors de l'ajout du post à la timeline de l'utilisateur")
+				continue
+			}
 		}
 
 		paginationOffset += len(timelineSeedsFromPg)

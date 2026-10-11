@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
@@ -26,7 +27,12 @@ func DeriveNextSecret(secretCurrent, secretLast, masterToken, firebaseInstallati
 func RotateRatchet(ctx context.Context, userID int64, firebaseInstallationID string, clientCurrentSecret string, incomingJWT string) error {
 	// 0. BOUCLIER TOMBSTONE (O(1) en RAM)
 	idxKey := fmt.Sprintf("%d:%s", userID, firebaseInstallationID)
-	if isRevoked, _ := redis.SessionBlacklist.Exists(ctx, idxKey); isRevoked {
+	isRevoked, err := redis.SessionBlacklist.Exists(ctx, idxKey)
+	if err != nil {
+		numan_log.Warn(ctx).Err(err).Int64("user_id", userID).Str("firebase_installation_id", firebaseInstallationID).Msg("Échec de la vérification de révocation de session")
+		return numan_error.NewInternal()
+	}
+	if isRevoked {
 		return numan_error.NewForbidden("SESSION_REVOKED", "Session révoquée (déconnexion en cours).", nil)
 	}
 
@@ -63,7 +69,11 @@ func RotateRatchet(ctx context.Context, userID int64, firebaseInstallationID str
 	sessionRaw.ToleranceTime = domain.TimeToMillis(time.Now().Add(time.Duration(variables.ToleranceTimeSeconds) * time.Second))
 
 	// 4. SAUVEGARDE EN RAM (L1)
-	_ = cache_service.SetSessionInCache(ctx, sessionRaw)
+	err = cache_service.SetSessionInCache(ctx, sessionRaw)
+	if err != nil {
+		numan_log.Warn(ctx).Err(err).Int64("user_id", userID).Str("firebase_installation_id", firebaseInstallationID).Msg("Échec de la sauvegarde de session en cache")
+		return numan_error.NewInternal()
+	}
 
 	// 5. PERSISTANCE ASYNCHRONE (L2 & L3)
 	return redis.EnqueueDB(ctx, sessionRaw.ID, userID, redis.EntitySession, redis.ActionUpdate, sessionRaw, redis.TargetAll)

@@ -150,14 +150,30 @@ func updateTrendZSETs(ctx context.Context, postID int64, score float64, directTa
 			if cleanSlug, isFound := service.GetTagFromKeyword(ctx, hashtag); isFound {
 
 				tagItem := lite_models.TagPostItem{PostID: postID, IsIndirect: isIndirect}
-				binaryData, _ := msgpack.Marshal(tagItem)
+				binaryData, err := msgpack.Marshal(tagItem)
+				if err != nil {
+					numan_log.Error(ctx).Err(err).Msg("Échec de la sérialisation MessagePack pour un item de tag")
+					return
+				}
 				memberBinaryString := string(binaryData)
 
-				_ = redis.TrendTagDaily.ZAddWithCap(ctx, fmt.Sprintf("%s:%s", cleanSlug, currentDate), score, memberBinaryString, variables.TDDMaxZSET)
-				_ = redis.TrendTagWeekly.ZAddWithCap(ctx, fmt.Sprintf("%s:%s", cleanSlug, currentWeek), score, memberBinaryString, variables.TDDMaxZSET)
+				err = redis.TrendTagDaily.ZAddWithCap(ctx, fmt.Sprintf("%s:%s", cleanSlug, currentDate), score, memberBinaryString, variables.TDDMaxZSET)
+				if err != nil {
+					numan_log.Error(ctx).Err(err).Msg("Échec de l'ajout à la tendance quotidienne")
+					return
+				}
+				err = redis.TrendTagWeekly.ZAddWithCap(ctx, fmt.Sprintf("%s:%s", cleanSlug, currentWeek), score, memberBinaryString, variables.TDDMaxZSET)
+				if err != nil {
+					numan_log.Error(ctx).Err(err).Msg("Échec de l'ajout à la tendance hebdomadaire")
+					return
+				}
 
 				// Leaderboard ne stocke que le slug (chaîne de caractères)
-				_ = redis.HashtagLeaderboard.ZAddWithCap(ctx, "global", score, cleanSlug, variables.TDDMaxZSET)
+				err = redis.HashtagLeaderboard.ZAddWithCap(ctx, "global", score, cleanSlug, variables.TDDMaxZSET)
+				if err != nil {
+					numan_log.Error(ctx).Err(err).Msg("Échec de l'ajout au leaderboard des hashtags")
+					return
+				}
 			}
 		}
 	}
@@ -183,7 +199,7 @@ func UpdateScoreWithMetrics(ctx context.Context, postID int64, likesCount int, c
 		IsDeleted:     visibility == 0,
 	}
 
-	globalScore := service.CalculateRecommendationScore(postID, baseOptions)
+	globalScore := service.CalculateRecommendationScore(baseOptions)
 
 	priorityMultiplier := 1.0
 	switch priorityLevel {
@@ -199,11 +215,19 @@ func UpdateScoreWithMetrics(ctx context.Context, postID int64, likesCount int, c
 	globalScore *= priorityMultiplier
 
 	scoreStrictRecent := float64(createdAt.UnixMilli())
-	_ = redis.ZAddWithCap(ctx, variables.RedisKeyStrictRecent, scoreStrictRecent, postID, variables.MaxStrictElements)
+	err := redis.ZAddWithCap(ctx, variables.RedisKeyStrictRecent, scoreStrictRecent, postID, variables.MaxStrictElements)
+	if err != nil {
+		numan_log.Error(ctx).Err(err).Msg("Échec de l'ajout à la liste des éléments récents")
+		return
+	}
 
 	currentTime := time.Now().UTC()
 	year, isoWeek := currentTime.ISOWeek()
 	weekString := fmt.Sprintf("%d-W%02d", year, isoWeek)
 
-	_ = updateTrendZSETs(ctx, postID, globalScore, directTags, indirectTags, currentTime.Format("20060102"), currentTime.Format("2006010215"), weekString)
+	err = updateTrendZSETs(ctx, postID, globalScore, directTags, indirectTags, currentTime.Format("20060102"), currentTime.Format("2006010215"), weekString)
+	if err != nil {
+		numan_log.Error(ctx).Err(err).Msg("Échec de la mise à jour des tendances")
+		return
+	}
 }

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/kljensen/snowball"
 	"golang.org/x/text/runes"
@@ -21,7 +22,7 @@ import (
 // 1. Suppression des caractères non-alphanumériques en bordure
 // 2. Translittération des caractères accentués vers l'ASCII le plus proche
 // 3. Conversion en minuscules
-func NormalizeHashtag(rawHashtag string) string {
+func NormalizeHashtag(ctx context.Context, rawHashtag string) string {
 
 	// Étape 1 : Nettoyage des bordures (Trim)
 	trimmedHashtag := strings.TrimFunc(rawHashtag, func(char rune) bool {
@@ -33,7 +34,7 @@ func NormalizeHashtag(rawHashtag string) string {
 	}
 
 	// Étape 2 : Translittération (ex: "é" -> "e", "ç" -> "c")
-	transliteratedHashtag := transliterateToASCII(trimmedHashtag)
+	transliteratedHashtag := transliterateToASCII(ctx, trimmedHashtag)
 
 	// Étape 3 : Minuscules
 	return strings.ToLower(transliteratedHashtag)
@@ -41,13 +42,17 @@ func NormalizeHashtag(rawHashtag string) string {
 
 // transliterateToASCII convertit les caractères accentués vers leurs équivalents ASCII purs.
 // Méthode : Décomposition NFD -> Suppression des diacritiques (Catégorie Unicode Mn) -> Recomposition NFC.
-func transliterateToASCII(inputString string) string {
+func transliterateToASCII(c context.Context, inputString string) string {
 	transformerChain := transform.Chain(
 		norm.NFD,
 		runes.Remove(runes.In(unicode.Mn)),
 		norm.NFC,
 	)
-	cleanString, _, _ := transform.String(transformerChain, inputString)
+	cleanString, _, err := transform.String(transformerChain, inputString)
+	if err != nil {
+		numan_log.Warn(c).Err(err).Str("input", inputString).Msg("transliterateToASCII: Échec de la translittération, retour de l'input brut")
+		return inputString
+	}
 	return cleanString
 }
 
@@ -68,7 +73,7 @@ func StemHashtag(normalizedHashtag string) string {
 
 // GetTagFromKeyword cherche le slug officiel d'un hashtag, et le crée s'il est inconnu.
 func GetTagFromKeyword(ctx context.Context, userInput string) (string, bool) {
-	cleanInput := NormalizeHashtag(userInput)
+	cleanInput := NormalizeHashtag(ctx, userInput)
 	if cleanInput == "" {
 		return "", false
 	}
@@ -81,7 +86,11 @@ func GetTagFromKeyword(ctx context.Context, userInput string) (string, bool) {
 
 	// 2. Inconnu au bataillon : Il devient son propre tag (Nouveau Tag Communautaire)
 	// On l'ajoute silencieusement au SET des tags actifs pour que le Worker de nuit (Cron) l'analyse.
-	_ = redis.Tags.SAdd(ctx, "active", cleanInput)
+	err = redis.Tags.SAdd(ctx, "active", cleanInput)
+	if err != nil {
+		numan_log.Error(ctx).Err(err).Str("input", cleanInput).Msg("GetTagFromKeyword: Échec de l'ajout du tag actif")
+		return "", false
+	}
 
 	return cleanInput, true
 }

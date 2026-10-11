@@ -62,15 +62,27 @@ func FuncLoadConversationFallback(ctx context.Context, userID int64, convIDs []i
 				conv.LastMessageID = lastMsgID.Int64
 			}
 			if convSettingsRaw.Valid && convSettingsRaw.String != "" && convSettingsRaw.String != "{}" {
-				_ = json.Unmarshal([]byte(convSettingsRaw.String), &conv.Settings)
+				err = json.Unmarshal([]byte(convSettingsRaw.String), &conv.Settings)
+				if err != nil {
+					numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des paramètres de conversation")
+					return nil, numan_error.NewInternal()
+				}
 			}
 			if externalLink.Valid && externalLink.String != "" {
-				_ = json.Unmarshal([]byte(externalLink.String), &conv.ExternalLink)
+				err = json.Unmarshal([]byte(externalLink.String), &conv.ExternalLink)
+				if err != nil {
+					numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des liens externes")
+					return nil, numan_error.NewInternal()
+				}
 			}
 
 			var parsedMemSettings member_models.MemberSettings
 			if memSettingsRaw.Valid && memSettingsRaw.String != "" && memSettingsRaw.String != "{}" {
-				_ = json.Unmarshal([]byte(memSettingsRaw.String), &parsedMemSettings)
+				err = json.Unmarshal([]byte(memSettingsRaw.String), &parsedMemSettings)
+				if err != nil {
+					numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des paramètres du membre")
+					return nil, numan_error.NewInternal()
+				}
 			}
 
 			mem := lite_models.MemberLiteRequest{

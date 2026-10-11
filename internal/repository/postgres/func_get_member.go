@@ -42,7 +42,11 @@ func FuncGetMember(ctx context.Context, convID int64, userID int64) (member_mode
 
 	// PARSING DU JSONB
 	if settingsRaw.Valid && settingsRaw.String != "" && settingsRaw.String != "{}" {
-		_ = json.Unmarshal([]byte(settingsRaw.String), &m.Settings)
+		err = json.Unmarshal([]byte(settingsRaw.String), &m.Settings)
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des paramètres du membre")
+			return m, numan_error.NewInternal()
+		}
 	}
 
 	return m, nil

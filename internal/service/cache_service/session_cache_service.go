@@ -94,10 +94,18 @@ func DeleteSessionFromCache(ctx context.Context, sessionID int64, userID int64, 
 		indexCompositeKey := fmt.Sprintf("%d:%s", userID, firebaseInstallationID)
 
 		// 1. POSE DU TOMBSTONE VIA L'ABSTRACTION DDD (Blocage immédiat)
-		_ = redis.SessionBlacklist.SetPrimitive(timeoutCtx, indexCompositeKey, "1")
+		err := redis.SessionBlacklist.SetPrimitive(timeoutCtx, indexCompositeKey, "1")
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Int64("session_id", sessionID).Msg("Impossible de poser le Tombstone de révocation de session")
+			return err
+		}
 
 		// 2. Suppression de l'index de recherche inversé
-		_ = redis.SessionIndexes.DeletePrimitive(timeoutCtx, indexCompositeKey)
+		err = redis.SessionIndexes.DeletePrimitive(timeoutCtx, indexCompositeKey)
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Int64("session_id", sessionID).Msg("Impossible de supprimer l'index de recherche inversé")
+			return err
+		}
 	}
 
 	// 3. Destruction physique de l'objet JSON contenant les tokens
@@ -151,10 +159,17 @@ func GetFirebaseInstallationIDsCascade(ctx context.Context, userID int64) ([]str
 				backgroundCtx := context.Background()
 
 				// L1 : Hydratation en RAM de l'objet complet
-				_ = SetSessionInCache(backgroundCtx, s)
+				err := SetSessionInCache(backgroundCtx, s)
+				if err != nil {
+					numan_log.Warn(backgroundCtx).Err(err).Int64("session_id", s.ID).Msg("Impossible de poser la session en L1")
+					return
+				}
 
 				// L2 : Asynchrone vers le Warm Storage Mongo
-				_ = redis.EnqueueDB(backgroundCtx, s.ID, s.UserID, redis.EntitySession, redis.ActionUpdate, s, redis.TargetMongo)
+				err = redis.EnqueueDB(backgroundCtx, s.ID, s.UserID, redis.EntitySession, redis.ActionUpdate, s, redis.TargetMongo)
+				if err != nil {
+					numan_log.Warn(backgroundCtx).Err(err).Int64("session_id", s.ID).Msg("Impossible de mettre en file d'attente la promotion L2 vers Mongo")
+				}
 			}(sessionRecord)
 		}
 
@@ -184,5 +199,9 @@ func healSessionIndexL1(userID int64, firebaseTokensList []string) {
 		numan_log.Warn(backgroundCtx).Err(errAdd).Int64("user_id", userID).Msg("Échec de l'auto-guérison du SessionIndex en L1")
 	}
 
-	_ = redis.SessionIndexes.RefreshTTL(backgroundCtx, userID)
+	err := redis.SessionIndexes.RefreshTTL(backgroundCtx, userID)
+	if err != nil {
+		numan_log.Warn(backgroundCtx).Err(err).Int64("user_id", userID).Msg("Échec de l'auto-guérison du SessionIndex en L1")
+		return
+	}
 }

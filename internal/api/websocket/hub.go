@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	redisgo "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/go-redis/redis/v8"
 )
@@ -66,7 +67,11 @@ func (h *hub) listenRedis() {
 
 		channelType := parts[1] // "user" ou "community"
 		var targetID int64
-		_, _ = fmt.Sscanf(parts[2], "%d", &targetID)
+		_, err := fmt.Sscanf(parts[2], "%d", &targetID)
+		if err != nil {
+			numan_log.Warn(context.Background()).Err(err).Str("channel", msg.Channel).Msg("Impossible de parser l'ID de la cible")
+			continue
+		}
 
 		h.BroadcastRoute <- broadcastMessage{
 			ChannelType: channelType,
@@ -85,7 +90,10 @@ func (h *hub) run() {
 				h.Clients[c.UserID] = make(map[*client]bool)
 				// Abonnement dynamique au cluster
 				channel := fmt.Sprintf("channel:user:%d", c.UserID)
-				_ = h.PubSub.Subscribe(context.Background(), channel)
+				err := h.PubSub.Subscribe(context.Background(), channel)
+				if err != nil {
+					numan_log.Warn(context.Background()).Err(err).Str("channel", channel).Msg("Impossible de s'abonner au canal")
+				}
 			}
 			h.Clients[c.UserID][c] = true
 		case c := <-h.Unregister:
@@ -98,7 +106,10 @@ func (h *hub) run() {
 						delete(h.Clients, c.UserID)
 						// Désabonnement réseau pour économiser le CPU Redis
 						channel := fmt.Sprintf("channel:user:%d", c.UserID)
-						_ = h.PubSub.Unsubscribe(context.Background(), channel)
+						err := h.PubSub.Unsubscribe(context.Background(), channel)
+						if err != nil {
+							numan_log.Warn(context.Background()).Err(err).Str("channel", channel).Msg("Impossible de se désabonner du canal")
+						}
 					}
 				}
 			}
@@ -107,7 +118,10 @@ func (h *hub) run() {
 			if _, ok := h.Communities[sub.CommunityID]; !ok {
 				h.Communities[sub.CommunityID] = make(map[*client]bool)
 				channel := fmt.Sprintf("channel:community:%d", sub.CommunityID)
-				_ = h.PubSub.Subscribe(context.Background(), channel)
+				err := h.PubSub.Subscribe(context.Background(), channel)
+				if err != nil {
+					numan_log.Warn(context.Background()).Err(err).Str("channel", channel).Msg("Impossible de s'abonner au canal de communauté")
+				}
 			}
 			h.Communities[sub.CommunityID][sub.Client] = true
 

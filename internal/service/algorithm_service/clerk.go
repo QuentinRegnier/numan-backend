@@ -6,6 +6,8 @@ import (
 	"math"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
@@ -26,7 +28,11 @@ func collectCandidates(ctx context.Context, userID int64, seeds [3]int64, quotas
 	// ─────────────────────────────────────────────────────────────────────────────
 	// ÉTAPE 1 : Le Socle Social (Boîte aux lettres)
 	// ─────────────────────────────────────────────────────────────────────────────
-	_ = baskets.loadSocialMailbox(ctx, userID)
+	err := baskets.loadSocialMailbox(ctx, userID)
+	if err != nil {
+		numan_log.Error(ctx).Err(err).Msg("collectCandidates: Échec du chargement de la boîte aux lettres")
+		return nil, numan_error.NewInternal()
+	}
 
 	// ─────────────────────────────────────────────────────────────────────────────
 	// ÉTAPE 2 : Fusion Télémétrie / Graph 1-Hop / Leaderboard Mondial
@@ -53,7 +59,11 @@ func collectSingleBasket(ctx context.Context, userID int64, activeSeed int64, qu
 	// Astuce d'orchestration : On utilise la mécanique FeedBaskets pour charger
 	// la boîte aux lettres, mais on ne garde et ne remplit que le panier A.
 	baskets := newFeedBaskets(quotas.MaxCandidates, activeSeed, activeSeed, activeSeed)
-	_ = baskets.loadSocialMailbox(ctx, userID)
+	err := baskets.loadSocialMailbox(ctx, userID)
+	if err != nil {
+		numan_log.Error(ctx).Err(err).Msg("collectSingleBasket: Échec du chargement de la boîte aux lettres")
+		return nil, numan_error.NewInternal()
+	}
 
 	singleBasket := baskets.FeedA
 	semanticTagCloud := buildTagCloud(ctx, userID)
@@ -111,7 +121,11 @@ func buildTagCloud(ctx context.Context, userID int64) map[string]float64 {
 	}
 
 	// 2. Lecture du Leaderboard pour le calcul des Multiplicateurs de Viralité
-	leaderboardData, _ := redis.ZRevRangeWithScores(ctx, variables.RedisKeyHashtagLeaderboard, 0, 49)
+	leaderboardData, err := redis.ZRevRangeWithScores(ctx, variables.RedisKeyHashtagLeaderboard, 0, 49)
+	if err != nil {
+		numan_log.Error(ctx).Err(err).Msg("buildTagCloud: Échec de la lecture du leaderboard")
+		return nil
+	}
 	leaderboardBoostsMap := make(map[string]float64)
 
 	if len(leaderboardData) > 0 {

@@ -104,7 +104,10 @@ func storeLSHBucket(ctx context.Context, postID int64, hashValue uint32) error {
 		return numan_error.NewInternal()
 	}
 
-	_ = redis.LSHBuckets.RefreshTTL(ctx, hashValue)
+	err := redis.LSHBuckets.RefreshTTL(ctx, hashValue)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -138,7 +141,11 @@ func PurgePostVectors(ctx context.Context, postID int64) error {
 	var payload contentVectorPayload
 
 	if err := redis.ContentVectors.GetObject(ctx, postID, &payload); err == nil {
-		_ = removeLSHBucket(ctx, postID, payload.LSHHash)
+		err = removeLSHBucket(ctx, postID, payload.LSHHash)
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Int64("post_id", postID).Msg("Impossible de retirer le post de son bucket LSH")
+			return err
+		}
 	}
 
 	return redis.ContentVectors.DeleteObject(ctx, postID)

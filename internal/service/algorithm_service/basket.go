@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"sync"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
@@ -204,7 +205,11 @@ func (basket *candidateBasket) fetchDeterministicallyFromZSET(ctx context.Contex
 		}
 
 		// 3. Extraction Chirurgicale via Pipeline abstrait
-		results, _ := redis.ZRevRangeByRanks(ctx, zsetKey, ranksToFetch) // 4. Dépouillement et ajout au panier
+		results, err := redis.ZRevRangeByRanks(ctx, zsetKey, ranksToFetch) // 4. Dépouillement et ajout au panier
+		if err != nil {
+			numan_log.Error(ctx).Err(err).Str("zsetKey", zsetKey).Msg("fetchDeterministicallyFromZSET: Échec de l'extraction des posts")
+			break
+		}
 		parsedIDs := pkg.ParseInt64List(results)
 		for _, parsedID := range parsedIDs {
 			// basket.Add gère l'anti-doublon en interne et le Cuckoo Filter
@@ -256,7 +261,11 @@ func (feedBaskets *feedBaskets) loadSocialMailbox(ctx context.Context, userID in
 
 	// VIDAGE DE LA BOÎTE AUX LETTRES
 	// On la purge pour éviter que la prochaine génération ne recycle les mêmes posts.
-	_ = redis.Del(ctx, mailboxKey)
+	err = redis.Del(ctx, mailboxKey)
+	if err != nil {
+		numan_log.Error(ctx).Err(err).Str("mailboxKey", mailboxKey).Msg("loadSocialMailbox: Échec du vidage de la boîte aux lettres")
+		return numan_error.NewInternal()
+	}
 
 	return nil
 }

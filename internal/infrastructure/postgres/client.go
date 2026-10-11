@@ -7,7 +7,6 @@ import (
 	"os"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
-	_ "github.com/lib/pq"
 )
 
 var PostgresDB *sql.DB

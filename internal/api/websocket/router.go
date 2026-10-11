@@ -124,12 +124,20 @@ func (c *client) route(message []byte) {
 // Helpers pour standardiser les retours
 func (c *client) sendSuccess(reqID string, data any) {
 	resp := wsResponse{EventType: "response", RequestID: reqID, Status: "success", Data: data}
-	b, _ := json.Marshal(resp)
+	b, err := json.Marshal(resp)
+	if err != nil {
+		numan_log.Error(context.Background()).Err(err).Msg("WS Marshal Error: Impossible de sérialiser la réponse")
+		return
+	}
 	c.Send <- b
 }
 
 func (c *client) sendError(reqID string, errStr string) {
 	resp := wsResponse{EventType: "response", RequestID: reqID, Status: "error", Error: errStr}
-	b, _ := json.Marshal(resp)
+	b, err := json.Marshal(resp)
+	if err != nil {
+		numan_log.Error(context.Background()).Err(err).Msg("WS Marshal Error: Impossible de sérialiser l'erreur")
+		return
+	}
 	c.Send <- b
 }

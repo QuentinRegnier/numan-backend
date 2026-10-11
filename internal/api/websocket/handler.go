@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/gin-gonic/gin"
@@ -98,7 +99,10 @@ func ServeWS(c *gin.Context) {
 	}
 
 	client.Hub.Register <- client
-	_ = cache_service.MarkUserOnline(context.Background(), userID)
+	err = cache_service.MarkUserOnline(context.Background(), userID)
+	if err != nil {
+		numan_log.Warn(context.Background()).Err(err).Int64("user_id", userID).Msg("Impossible de marquer l'utilisateur comme en ligne")
+	}
 
 	go client.writePump()
 	go client.readPump()

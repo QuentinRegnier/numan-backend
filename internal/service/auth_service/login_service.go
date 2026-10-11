@@ -82,28 +82,47 @@ func Login(ctx context.Context, input auth_models.LoginInput, ipAddresses []stri
 	deviceFirebaseID := input.FirebaseInstallationID
 
 	// TENTATIVE L1 (RAM)
-	sessionPayload, _ = cache_service.LoadSessionFromCache(ctx, userPayload.ID, deviceFirebaseID, "")
+	sessionPayload, err := cache_service.LoadSessionFromCache(ctx, userPayload.ID, deviceFirebaseID, "")
+	if err != nil {
+		numan_log.Warn(ctx).Err(err).Int64("user_id", userPayload.ID).Str("firebase_id", deviceFirebaseID).Msg("Échec de la récupération de la session depuis le cache L1")
+		return -1, auth_models.SessionsPayload{}, "", numan_error.NewInternal()
+	}
 
 	if sessionPayload.ID == 0 {
 		// FALLBACK L2 (Mongo)
-		sessionPayload, _ = mongo.MongoLoadSession(ctx, userPayload.ID, deviceFirebaseID, "", "")
+		sessionPayload, err := mongo.MongoLoadSession(ctx, userPayload.ID, deviceFirebaseID, "", "")
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Int64("user_id", userPayload.ID).Str("firebase_id", deviceFirebaseID).Msg("Échec de la récupération de la session depuis Mongo L2")
+		}
 
 		if sessionPayload.ID == 0 {
 			// FALLBACK L3 (Postgres)
-			sessionPayload, _ = postgresgo.FuncLoadSession(ctx, -1, userPayload.ID, deviceFirebaseID, "")
+			sessionPayload, err := postgresgo.FuncLoadSession(ctx, -1, userPayload.ID, deviceFirebaseID, "")
+			if err != nil {
+				numan_log.Warn(ctx).Err(err).Int64("user_id", userPayload.ID).Str("firebase_id", deviceFirebaseID).Msg("Échec de la récupération de la session depuis Postgres L3")
+				return -1, auth_models.SessionsPayload{}, "", numan_error.NewInternal()
+			}
 
 			if sessionPayload.ID != 0 {
 				// AUTO-GUÉRISON L3 -> L2
 				go func(s auth_models.SessionsPayload) {
 					bgCtx := context.Background()
-					_ = redis.EnqueueDB(bgCtx, s.ID, s.UserID, redis.EntitySession, redis.ActionUpdate, s, redis.TargetMongo)
+					err = redis.EnqueueDB(bgCtx, s.ID, s.UserID, redis.EntitySession, redis.ActionUpdate, s, redis.TargetMongo)
+					if err != nil {
+						numan_log.Warn(bgCtx).Err(err).Int64("session_id", s.ID).Msg("Échec de la guérison L2 pour la session")
+						return
+					}
 				}(sessionPayload)
 			}
 		}
 
 		if sessionPayload.ID != 0 {
 			// AUTO-GUÉRISON L3/L2 -> L1
-			_ = cache_service.SetSessionInCache(ctx, sessionPayload)
+			err = cache_service.SetSessionInCache(ctx, sessionPayload)
+			if err != nil {
+				numan_log.Warn(ctx).Err(err).Int64("session_id", sessionPayload.ID).Msg("Échec de la guérison L1 pour la session")
+				return -1, auth_models.SessionsPayload{}, "", numan_error.NewInternal()
+			}
 		}
 	}
 
@@ -159,14 +178,26 @@ func Login(ctx context.Context, input auth_models.LoginInput, ipAddresses []stri
 	timelineKey := fmt.Sprintf("profile:posts:zset:%d", userPayload.ID)
 	timelineExists, errTimeline := redis.Exists(ctx, timelineKey)
 	if errTimeline != nil || !timelineExists {
-		_ = cache_service.MarkUserTimelineEmpty(ctx, userPayload.ID)
+		err = cache_service.MarkUserTimelineEmpty(ctx, userPayload.ID)
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Int64("user_id", userPayload.ID).Msg("Échec initialisation Timeline ZSET lors du Login")
+			return -1, auth_models.SessionsPayload{}, "", numan_error.NewInternal()
+		}
 	}
 
 	// Vérification du Profil Lite (Pour affichage rapide UI)
 	var liteUser lite_models.UserLiteRequest
 	if errSpeed := redis.UsersLite.GetObject(ctx, userPayload.ID, &liteUser); errSpeed != nil {
-		settingsPayload, _ := object_cache_service.GetUserSettingsCascade(ctx, userPayload.ID)
-		_ = cache_service.AddUserToSpeedCache(ctx, userPayload, settingsPayload)
+		settingsPayload, err := object_cache_service.GetUserSettingsCascade(ctx, userPayload.ID)
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Int64("user_id", userPayload.ID).Msg("Échec récupération Settings pour Speed Cache lors du Login")
+			return -1, auth_models.SessionsPayload{}, "", numan_error.NewInternal()
+		}
+		err = cache_service.AddUserToSpeedCache(ctx, userPayload, settingsPayload)
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Int64("user_id", userPayload.ID).Msg("Échec ajout User au Speed Cache lors du Login")
+			return -1, auth_models.SessionsPayload{}, "", numan_error.NewInternal()
+		}
 	}
 
 	// ── ÉTAPE 5 : MISE EN FILE D'ATTENTE (Write-Behind) ─────────────────────

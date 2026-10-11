@@ -219,7 +219,11 @@ func ParseInt64List(stringList []string) []int64 {
 
 // ParseInt64 is a shortcut to parse a single string to int64, defaulting to 0 on error.
 func ParseInt64(str string) int64 {
-	parsed, _ := strconv.ParseInt(str, 10, 64)
+	parsed, err := strconv.ParseInt(str, 10, 64)
+	if err != nil {
+		numan_log.Warn(context.Background()).Err(err).Str("input", str).Msg("ParseInt64: Impossible de parser l'input en int64, retour par défaut 0")
+		return 0
+	}
 	return parsed
 }
 

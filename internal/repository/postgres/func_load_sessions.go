@@ -36,7 +36,11 @@ func FuncLoadUserSessionsView(ctx context.Context, userID int64) ([]auth_models.
 		var deviceInfoBytes []byte
 
 		if err := rows.Scan(&s.ID, &deviceInfoBytes, pq.Array(&s.IPHistory), &s.CreatedAt, &s.ExpiresAt); err == nil {
-			_ = json.Unmarshal(deviceInfoBytes, &s.DeviceInfo)
+			err = json.Unmarshal(deviceInfoBytes, &s.DeviceInfo)
+			if err != nil {
+				numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des informations du dispositif")
+				return nil, numan_error.NewInternal()
+			}
 			sessions = append(sessions, s)
 		}
 	}

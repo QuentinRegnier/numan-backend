@@ -67,7 +67,11 @@ func BroadcastCuckooUpdate(action, field, value string) {
 		Key:    field + ":" + value,
 	}
 
-	data, _ := json.Marshal(msg)
+	data, err := json.Marshal(msg)
+	if err != nil {
+		numan_log.Error(context.Background()).Err(err).Msg("Erreur encodage message Cuckoo")
+		return
+	}
 
 	if err := redisgo.CuckooSync.PushFlux(context.Background(), data); err != nil {
 		numan_log.Error(context.Background()).Err(err).Msg("Erreur Broadcast Cuckoo")

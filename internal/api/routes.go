@@ -74,7 +74,11 @@ func SetupRoutes(r *gin.Engine) {
 		if secret == "" {
 			panic("JWT_SECRET manquant dans .env")
 		}
-		tokenString, _ := token.SignedString([]byte(secret))
+		tokenString, err := token.SignedString([]byte(secret))
+		if err != nil {
+			c.JSON(500, gin.H{"error": "Erreur lors de la génération du token"})
+			return
+		}
 		c.JSON(200, gin.H{"token": tokenString})
 	})
 
@@ -98,6 +102,7 @@ func SetupRoutes(r *gin.Engine) {
 	secured.GET("/session/get", auth_handlers.GetSessionsHandler)         //
 	secured.DELETE("/session/delete", auth_handlers.DeleteSessionHandler) //
 	secured.POST("/profile/get", profile_handlers.GetProfileHandler)
+	secured.POST("/certification", auth_handlers.AddCertificationHandler)
 
 	// --- Posts ---
 	secured.POST("/feed/get", feed_handlers.GetFeedHandler) //

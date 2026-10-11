@@ -151,7 +151,10 @@ func (c *Collection) ZScores(ctx context.Context, id any, members []string) ([]f
 	scores := make([]float64, len(members))
 	for i, cmd := range cmds {
 		if fCmd, ok := cmd.(*redis.FloatCmd); ok {
-			val, _ := fCmd.Result()
+			val, err := fCmd.Result()
+			if err != nil {
+				return nil, err
+			}
 			scores[i] = val
 		}
 	}
@@ -189,7 +192,10 @@ func (c *Collection) ZRevRangeByRanks(ctx context.Context, id any, ranks []int64
 
 	results := make([]string, 0, len(ranks))
 	for _, cmd := range cmds {
-		res, _ := cmd.Result()
+		res, err := cmd.Result()
+		if err != nil {
+			return nil, err
+		}
 		if len(res) > 0 {
 			results = append(results, res[0])
 		}
@@ -255,7 +261,10 @@ func ZRevRangeByRanks(ctx context.Context, key string, ranks []int64) ([]string,
 	}
 	results := make([]string, 0, len(ranks))
 	for _, cmd := range cmds {
-		res, _ := cmd.Result()
+		res, err := cmd.Result()
+		if err != nil {
+			return nil, err
+		}
 		if len(res) > 0 {
 			results = append(results, res[0])
 		}
@@ -290,7 +299,10 @@ func ZScores(ctx context.Context, key string, members []string) ([]float64, erro
 	scores := make([]float64, len(members))
 	for i, cmd := range cmds {
 		if fCmd, ok := cmd.(*redis.FloatCmd); ok {
-			val, _ := fCmd.Result()
+			val, err := fCmd.Result()
+			if err != nil {
+				return nil, err
+			}
 			scores[i] = val
 		}
 	}

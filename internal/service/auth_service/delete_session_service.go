@@ -5,6 +5,7 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/auth_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
@@ -43,11 +44,19 @@ func RevokeSession(ctx context.Context, callerID int64, targetSessionID int64) e
 	}
 
 	// ── ÉTAPE 3 : PURGE DU CACHE L1 (Object + Index) ───────────────────────
-	_ = cache_service.DeleteSessionFromCache(ctx, targetSessionID, sessionPayload.UserID, sessionPayload.FirebaseInstallationID)
+	err := cache_service.DeleteSessionFromCache(ctx, targetSessionID, sessionPayload.UserID, sessionPayload.FirebaseInstallationID)
+	if err != nil {
+		numan_log.Error(ctx).Err(err).Msg("Impossible de supprimer la session du cache")
+		return numan_error.NewInternal()
+	}
 
 	// ── ÉTAPE 4 : DÉCONNEXION TEMPS RÉEL (WebSockets) ──────────────────────
 	// Le client recevra l'événement et fermera son application ou redirigera vers le login
-	_ = realtime_service.DistributeToUsers(ctx, variables.NotificationSessionRevoked, map[string]int64{"session_id": targetSessionID}, []int64{callerID})
+	err = realtime_service.DistributeToUsers(ctx, variables.NotificationSessionRevoked, map[string]int64{"session_id": targetSessionID}, []int64{callerID})
+	if err != nil {
+		numan_log.Error(ctx).Err(err).Msg("Impossible de distribuer la notification de révocation de session")
+		return numan_error.NewInternal()
+	}
 
 	// ── ÉTAPE 5 : PERSISTANCE ASYNCHRONE (Write-Behind vers BDD) ───────────
 	minimalPayloadForDeletion := auth_models.SessionsPayload{ID: targetSessionID, UserID: callerID}

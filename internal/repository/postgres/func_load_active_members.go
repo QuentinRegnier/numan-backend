@@ -47,7 +47,11 @@ func FuncLoadActiveMembers(ctx context.Context) ([]activeMemberResult, error) {
 			// PARSING DU JSONB VERS LA STRUCT GO
 			var parsedSettings member_models.MemberSettings
 			if settingsRaw.Valid && settingsRaw.String != "" && settingsRaw.String != "{}" {
-				_ = json.Unmarshal([]byte(settingsRaw.String), &parsedSettings)
+				err = json.Unmarshal([]byte(settingsRaw.String), &parsedSettings)
+				if err != nil {
+					numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des paramètres du membre")
+					return nil, numan_error.NewInternal()
+				}
 			}
 
 			mem := lite_models.MemberLiteRequest{

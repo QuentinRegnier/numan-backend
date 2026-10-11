@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/auth_models"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
@@ -27,11 +28,19 @@ func Logout(ctx context.Context, callerID int64, firebaseInstallationID string) 
 	// ── ÉTAPE 1 : RÉCUPÉRATION DE LA SESSION (CASCADE L1 -> L2 -> L3) ───────
 
 	// TENTATIVE L1 (RAM)
-	sessionPayload, _ = cache_service.LoadSessionFromCache(ctx, callerID, firebaseInstallationID, "")
+	sessionPayload, err := cache_service.LoadSessionFromCache(ctx, callerID, firebaseInstallationID, "")
+	if err != nil {
+		numan_log.Warn(ctx).Err(err).Msg("Échec du chargement de la session depuis le cache L1")
+		return numan_error.NewInternal()
+	}
 
 	if sessionPayload.ID == 0 {
 		// FALLBACK L2 (Mongo - Warm Storage)
-		sessionPayload, _ = mongo.MongoLoadSession(ctx, callerID, firebaseInstallationID, "", "")
+		sessionPayload, err = mongo.MongoLoadSession(ctx, callerID, firebaseInstallationID, "", "")
+		if err != nil {
+			numan_log.Warn(ctx).Err(err).Msg("Échec du chargement de la session depuis Mongo L2")
+			return numan_error.NewInternal()
+		}
 
 		if sessionPayload.ID == 0 {
 			// FALLBACK L3 (Postgres - Cold Storage)
@@ -52,7 +61,11 @@ func Logout(ctx context.Context, callerID int64, firebaseInstallationID string) 
 
 	// ── ÉTAPE 2 : DESTRUCTION LOCALE EN RAM (L1) ────────────────────────────
 	// On passe par le Service Cache pour respecter le DDD et supprimer à la fois l'objet et ses index.
-	_ = cache_service.DeleteSessionFromCache(ctx, sessionPayload.ID, callerID, firebaseInstallationID)
+	err = cache_service.DeleteSessionFromCache(ctx, sessionPayload.ID, callerID, firebaseInstallationID)
+	if err != nil {
+		numan_log.Warn(ctx).Err(err).Msg("Échec de la suppression de la session depuis le cache L1")
+		return numan_error.NewInternal()
+	}
 
 	// ── ÉTAPE 3 : PERSISTANCE ASYNCHRONE (Write-Behind) ─────────────────────
 	// On envoie la demande de suppression (Hard Delete) aux workers pour nettoyer Mongo et Postgres.

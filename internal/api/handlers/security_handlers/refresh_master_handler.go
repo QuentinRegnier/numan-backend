@@ -164,7 +164,12 @@ func RefreshMaster(c *gin.Context) {
 		if s, err := mongo.MongoLoadSession(c, input.UserID, "", input.MasterToken, ""); err == nil && s.ID != 0 {
 			sessionRaw = s
 			sessionFound = true
-			_ = cache_service.SetSessionInCache(c, sessionRaw)
+			err = cache_service.SetSessionInCache(c, sessionRaw)
+			if err != nil {
+				numan_log.Warn(c).Err(err).Int64("session_id", sessionRaw.ID).Msg("Warning: Echec update Session Cache L1")
+				numan_error.RespondWithError(c, numan_error.NewInternal())
+				return
+			}
 		}
 	}
 
@@ -174,8 +179,16 @@ func RefreshMaster(c *gin.Context) {
 		if err == nil && s.ID != 0 {
 			sessionRaw = s
 			sessionFound = true
-			_ = redis.EnqueueDB(c, s.ID, 0, redis.EntitySession, redis.ActionCreate, s, redis.TargetMongo)
-			_ = cache_service.SetSessionInCache(c, s)
+			err = redis.EnqueueDB(c, s.ID, 0, redis.EntitySession, redis.ActionCreate, s, redis.TargetMongo)
+			if err != nil {
+				numan_log.Warn(c).Err(err).Int64("session_id", sessionRaw.ID).Msg("Warning: Echec update Session Redis")
+			}
+			err = cache_service.SetSessionInCache(c, s)
+			if err != nil {
+				numan_log.Warn(c).Err(err).Int64("session_id", sessionRaw.ID).Msg("Warning: Echec update Session Cache L1")
+				numan_error.RespondWithError(c, numan_error.NewInternal())
+				return
+			}
 		}
 	}
 
