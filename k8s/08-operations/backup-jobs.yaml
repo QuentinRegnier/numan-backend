@@ -1,0 +1,473 @@
+# Backup CronJobs. A PVC is NOT a backup, and a backup on the same node is not a backup either:
+# every job pushes to an OFF-CLUSTER S3-compatible target defined in Secret "backup-credentials".
+#
+#   Postgres / Mongo / Redis : logical dump (init container) -> restic (client-side encrypted, deduplicated,
+#                              retention via `restic forget --prune`) -> off-site repository.
+#   MinIO hot / cold         : `mc mirror` (no --remove: deletions are NOT propagated) -> off-site bucket.
+#                              Enable VERSIONING + (ideally) Object Lock on the off-site bucket; a compromised
+#                              cluster that can delete backups is not a backup.
+#
+# PROVISIONAL targets (confirm with the business): RPO 24h, RTO 4h for databases; MinIO RPO 24h.
+# WAL archiving / PITR would lower the Postgres RPO - that is what CloudNativePG + barman would add.
+# Schedules, time zone (CronJob timeZone, GA since Kubernetes 1.27), retention and sizing are deployment variables
+# (infrastructure.env.template).
+# NOTHING here is useful until restores have been TESTED: see docs/03-OPERATIONS.md "Restore drills".
+# No Job relies on `$(...)` command substitution: Kubernetes would try to expand it inside args.
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backup-postgres
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: backup-postgres
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: backup
+spec:
+  schedule: "${BACKUP_SCHEDULE_POSTGRES}"
+  timeZone: "${SYSTEM_TIMEZONE}"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 21600
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: backup-postgres
+            app.kubernetes.io/part-of: numan
+            app.kubernetes.io/component: backup
+            numan.io/egress-internet: "true"
+            numan.io/uses-postgres: "true"
+        spec:
+          serviceAccountName: backup
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            seccompProfile: {type: RuntimeDefault}
+          initContainers:
+            - name: dump
+              image: postgres:16.10
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  export PGPASSWORD="$POSTGRES_PASSWORD"
+                  pg_dump -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc -f /backup/numan.dump
+                  pg_dumpall -h postgres -U "$POSTGRES_USER" --globals-only -f /backup/globals.sql
+                  ls -l /backup
+              env:
+                - name: POSTGRES_USER
+                  valueFrom: {secretKeyRef: {name: postgres-credentials, key: POSTGRES_USER}}
+                - name: POSTGRES_PASSWORD
+                  valueFrom: {secretKeyRef: {name: postgres-credentials, key: POSTGRES_PASSWORD}}
+                - name: POSTGRES_DB
+                  valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_DB}}
+              resources:
+                requests: {cpu: 100m, memory: 128Mi}
+                limits: {cpu: "2", memory: 1Gi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: ["ALL"]}
+              volumeMounts:
+                - {name: backup, mountPath: /backup}
+                - {name: tmp, mountPath: /tmp}
+          containers:
+            - name: backup
+              image: restic/restic:0.18.0
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  restic cat config >/dev/null 2>&1 || restic init
+                  restic backup /backup --tag postgres --host ${ENVIRONMENT_NAME}-postgres
+                  restic forget --tag postgres --host ${ENVIRONMENT_NAME}-postgres --keep-daily ${BACKUP_RETENTION_DAILY} --keep-weekly ${BACKUP_RETENTION_WEEKLY} --keep-monthly ${BACKUP_RETENTION_MONTHLY} --prune
+                  restic check
+                  echo "postgres backup OK"
+              env:
+                - name: RESTIC_REPOSITORY
+                  valueFrom: {secretKeyRef: {name: backup-credentials, key: RESTIC_REPOSITORY}}
+                - name: RESTIC_PASSWORD
+                  valueFrom: {secretKeyRef: {name: backup-credentials, key: RESTIC_PASSWORD}}
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom: {secretKeyRef: {name: backup-credentials, key: AWS_ACCESS_KEY_ID}}
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom: {secretKeyRef: {name: backup-credentials, key: AWS_SECRET_ACCESS_KEY}}
+                - {name: RESTIC_CACHE_DIR, value: /tmp/restic-cache}
+                - {name: TMPDIR, value: /tmp}
+              resources:
+                requests: {cpu: 100m, memory: 128Mi}
+                limits: {cpu: "${BACKUP_CPU_LIMIT}", memory: "${BACKUP_MEMORY_LIMIT}"}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: ["ALL"]}
+              volumeMounts:
+                - {name: tmp, mountPath: /tmp}
+                - {name: backup, mountPath: /backup}
+          volumes:
+            - {name: backup, emptyDir: {sizeLimit: "${BACKUP_SCRATCH_SIZE}"}}
+            - {name: tmp, emptyDir: {}}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backup-mongo
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: backup-mongo
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: backup
+spec:
+  schedule: "${BACKUP_SCHEDULE_MONGODB}"
+  timeZone: "${SYSTEM_TIMEZONE}"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 21600
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: backup-mongo
+            app.kubernetes.io/part-of: numan
+            app.kubernetes.io/component: backup
+            numan.io/egress-internet: "true"
+            numan.io/uses-mongo: "true"
+        spec:
+          serviceAccountName: backup
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            seccompProfile: {type: RuntimeDefault}
+          initContainers:
+            - name: dump
+              image: mongo:7.0.14
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  mongodump --host mongo --port 27017 --username "$MONGO_ROOT_USER" --password "$MONGO_ROOT_PASSWORD" \
+                    --authenticationDatabase admin --archive=/backup/mongo.archive.gz --gzip
+                  ls -l /backup
+              env:
+                - name: MONGO_ROOT_USER
+                  valueFrom: {secretKeyRef: {name: mongo-credentials, key: MONGO_ROOT_USER}}
+                - name: MONGO_ROOT_PASSWORD
+                  valueFrom: {secretKeyRef: {name: mongo-credentials, key: MONGO_ROOT_PASSWORD}}
+              resources:
+                requests: {cpu: 100m, memory: 128Mi}
+                limits: {cpu: "2", memory: 1Gi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: ["ALL"]}
+              volumeMounts:
+                - {name: backup, mountPath: /backup}
+                - {name: tmp, mountPath: /tmp}
+          containers:
+            - name: backup
+              image: restic/restic:0.18.0
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  restic cat config >/dev/null 2>&1 || restic init
+                  restic backup /backup --tag mongo --host ${ENVIRONMENT_NAME}-mongo
+                  restic forget --tag mongo --host ${ENVIRONMENT_NAME}-mongo --keep-daily ${BACKUP_RETENTION_DAILY} --keep-weekly ${BACKUP_RETENTION_WEEKLY} --keep-monthly ${BACKUP_RETENTION_MONTHLY} --prune
+                  restic check
+                  echo "mongo backup OK"
+              env:
+                - name: RESTIC_REPOSITORY
+                  valueFrom: {secretKeyRef: {name: backup-credentials, key: RESTIC_REPOSITORY}}
+                - name: RESTIC_PASSWORD
+                  valueFrom: {secretKeyRef: {name: backup-credentials, key: RESTIC_PASSWORD}}
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom: {secretKeyRef: {name: backup-credentials, key: AWS_ACCESS_KEY_ID}}
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom: {secretKeyRef: {name: backup-credentials, key: AWS_SECRET_ACCESS_KEY}}
+                - {name: RESTIC_CACHE_DIR, value: /tmp/restic-cache}
+                - {name: TMPDIR, value: /tmp}
+              resources:
+                requests: {cpu: 100m, memory: 128Mi}
+                limits: {cpu: "${BACKUP_CPU_LIMIT}", memory: "${BACKUP_MEMORY_LIMIT}"}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: ["ALL"]}
+              volumeMounts:
+                - {name: tmp, mountPath: /tmp}
+                - {name: backup, mountPath: /backup}
+          volumes:
+            - {name: backup, emptyDir: {sizeLimit: "${BACKUP_SCRATCH_SIZE}"}}
+            - {name: tmp, emptyDir: {}}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backup-redis
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: backup-redis
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: backup
+spec:
+  schedule: "${BACKUP_SCHEDULE_REDIS}"
+  timeZone: "${SYSTEM_TIMEZONE}"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 21600
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: backup-redis
+            app.kubernetes.io/part-of: numan
+            app.kubernetes.io/component: backup
+            numan.io/egress-internet: "true"
+            numan.io/uses-redis: "true"
+        spec:
+          serviceAccountName: backup
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            seccompProfile: {type: RuntimeDefault}
+          initContainers:
+            - name: dump
+              image: redis:7.4.2
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  redis-cli -h redis -p 6379 --rdb /backup/redis.rdb
+                  ls -l /backup
+              env:
+                - name: REDISCLI_AUTH
+                  valueFrom: {secretKeyRef: {name: redis-credentials, key: REDIS_PASSWORD}}
+              resources:
+                requests: {cpu: 100m, memory: 128Mi}
+                limits: {cpu: "2", memory: 1Gi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: ["ALL"]}
+              volumeMounts:
+                - {name: backup, mountPath: /backup}
+                - {name: tmp, mountPath: /tmp}
+          containers:
+            - name: backup
+              image: restic/restic:0.18.0
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  restic cat config >/dev/null 2>&1 || restic init
+                  restic backup /backup --tag redis --host ${ENVIRONMENT_NAME}-redis
+                  restic forget --tag redis --host ${ENVIRONMENT_NAME}-redis --keep-daily ${BACKUP_RETENTION_DAILY} --keep-weekly ${BACKUP_RETENTION_WEEKLY} --keep-monthly ${BACKUP_RETENTION_MONTHLY} --prune
+                  restic check
+                  echo "redis backup OK"
+              env:
+                - name: RESTIC_REPOSITORY
+                  valueFrom: {secretKeyRef: {name: backup-credentials, key: RESTIC_REPOSITORY}}
+                - name: RESTIC_PASSWORD
+                  valueFrom: {secretKeyRef: {name: backup-credentials, key: RESTIC_PASSWORD}}
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom: {secretKeyRef: {name: backup-credentials, key: AWS_ACCESS_KEY_ID}}
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom: {secretKeyRef: {name: backup-credentials, key: AWS_SECRET_ACCESS_KEY}}
+                - {name: RESTIC_CACHE_DIR, value: /tmp/restic-cache}
+                - {name: TMPDIR, value: /tmp}
+              resources:
+                requests: {cpu: 100m, memory: 128Mi}
+                limits: {cpu: "${BACKUP_CPU_LIMIT}", memory: "${BACKUP_MEMORY_LIMIT}"}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: ["ALL"]}
+              volumeMounts:
+                - {name: tmp, mountPath: /tmp}
+                - {name: backup, mountPath: /backup}
+          volumes:
+            - {name: backup, emptyDir: {sizeLimit: "${BACKUP_SCRATCH_SIZE}"}}
+            - {name: tmp, emptyDir: {}}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backup-minio-hot
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: backup-minio-hot
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: backup
+spec:
+  schedule: "${BACKUP_SCHEDULE_MINIO_HOT}"
+  timeZone: "${SYSTEM_TIMEZONE}"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 21600
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: backup-minio-hot
+            app.kubernetes.io/part-of: numan
+            app.kubernetes.io/component: backup
+            numan.io/egress-internet: "true"
+            numan.io/uses-minio-hot: "true"
+        spec:
+          serviceAccountName: backup
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: backup
+              image: ${MINIO_MC_IMAGE}
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  export MC_CONFIG_DIR=/tmp/.mc
+                  mc alias set src http://minio-hot:9000 "$BACKUP_ACCESS_KEY" "$BACKUP_SECRET_KEY" >/dev/null
+                  mc alias set offsite "$BACKUP_S3_ENDPOINT" "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" >/dev/null
+                  BUCKET="$MINIO_BUCKET"
+                  # No --remove on purpose: a deletion on the source must never silently delete the off-site copy.
+                  mc mirror --preserve --overwrite "src/$BUCKET" "offsite/$BACKUP_MIRROR_BUCKET/minio-hot/$BUCKET"
+                  echo "minio-hot mirror OK"
+              env:
+                - name: BACKUP_ACCESS_KEY
+                  valueFrom: {secretKeyRef: {name: minio-hot-users, key: BACKUP_ACCESS_KEY}}
+                - name: BACKUP_SECRET_KEY
+                  valueFrom: {secretKeyRef: {name: minio-hot-users, key: BACKUP_SECRET_KEY}}
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom: {secretKeyRef: {name: backup-credentials, key: AWS_ACCESS_KEY_ID}}
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom: {secretKeyRef: {name: backup-credentials, key: AWS_SECRET_ACCESS_KEY}}
+                - name: BACKUP_S3_ENDPOINT
+                  valueFrom: {secretKeyRef: {name: backup-credentials, key: BACKUP_S3_ENDPOINT}}
+                - name: BACKUP_MIRROR_BUCKET
+                  valueFrom: {secretKeyRef: {name: backup-credentials, key: BACKUP_MIRROR_BUCKET}}
+                - name: MINIO_BUCKET
+                  valueFrom: {configMapKeyRef: {name: minio-init-config, key: HOT_BUCKET}}
+              resources:
+                requests: {cpu: 100m, memory: 128Mi}
+                limits: {cpu: "${BACKUP_CPU_LIMIT}", memory: "${BACKUP_MEMORY_LIMIT}"}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: ["ALL"]}
+              volumeMounts:
+                - {name: tmp, mountPath: /tmp}
+          volumes:
+            - {name: tmp, emptyDir: {}}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backup-minio-cold
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: backup-minio-cold
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: backup
+spec:
+  schedule: "${BACKUP_SCHEDULE_MINIO_COLD}"
+  timeZone: "${SYSTEM_TIMEZONE}"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 21600
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: backup-minio-cold
+            app.kubernetes.io/part-of: numan
+            app.kubernetes.io/component: backup
+            numan.io/egress-internet: "true"
+            numan.io/uses-minio-cold: "true"
+        spec:
+          serviceAccountName: backup
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: backup
+              image: ${MINIO_MC_IMAGE}
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  export MC_CONFIG_DIR=/tmp/.mc
+                  mc alias set src http://minio-cold:9000 "$BACKUP_ACCESS_KEY" "$BACKUP_SECRET_KEY" >/dev/null
+                  mc alias set offsite "$BACKUP_S3_ENDPOINT" "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" >/dev/null
+                  BUCKET="$MINIO_BUCKET"
+                  # No --remove on purpose: a deletion on the source must never silently delete the off-site copy.
+                  mc mirror --preserve --overwrite "src/$BUCKET" "offsite/$BACKUP_MIRROR_BUCKET/minio-cold/$BUCKET"
+                  echo "minio-cold mirror OK"
+              env:
+                - name: BACKUP_ACCESS_KEY
+                  valueFrom: {secretKeyRef: {name: minio-cold-users, key: BACKUP_ACCESS_KEY}}
+                - name: BACKUP_SECRET_KEY
+                  valueFrom: {secretKeyRef: {name: minio-cold-users, key: BACKUP_SECRET_KEY}}
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom: {secretKeyRef: {name: backup-credentials, key: AWS_ACCESS_KEY_ID}}
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom: {secretKeyRef: {name: backup-credentials, key: AWS_SECRET_ACCESS_KEY}}
+                - name: BACKUP_S3_ENDPOINT
+                  valueFrom: {secretKeyRef: {name: backup-credentials, key: BACKUP_S3_ENDPOINT}}
+                - name: BACKUP_MIRROR_BUCKET
+                  valueFrom: {secretKeyRef: {name: backup-credentials, key: BACKUP_MIRROR_BUCKET}}
+                - name: MINIO_BUCKET
+                  valueFrom: {configMapKeyRef: {name: minio-init-config, key: COLD_BUCKET}}
+              resources:
+                requests: {cpu: 100m, memory: 128Mi}
+                limits: {cpu: "${BACKUP_CPU_LIMIT}", memory: "${BACKUP_MEMORY_LIMIT}"}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: ["ALL"]}
+              volumeMounts:
+                - {name: tmp, mountPath: /tmp}
+          volumes:
+            - {name: tmp, emptyDir: {}}

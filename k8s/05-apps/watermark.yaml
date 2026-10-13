@@ -1,0 +1,140 @@
+# Watermark ("Tatouage") service - ClusterIP only, reached through Traefik at /process (legacy nginx route)
+# and by the API through WATERMARK_API_URL=http://watermark:8080.
+#
+# Evidence & assumptions:
+#  * Legacy dev: `go run cmd/watermark/main.go`, host port 8083 -> container 8080, env_file .env, source bind-mount
+#    only. No data volume => no local persistent state is evidenced, so it is deployed as a stateless Deployment
+#    with an emptyDir /tmp. VERIFY in the Go code (temp files, caches).
+#  * The legacy prod/infra Compose files have NO watermark service at all, although nginx routes /process to it.
+#    A dedicated image is therefore REQUIRED: build one whose ENTRYPOINT runs cmd/watermark and listens on $PORT
+#    (a Dockerfile target is outside this repo's scope - no Dockerfile was supplied).
+#  * Least privilege: it receives ONLY WATERMARK_SECRET_KEY + PORT (not JWT/HMAC/DB/S3). The legacy container got the
+#    whole .env. If it fails with a missing variable, add that single variable here and open the matching
+#    NetworkPolicy path (02-security) - do not copy the whole environment.
+#  * /process is PUBLIC through the Ingress (as in legacy nginx). Authentication relies on WATERMARK_SECRET_KEY being
+#    enforced by the Go code (UNVERIFIED). Prefer making it internal-only if browsers/mobile do not need it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: watermark
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: watermark
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: app
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: watermark
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: watermark
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: watermark
+    app.kubernetes.io/part-of: numan
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: watermark
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: watermark
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: watermark
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: app
+spec:
+  replicas: ${WATERMARK_MIN_REPLICAS}
+  revisionHistoryLimit: 5
+  minReadySeconds: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: watermark
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: watermark
+        app.kubernetes.io/part-of: numan
+        app.kubernetes.io/component: app
+        numan.io/exposed-via-traefik: "true"
+        numan.io/uses-minio-hot: "true"
+    spec:
+      serviceAccountName: watermark
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 45
+      # imagePullSecrets: [{name: registry-credentials}]
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: watermark
+      containers:
+        - name: watermark
+          image: numan-watermark          # resolved in kustomization.yaml (images:)
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 8080}
+          env:
+            - name: PORT
+              valueFrom: {configMapKeyRef: {name: numan-config, key: PORT}}
+            - name: WATERMARK_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: numan-watermark-secrets, key: WATERMARK_SECRET_KEY}}
+            # --- AJOUTS POUR LA CONNEXION S3 ---
+            - name: MINIO_ENDPOINT
+              valueFrom: {configMapKeyRef: {name: numan-config, key: MINIO_ENDPOINT}}
+            - name: MINIO_BUCKET_NAME
+              valueFrom: {configMapKeyRef: {name: minio-init-config, key: HOT_BUCKET}}
+            - name: MINIO_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: minio-hot-users, key: S3_ACCESS_KEY}}
+            - name: MINIO_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: minio-hot-users, key: S3_SECRET_KEY}}
+            - name: USE_SSL
+              value: "false"
+          startupProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 6
+          lifecycle:
+            preStop:
+              sleep: {seconds: 5}
+          resources:                      # INITIAL RECOMMENDATION - image processing is CPU/memory hungry; measure
+            requests: {cpu: "${WATERMARK_CPU_REQUEST}", memory: "${WATERMARK_MEMORY_REQUEST}"}
+            limits: {cpu: "${WATERMARK_CPU_LIMIT}", memory: "${WATERMARK_MEMORY_LIMIT}"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 1Gi}

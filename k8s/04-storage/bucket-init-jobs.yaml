@@ -1,0 +1,223 @@
+# Idempotent MinIO bootstrap Jobs (replace the legacy "createbuckets" Compose service).
+#
+# Differences from the legacy service, on purpose:
+#  * Retries until MinIO is actually reachable (Compose depends_on only waited for the container to start,
+#    and the legacy script ended with `exit 0`, which HID failures). Here a real failure fails the Job.
+#  * `mc policy set download` is a deprecated mc sub-command; `mc anonymous set` is its replacement. Because
+#    of the legacy `exit 0` nobody can tell from the files whether the policy was ever applied in production:
+#    check it with `mc anonymous get` on the OLD deployment before cut-over.
+#  * Creates a least-privilege application user instead of handing the MinIO ROOT credentials to the app.
+#  * Hot and cold are SEPARATE Jobs with separate credentials.
+# Jobs are immutable: scripts/deploy.sh deletes finished init Jobs (label numan.io/job-type=init) before apply.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-hot-init
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: minio-hot-init
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: init
+    numan.io/job-type: init
+spec:
+  backoffLimit: 6
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: minio-hot-init
+        app.kubernetes.io/part-of: numan
+        app.kubernetes.io/component: init
+        numan.io/uses-minio-hot: "true"
+    spec:
+      serviceAccountName: minio-init
+      automountServiceAccountToken: false
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: init
+          image: ${MINIO_MC_IMAGE}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              export MC_CONFIG_DIR=/tmp/.mc
+              ALIAS=hot
+              ENDPOINT="http://minio-hot:9000"
+              echo "Waiting for $ENDPOINT ..."
+              i=0
+              until mc alias set "$ALIAS" "$ENDPOINT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1 \
+                    && mc admin info "$ALIAS" >/dev/null 2>&1; do
+                i=$((i+1))
+                if [ "$i" -ge 90 ]; then echo "ERROR: MinIO hot not ready after 15 min" >&2; exit 1; fi
+                sleep 10
+              done
+              echo "MinIO hot reachable."
+
+              BUCKET="$HOT_BUCKET"
+              mc mb --ignore-existing "$ALIAS/$BUCKET"
+              if [ "$HOT_ANONYMOUS_READ" = "true" ]; then
+                echo "Anonymous READ enabled on $BUCKET (MINIO_HOT_ANONYMOUS_READ=true)."
+                mc anonymous set download "$ALIAS/$BUCKET"
+              else
+                mc anonymous set none "$ALIAS/$BUCKET"
+              fi
+              if [ "$HOT_VERSIONING" = "true" ]; then mc version enable "$ALIAS/$BUCKET"; fi
+
+              # --- least-privilege application user: read/write on THIS bucket only, no admin actions ---
+              cat > /tmp/policy-app.json <<POLICY
+              {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:*"],"Resource":["arn:aws:s3:::$BUCKET","arn:aws:s3:::$BUCKET/*"]}]}
+              POLICY
+              mc admin policy create "$ALIAS" numan-hot-app-rw /tmp/policy-app.json
+              # "user add" is idempotent and re-applies the secret from the Kubernetes Secret (rotation).
+              mc admin user add "$ALIAS" "$S3_ACCESS_KEY" "$S3_SECRET_KEY"
+              mc admin user info "$ALIAS" "$S3_ACCESS_KEY" | grep -q "numan-hot-app-rw" \
+                || mc admin policy attach "$ALIAS" numan-hot-app-rw --user "$S3_ACCESS_KEY"
+              # --- read-only user for the backup CronJob (built-in canned policy) ---
+              mc admin user add "$ALIAS" "$BACKUP_ACCESS_KEY" "$BACKUP_SECRET_KEY"
+              mc admin user info "$ALIAS" "$BACKUP_ACCESS_KEY" | grep -q "readonly" \
+                || mc admin policy attach "$ALIAS" readonly --user "$BACKUP_ACCESS_KEY"
+
+              echo "minio-hot bootstrap OK"
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom: {secretKeyRef: {name: minio-hot-root, key: MINIO_ROOT_USER}}
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom: {secretKeyRef: {name: minio-hot-root, key: MINIO_ROOT_PASSWORD}}
+            - name: S3_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: minio-hot-users, key: S3_ACCESS_KEY}}
+            - name: S3_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: minio-hot-users, key: S3_SECRET_KEY}}
+            - name: BACKUP_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: minio-hot-users, key: BACKUP_ACCESS_KEY}}
+            - name: BACKUP_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: minio-hot-users, key: BACKUP_SECRET_KEY}}
+          envFrom:
+            - configMapRef: {name: minio-init-config}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {}}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-cold-init
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: minio-cold-init
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: init
+    numan.io/job-type: init
+spec:
+  backoffLimit: 6
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: minio-cold-init
+        app.kubernetes.io/part-of: numan
+        app.kubernetes.io/component: init
+        numan.io/uses-minio-cold: "true"
+    spec:
+      serviceAccountName: minio-init
+      automountServiceAccountToken: false
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: init
+          image: ${MINIO_MC_IMAGE}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              export MC_CONFIG_DIR=/tmp/.mc
+              ALIAS=cold
+              ENDPOINT="http://minio-cold:9000"
+              echo "Waiting for $ENDPOINT ..."
+              i=0
+              until mc alias set "$ALIAS" "$ENDPOINT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1 \
+                    && mc admin info "$ALIAS" >/dev/null 2>&1; do
+                i=$((i+1))
+                if [ "$i" -ge 90 ]; then echo "ERROR: MinIO cold not ready after 15 min" >&2; exit 1; fi
+                sleep 10
+              done
+              echo "MinIO cold reachable."
+
+              BUCKET="$COLD_BUCKET"
+              LOCKFLAG=""
+              if [ "$COLD_OBJECT_LOCK" = "true" ]; then LOCKFLAG="--with-lock"; fi
+              if [ -n "$COLD_DEFAULT_RETENTION_DAYS" ] && [ "$COLD_OBJECT_LOCK" != "true" ]; then
+                echo "ERROR: COLD_DEFAULT_RETENTION_DAYS needs COLD_OBJECT_LOCK=true" >&2; exit 1
+              fi
+              # Object Lock can only be enabled AT CREATION. If the bucket already exists without lock this does
+              # not change it - recreate the bucket (with a data migration) if you need lock later.
+              mc mb --ignore-existing $LOCKFLAG "$ALIAS/$BUCKET"
+              mc anonymous set none "$ALIAS/$BUCKET"
+              if [ "$COLD_VERSIONING" = "true" ] || [ "$COLD_OBJECT_LOCK" = "true" ]; then
+                mc version enable "$ALIAS/$BUCKET"
+              fi
+              if [ "$COLD_OBJECT_LOCK" = "true" ] && [ -n "$COLD_DEFAULT_RETENTION_DAYS" ]; then
+                mc retention set --default "$COLD_DEFAULT_RETENTION_MODE" "$COLD_DEFAULT_RETENTION_DAYS"d "$ALIAS/$BUCKET"
+              fi
+
+              # --- least-privilege application user: read/write on THIS bucket only, no admin actions ---
+              cat > /tmp/policy-app.json <<POLICY
+              {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:*"],"Resource":["arn:aws:s3:::$BUCKET","arn:aws:s3:::$BUCKET/*"]}]}
+              POLICY
+              mc admin policy create "$ALIAS" numan-cold-app-rw /tmp/policy-app.json
+              # "user add" is idempotent and re-applies the secret from the Kubernetes Secret (rotation).
+              mc admin user add "$ALIAS" "$S3_ACCESS_KEY" "$S3_SECRET_KEY"
+              mc admin user info "$ALIAS" "$S3_ACCESS_KEY" | grep -q "numan-cold-app-rw" \
+                || mc admin policy attach "$ALIAS" numan-cold-app-rw --user "$S3_ACCESS_KEY"
+              # --- read-only user for the backup CronJob (built-in canned policy) ---
+              mc admin user add "$ALIAS" "$BACKUP_ACCESS_KEY" "$BACKUP_SECRET_KEY"
+              mc admin user info "$ALIAS" "$BACKUP_ACCESS_KEY" | grep -q "readonly" \
+                || mc admin policy attach "$ALIAS" readonly --user "$BACKUP_ACCESS_KEY"
+
+              echo "minio-cold bootstrap OK"
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom: {secretKeyRef: {name: minio-cold-root, key: MINIO_ROOT_USER}}
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom: {secretKeyRef: {name: minio-cold-root, key: MINIO_ROOT_PASSWORD}}
+            - name: S3_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: minio-cold-users, key: S3_ACCESS_KEY}}
+            - name: S3_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: minio-cold-users, key: S3_SECRET_KEY}}
+            - name: BACKUP_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: minio-cold-users, key: BACKUP_ACCESS_KEY}}
+            - name: BACKUP_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: minio-cold-users, key: BACKUP_SECRET_KEY}}
+          envFrom:
+            - configMapRef: {name: minio-init-config}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {}}

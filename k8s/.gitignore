@@ -1,0 +1,8 @@
+# deployment artifacts and operator configuration - never commit
+/build/
+/infrastructure.env
+/environments/*.env
+# the blueprint is tracked
+!/infrastructure.env.template
+01-config/secrets.env
+*.secret.yaml

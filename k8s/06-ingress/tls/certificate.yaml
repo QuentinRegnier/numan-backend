@@ -1,0 +1,23 @@
+# REQUIRES cert-manager and cluster-issuers.yaml. Produces the Secret "numan-tls" used by 06-ingress/ingress.yaml.
+# The issuer is the deployment variable TLS_ISSUER (start with letsencrypt-staging; switch to letsencrypt-prod once `kubectl -n numan describe certificate numan-tls`
+# shows Ready=True; a staging cert is NOT trusted by browsers - expected).
+# HTTP-01 needs: DNS for the host -> this cluster, port 80 reachable from the Internet, the numan-http-redirect Ingress deployed.
+# cert-manager renews automatically (default: 30 days before expiry). Monitor expiry (docs/03-OPERATIONS.md).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: numan-tls
+  namespace: numan
+  labels:
+    app.kubernetes.io/part-of: numan
+spec:
+  secretName: numan-tls
+  issuerRef:
+    name: ${TLS_ISSUER}
+    kind: ClusterIssuer
+  dnsNames:
+    - "${NUMAN_DOMAIN}"
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always

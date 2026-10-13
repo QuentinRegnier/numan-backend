@@ -1,0 +1,338 @@
+# NetworkPolicies - default deny, then explicit allows.
+#
+# DEPENDENCY: the CNI must ENFORCE NetworkPolicy. K3s's default (Flannel + the embedded kube-router
+# network-policy controller) does, unless K3s was started with --disable-network-policy or with a
+# different CNI. Verify BEFORE relying on this file (README, "Prerequisites"):
+#     k3s check-config 2>/dev/null | grep -i netpol ; kubectl -n kube-system get pods
+# and prove it with scripts/verify.sh (negative test: an unlabeled pod must NOT reach postgres).
+#
+# Pod access labels used below (set on pod templates):
+#   numan.io/uses-postgres | uses-mongo | uses-redis | uses-minio-hot | uses-minio-cold  -> may reach that datastore
+#   numan.io/egress-internet                                                              -> may reach the Internet on TCP/443
+#   numan.io/exposed-via-traefik                                                           -> may receive traffic from Traefik
+#
+# NOT covered (add if you need them): scraping by a monitoring stack (needs an ingress rule from its
+# namespace), IPv6 egress, outbound ports other than 443 for api/worker (e.g. SMTP) - the legacy
+# files do not reveal external dependencies; check the app logs and extend allow-egress-internet-https.
+# kubelet health probes originate from the node and are allowed by the K3s policy controller; verify.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: numan
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: numan
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+# Traefik (kube-system, bundled with K3s) -> workloads that the Ingress routes to.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-traefik-ingress
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      numan.io/exposed-via-traefik: "true"
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+      ports:
+        - {protocol: TCP, port: 8080}
+---
+# api -> watermark (WATERMARK_API_URL)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api-to-watermark
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: watermark
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: api
+      ports:
+        - {protocol: TCP, port: 8080}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api-egress-to-watermark
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: api
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: watermark
+      ports:
+        - {protocol: TCP, port: 8080}
+---
+# Datastore access: postgres:5432
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-postgres
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              numan.io/uses-postgres: "true"
+      ports:
+        - {protocol: TCP, port: 5432}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-to-postgres
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      numan.io/uses-postgres: "true"
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - {protocol: TCP, port: 5432}
+---
+# Datastore access: mongo:27017
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-mongo
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mongo
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              numan.io/uses-mongo: "true"
+      ports:
+        - {protocol: TCP, port: 27017}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-to-mongo
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      numan.io/uses-mongo: "true"
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mongo
+      ports:
+        - {protocol: TCP, port: 27017}
+---
+# Datastore access: redis:6379
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-redis
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              numan.io/uses-redis: "true"
+      ports:
+        - {protocol: TCP, port: 6379}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-to-redis
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      numan.io/uses-redis: "true"
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - {protocol: TCP, port: 6379}
+---
+# Datastore access: minio-hot:9000
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-minio-hot
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: minio-hot
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              numan.io/uses-minio-hot: "true"
+      ports:
+        - {protocol: TCP, port: 9000}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-to-minio-hot
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      numan.io/uses-minio-hot: "true"
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: minio-hot
+      ports:
+        - {protocol: TCP, port: 9000}
+---
+# Datastore access: minio-cold:9000
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-minio-cold
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: minio-cold
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              numan.io/uses-minio-cold: "true"
+      ports:
+        - {protocol: TCP, port: 9000}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-to-minio-cold
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      numan.io/uses-minio-cold: "true"
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: minio-cold
+      ports:
+        - {protocol: TCP, port: 9000}
+---
+# Outbound HTTPS (push providers, off-site backup target, ...) for labelled pods only.
+# Private/link-local ranges are excluded so this cannot be used to reach the cluster or node network.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-internet-https
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      numan.io/egress-internet: "true"
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+              - 100.64.0.0/10
+      ports:
+        - {protocol: TCP, port: 443}
+---
+# cert-manager HTTP-01 solver pods are created in THIS namespace (the Certificate's namespace) while a
+# challenge is pending. Harmless if cert-manager is not installed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-traefik-to-acme-solver
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      acme.cert-manager.io/http01-solver: "true"
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+      ports:
+        - {protocol: TCP, port: 8089}

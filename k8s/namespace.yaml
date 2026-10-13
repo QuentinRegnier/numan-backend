@@ -1,0 +1,15 @@
+# Production namespace for every Numan workload.
+# Pod Security Admission: "baseline" is ENFORCED (blocks privileged pods, hostPath, etc.);
+# "restricted" only WARNS/AUDITS so that you see which pods deviate without breaking a rollout.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: numan
+  labels:
+    app.kubernetes.io/part-of: numan
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest

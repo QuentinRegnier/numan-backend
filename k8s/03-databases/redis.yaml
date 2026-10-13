@@ -1,0 +1,154 @@
+# Redis - SINGLE INSTANCE with AOF persistence. NOT highly available.
+#   * Evidence from the legacy files: --appendonly yes, and .env calls Redis "Hot Storage & Message
+#     Broker". Eviction policy volatile-lfu only evicts keys WITH a TTL, so keys without TTL
+#     (probably queues/jobs) are expected to survive. => Treat Redis data as IMPORTANT, not as a
+#     disposable cache. Persistence stays ON and Redis is part of the backup plan.
+#   * Failure domain today: pod/node loss => unavailability until rescheduled (local-path: until that
+#     node returns) and up to ~1s of acknowledged writes lost (appendfsync everysec default).
+#   * Path to HA: Redis Sentinel (3 sentinels + 1 primary + >=1 replica) or Redis Cluster, ONLY after
+#     confirming the Go client supports it (docs/01-ARCHITECTURE.md). Not faked here.
+#   * Authentication: the legacy Compose command has NO --requirepass although .env defines
+#     REDIS_PASSWORD. This StatefulSet ENABLES requirepass using REDIS_PASSWORD. VERIFY the Go code
+#     reads REDIS_PASSWORD and sends AUTH; if it does not, pods will fail with NOAUTH errors.
+# Flags below are taken verbatim from the legacy command; --requirepass/--dir are added.
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-headless
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: database
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: redis
+  ports:
+    - {name: redis, port: 6379, targetPort: redis}
+---
+# Name "redis" + port 6379 == legacy REDIS_ADDR value.
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: database
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: redis
+  ports:
+    - {name: redis, port: 6379, targetPort: redis}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: database
+spec:
+  serviceName: redis-headless
+  replicas: 1                      # DO NOT raise (independent, non-replicating instances).
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis
+        app.kubernetes.io/part-of: numan
+        app.kubernetes.io/component: database
+    spec:
+      serviceAccountName: redis
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 120   # SIGTERM triggers a final AOF/RDB flush
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999               # "redis" user in the official image
+        runAsGroup: 999
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: redis
+          image: redis:7.4.2         # legacy line: redis:7. Pin the latest 7.x patch at deploy time.
+          imagePullPolicy: IfNotPresent
+          # The password is read from the environment so it never appears in the manifest.
+          # (It is visible to processes inside this container only.)
+          command: ["sh", "-c"]
+          args:
+            - >-
+              exec redis-server
+              --requirepass "$REDIS_PASSWORD"
+              --maxmemory "$REDIS_MAXMEMORY"
+              --maxmemory-policy volatile-lfu
+              --lfu-log-factor 10
+              --lfu-decay-time 120
+              --appendonly yes
+              --dir /data
+          ports:
+            - {name: redis, containerPort: 6379}
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: redis-credentials, key: REDIS_PASSWORD}}
+            - name: REDISCLI_AUTH      # lets redis-cli (probes) authenticate without -a
+              valueFrom: {secretKeyRef: {name: redis-credentials, key: REDIS_PASSWORD}}
+            - name: REDIS_MAXMEMORY
+              valueFrom: {configMapKeyRef: {name: numan-config, key: REDIS_MAXMEMORY}}
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli ping | grep -q PONG"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli ping | grep -q PONG"]
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          startupProbe:              # AOF replay of a large dataset can take a while
+            exec:
+              command: ["sh", "-c", "redis-cli ping | grep -q PONG"]
+            periodSeconds: 5
+            failureThreshold: 120
+          resources:
+            # maxmemory is 4gb (=4GiB); the legacy REDIS_CONTAINER_LIMIT is 4.5gb => 4608Mi limit.
+            # AOF rewrite forks the process (copy-on-write): keep headroom above maxmemory.
+            # requests < limits => Burstable QoS. Once node sizing is known, set requests == limits
+            # (Guaranteed QoS) so Redis is the last pod the kubelet evicts.
+            requests: {cpu: "${REDIS_CPU_REQUEST}", memory: "${REDIS_MEMORY_REQUEST}"}
+            limits: {cpu: "${REDIS_CPU_LIMIT}", memory: "${REDIS_MEMORY_LIMIT}"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {}}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: redis
+          app.kubernetes.io/part-of: numan
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: "${PVC_SIZE_REDIS}"            # size: see infrastructure.env.template (immutable once created)

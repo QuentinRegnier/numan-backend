@@ -1,0 +1,76 @@
+# HorizontalPodAutoscalers (autoscaling/v2).
+# DEPENDENCIES: metrics-server (bundled and enabled by default in K3s; verify: kubectl top pods -n numan) and CPU
+# REQUESTS on the target containers (set in 05-apps). HPA percentages are relative to requests, so wrong requests
+# = wrong scaling. All min/max values are INITIAL RECOMMENDATIONS, not validated capacity limits.
+#
+# Limits of CPU-based scaling here:
+#  * API: WebSocket-heavy load is memory/connection-bound more than CPU-bound; CPU may lag behind real saturation.
+#    Consider scaling on a custom metric (connections, p95 latency) once the app exports one (none is evidenced).
+#  * Scaling pods does nothing for the single Postgres/Mongo/Redis/MinIO instances behind them: more API pods can
+#    push the databases over capacity. Check DB connection limits before raising maxReplicas.
+#  * API_MAX_REPLICAS must stay below the first worker NODE_ID (11): api ordinals start at 1, workers at 11.
+#    VERIFY the largest NODE_ID the Go code accepts before raising it.
+#  * Scale-down is deliberately slow (WebSocket clients are disconnected when a pod is removed).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/part-of: numan
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: api
+  minReplicas: ${API_MIN_REPLICAS}
+  maxReplicas: ${API_MAX_REPLICAS}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: ${API_HPA_CPU_TARGET}
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - {type: Pods, value: 1, periodSeconds: 60}
+    scaleDown:
+      stabilizationWindowSeconds: 600
+      policies:
+        - {type: Pods, value: 1, periodSeconds: 300}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: watermark
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: watermark
+    app.kubernetes.io/part-of: numan
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: watermark
+  minReplicas: ${WATERMARK_MIN_REPLICAS}
+  maxReplicas: ${WATERMARK_MAX_REPLICAS}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: ${WATERMARK_HPA_CPU_TARGET}
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - {type: Pods, value: 2, periodSeconds: 60}
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - {type: Pods, value: 1, periodSeconds: 120}

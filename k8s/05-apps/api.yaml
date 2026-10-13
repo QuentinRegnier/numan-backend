@@ -1,0 +1,212 @@
+# API (REST + WebSocket). Deployed as a StatefulSet - NOT a Deployment - on purpose:
+#   The legacy Compose gives every API instance a different NODE_ID (api1=1, api2=2) and .env labels it
+#   "identity of the server (for horizontal scaling)". The Go code is not available, so we cannot rule out
+#   that NODE_ID seeds a distributed ID generator (Snowflake-style); two pods sharing one NODE_ID could then
+#   generate colliding IDs. A StatefulSet with ordinals.start=1 reproduces the legacy values (1, 2, 3, ...)
+#   without any wrapper script. The API owns no volume, so podManagementPolicy=Parallel keeps scaling fast.
+#   If the Go code is verified NOT to need unique NODE_IDs, this can become a Deployment.
+#   Keep the HPA maxReplicas below the largest NODE_ID the application accepts (unverified; see hpa.yaml).
+# Needs Kubernetes >= 1.31 (StatefulSet ordinals GA, pod-index label, native preStop sleep).
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-headless
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: app
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: api
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+---
+# Used by Traefik for /ws and for / (every public route except /process).
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: app
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: api
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/part-of: numan
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: api
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: app
+spec:
+  serviceName: api-headless
+  replicas: ${API_MIN_REPLICAS}              # legacy: api1 + api2. The HPA takes over; re-applying resets to this value.
+  podManagementPolicy: Parallel
+  minReadySeconds: 10
+  ordinals:
+    start: 1                        # pod api-1 -> NODE_ID=1, api-2 -> NODE_ID=2 (legacy values)
+  updateStrategy:
+    type: RollingUpdate             # one pod at a time, each must be Ready before the next
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api
+        app.kubernetes.io/part-of: numan
+        app.kubernetes.io/component: app
+        numan.io/exposed-via-traefik: "true"
+        numan.io/uses-postgres: "true"
+        numan.io/uses-mongo: "true"
+        numan.io/uses-redis: "true"
+        numan.io/uses-minio-hot: "true"
+        numan.io/uses-minio-cold: "true"
+        numan.io/egress-internet: "true"
+    spec:
+      serviceAccountName: api
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60   # preStop 10s + drain; WebSocket clients must reconnect anyway
+      # imagePullSecrets: [{name: registry-credentials}]   # uncomment for a private registry (README "Images")
+      securityContext:
+        runAsNonRoot: true
+        # Numeric UID so runAsNonRoot is verifiable whatever USER the (unseen) Dockerfile sets.
+        # VALIDATE against the real image: the binary must be readable/executable by this UID.
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway    # works on a 1-node cluster too; spreads when nodes exist
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: api
+      initContainers:
+        - name: wait-for-datastores
+          image: busybox:1.37.0
+          command: ["sh", "-c"]
+          args:
+            - |
+              for hp in "postgres 5432" "mongo 27017" "redis 6379" "minio-hot 9000"; do
+                set -- $hp
+                until nc -z -w 2 "$1" "$2"; do echo "waiting for $1:$2"; sleep 3; done
+              done
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 100m, memory: 32Mi}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+      containers:
+        - name: api
+          image: numan-api                  # resolved in kustomization.yaml (images:)
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: http, containerPort: 8080}
+          envFrom:
+            - configMapRef: {name: numan-config}
+          env:
+            # ---- identity: unique per pod, derived from the StatefulSet ordinal (no shell/wrapper needed) ----
+            - name: NODE_ID
+              valueFrom: {fieldRef: {fieldPath: "metadata.labels['apps.kubernetes.io/pod-index']"}}
+            # ---- PostgreSQL: DB_DSN rebuilt from parts; Kubernetes expands $(VAR) only from vars defined ABOVE it ----
+            - name: POSTGRES_HOST
+              valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_HOST}}
+            - name: POSTGRES_PORT
+              valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_PORT}}
+            - name: POSTGRES_DB
+              valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_DB}}
+            - name: POSTGRES_USER
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: POSTGRES_USER}}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: POSTGRES_PASSWORD}}
+            - name: DB_DSN             # same format as the legacy .env; sslmode=disable is a legacy value (see docs)
+              value: "host=$(POSTGRES_HOST) user=$(POSTGRES_USER) password=$(POSTGRES_PASSWORD) dbname=$(POSTGRES_DB) port=$(POSTGRES_PORT) sslmode=disable"
+            # ---- MongoDB (the legacy app is given the ROOT credentials; no app-specific user var exists) ----
+            - name: MONGO_ROOT_USER
+              valueFrom: {secretKeyRef: {name: mongo-credentials, key: MONGO_ROOT_USER}}
+            - name: MONGO_ROOT_PASSWORD
+              valueFrom: {secretKeyRef: {name: mongo-credentials, key: MONGO_ROOT_PASSWORD}}
+            # ---- Redis ----
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: redis-credentials, key: REDIS_PASSWORD}}
+            # ---- application secrets ----
+            - name: JWT_SECRET
+              valueFrom: {secretKeyRef: {name: numan-app-secrets, key: JWT_SECRET}}
+            - name: HMAC_SECRET
+              valueFrom: {secretKeyRef: {name: numan-app-secrets, key: HMAC_SECRET}}
+            - name: WATERMARK_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: numan-app-secrets, key: WATERMARK_SECRET_KEY}}
+            # ---- S3 (hot): least-privilege user created by minio-hot-init (legacy value was the MinIO root user) ----
+            - name: S3_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: minio-hot-users, key: S3_ACCESS_KEY}}
+            - name: S3_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: minio-hot-users, key: S3_SECRET_KEY}}
+            # ---- COLD STORAGE WIRING: PLACEHOLDER. The legacy .env has NO cold-storage variables, so the
+            # ---- variable names the Go code expects are unknown. Once known, add them here, e.g.:
+            # - name: <COLD_ENDPOINT_VAR>      value: "minio-cold:9000"
+            # - name: <COLD_ACCESS_KEY_VAR>    valueFrom: {secretKeyRef: {name: minio-cold-users, key: S3_ACCESS_KEY}}
+            # - name: <COLD_SECRET_KEY_VAR>    valueFrom: {secretKeyRef: {name: minio-cold-users, key: S3_SECRET_KEY}}
+            # NetworkPolicy access to minio-cold is already granted by the numan.io/uses-minio-cold label below.
+          # Probes: the legacy files define NO health check and expose no /health evidence, so TCP probes
+          # are used. When /health is confirmed in the Go code, switch readiness to
+          #   httpGet: {path: /health, port: http}
+          startupProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 6
+          lifecycle:
+            preStop:
+              sleep: {seconds: 10}        # let Traefik/Endpoints drop this pod before SIGTERM
+          resources:                      # INITIAL RECOMMENDATION - validate under load
+            requests: {cpu: "${API_CPU_REQUEST}", memory: "${API_MEMORY_REQUEST}"}
+            limits: {cpu: "${API_CPU_LIMIT}", memory: "${API_MEMORY_LIMIT}"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true  # VALIDATE: relax only if the app writes outside /tmp
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 512Mi}

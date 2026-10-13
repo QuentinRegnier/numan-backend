@@ -21,7 +21,7 @@ var UsersSchema = map[string]reflect.Kind{
 	"location":           reflect.String,
 	"school":             reflect.String,
 	"work":               reflect.String,
-	"badges":             reflect.Slice, // Text[]
+	"badges":             reflect.Map, // JSONB
 	"desactivated":       reflect.Bool,
 	"banned":             reflect.Bool,
 	"ban_reason":         reflect.String,

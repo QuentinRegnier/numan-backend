@@ -1,62 +1,52 @@
 # ==============================================================================
-# MAKEFILE numan V12 - GESTION D'INFRASTRUCTURE ET DE DÉVELOPPEMENT
+# MAKEFILE NUMAN BACKEND - DÉVELOPPEMENT LOCAL
 # ==============================================================================
 
-# Variables par défaut
-COMPOSE_DEV=-f docker-compose.dev.yml
-COMPOSE_PROD=-f docker-compose.prod.yml
+# Variables pour centraliser l'appel à Docker Compose avec les bons environnements
+ENV_ARGS = --env-file k8s/infrastructure.env --env-file k8s/01-config/secrets.env
+COMPOSE  = docker compose $(ENV_ARGS) -f docker-compose.dev.yml
 
-.PHONY: docs dev prod down run-db run-api run-worker run-redis clean
+.PHONY: help docs dev down logs test clean
+
+default: help
 
 # ------------------------------------------------------------------------------
-# 1. DÉVELOPPEMENT LOCAL (Remplace l'ancien launch.sh)
+# 1. DÉVELOPPEMENT ET EXÉCUTION
 # ------------------------------------------------------------------------------
 
-# Génère la documentation Swagger proprement
-docs:
+help: ## Affiche la liste des commandes disponibles
+	@echo "=================================================="
+	@echo "🛠️  NUMAN BACKEND - LOCAL DEV ENVIRONMENT"
+	@echo "=================================================="
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
+
+docs: ## Génère la documentation Swagger (Met à jour le dossier docs/)
 	@echo "📚 Génération de la documentation Swagger..."
 	go run github.com/swaggo/swag/cmd/swag@latest init -g cmd/main.go -d . --parseDependency --parseInternal
+	@echo "✅ Swagger à jour."
 
-# Lance tout l'environnement de DEV (DB + API + Cache) sur ton PC
-dev: docs
-	@echo "🚀 Lancement en mode DEV (Full Stack)..."
-	docker compose $(COMPOSE_DEV) --profile all up -d --build --remove-orphans
+dev: docs ## Lance l'environnement local complet (Hot-Reload activé via Air)
+	@echo "🚀 Démarrage de l'infrastructure de développement..."
+	$(COMPOSE) up -d --build --remove-orphans
+	@echo "✅ Numan est en ligne ! Modifie ton code Go, Air rechargera l'API automatiquement."
 
-# Lance l'environnement de PROD complet (Monolithique - Serveur Unique)
-prod: docs
-	@echo "🚀 Lancement en mode PROD (Full Stack)..."
-	docker compose $(COMPOSE_PROD) --profile all up -d --build --remove-orphans
+down: ## Arrête les conteneurs locaux (Conserve les données en base)
+	@echo "🛑 Arrêt en cours..."
+	$(COMPOSE) down
 
-# Coupe tous les conteneurs
-down:
-	@echo "🛑 Arrêt de tous les conteneurs..."
-	docker compose $(COMPOSE_DEV) --profile all down
-	docker compose $(COMPOSE_PROD) --profile all down
+logs: ## Affiche les logs de tous les conteneurs locaux en direct
+	@echo "📋 Lecture des logs (Ctrl+C pour quitter)..."
+	$(COMPOSE) logs -f
 
 # ------------------------------------------------------------------------------
-# 2. DÉPLOIEMENT DISTRIBUÉ (SCALING HORIZONTAL SUR SERVEURS MULTIPLES)
+# 2. OUTILS ET NETTOYAGE
 # ------------------------------------------------------------------------------
 
-# Sur le Serveur 1 (Le Master) : Ne lance que les bases de données
-run-db:
-	@echo "🗄️ Lancement du Rôle: BASE DE DONNÉES..."
-	docker compose $(COMPOSE_PROD) --profile db-master up -d --build
+test: ## Lance tous les tests unitaires du projet Go
+	@echo "🧪 Exécution des tests..."
+	go test -v ./...
 
-# Sur le Serveur 2 : Ne lance que les APIs Go (Scalable à l'infini)
-run-api:
-	@echo "🌐 Lancement du Rôle: API SERVER..."
-	docker compose $(COMPOSE_PROD) --profile api up -d --build
-
-# Sur le Serveur 3 : Ne lance que les Workers (Calcul asynchrone)
-run-worker:
-	@echo "⚙️ Lancement du Rôle: WORKERS..."
-	docker compose $(COMPOSE_PROD) --profile worker up -d --build
-
-# Sur le Serveur 4 : Ne lance qu'un nœud Redis
-run-redis:
-	@echo "🧠 Lancement du Rôle: REDIS NODE..."
-	docker compose $(COMPOSE_PROD) --profile redis-node up -d --build
-
-# Nettoyage total du système Docker (Prudence !)
-clean: down
-	docker system prune -a --volumes
+clean: down ## ⚠️ Arrête et DÉTRUIT les bases de données locales (Hard Reset)
+	@echo "🧹 Suppression des conteneurs, réseaux et volumes locaux..."
+	$(COMPOSE) down -v --remove-orphans
+	@echo "✅ Environnement de développement totalement remis à zéro."

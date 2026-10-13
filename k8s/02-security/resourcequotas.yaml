@@ -1,0 +1,36 @@
+# INITIAL RECOMMENDATIONS, not measured limits: deployment variables QUOTA_* (infrastructure.env.template). Size them to your bare-metal capacity.
+# They are a safety net against runaway HPA/Job loops, not a capacity plan.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: numan-quota
+  namespace: numan
+  labels:
+    app.kubernetes.io/part-of: numan
+spec:
+  hard:
+    requests.cpu: "${QUOTA_REQUESTS_CPU}"
+    requests.memory: "${QUOTA_REQUESTS_MEMORY}"
+    limits.cpu: "${QUOTA_LIMITS_CPU}"
+    limits.memory: "${QUOTA_LIMITS_MEMORY}"
+    persistentvolumeclaims: "20"
+    requests.storage: "${QUOTA_REQUESTS_STORAGE}"
+    pods: "${QUOTA_MAX_PODS}"
+---
+# Defaults for any container that forgets to declare resources (all manifests here declare them).
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: numan-defaults
+  namespace: numan
+  labels:
+    app.kubernetes.io/part-of: numan
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        cpu: 50m
+        memory: 64Mi
+      default:
+        cpu: 500m
+        memory: 512Mi

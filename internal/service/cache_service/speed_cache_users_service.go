@@ -51,6 +51,11 @@ func AddUserToSpeedCache(ctx context.Context, userPayload auth_models.UserPayloa
 	lexicographicValue := fmt.Sprintf("%s:%d", strings.ToLower(userPayload.Username), userPayload.ID)
 	_ = redis.UsersLex.ZAdd(ctx, variables.LexicographicGlobalKey, 0, lexicographicValue)
 
+	userBadges := userPayload.Badges
+	if userBadges == nil {
+		userBadges = lite_models.UserBadges{}
+	}
+
 	constructedUserLite := lite_models.UserLiteRequest{
 		ID:                     userPayload.ID,
 		Username:               userPayload.Username,
@@ -59,7 +64,7 @@ func AddUserToSpeedCache(ctx context.Context, userPayload auth_models.UserPayloa
 		ProfilePictureID:       userPayload.ProfilePictureID,
 		Bio:                    userPayload.Bio,
 		Grade:                  userPayload.Grade,
-		Badges:                 userPayload.Badges,
+		Badges:                 userBadges,
 		ConversationPermission: settingsPayload.Privacy.ConversationPermission,
 		AddGroupPermission:     settingsPayload.Privacy.AddGroupPermission,
 		HideConnections:        settingsPayload.Privacy.HideConnections,
@@ -165,6 +170,11 @@ func GetUserLite(ctx context.Context, userID int64) (lite_models.UserLiteRequest
 		// Réhydratation L1 synchrone avec les deux objets combinés
 		_ = AddUserToSpeedCache(ctx, userFromMongo, settingsPayload)
 
+		userBadges := userFromMongo.Badges
+		if userBadges == nil {
+			userBadges = lite_models.UserBadges{}
+		}
+
 		return lite_models.UserLiteRequest{
 			ID:                     userFromMongo.ID,
 			Username:               userFromMongo.Username,
@@ -173,7 +183,7 @@ func GetUserLite(ctx context.Context, userID int64) (lite_models.UserLiteRequest
 			ProfilePictureID:       userFromMongo.ProfilePictureID,
 			Bio:                    userFromMongo.Bio,
 			Grade:                  userFromMongo.Grade,
-			Badges:                 userFromMongo.Badges,
+			Badges:                 userBadges,
 			ConversationPermission: settingsPayload.Privacy.ConversationPermission,
 			AddGroupPermission:     settingsPayload.Privacy.AddGroupPermission,
 			HideConnections:        settingsPayload.Privacy.HideConnections,
@@ -197,6 +207,11 @@ func GetUserLite(ctx context.Context, userID int64) (lite_models.UserLiteRequest
 		settingsPayload, _ := object_cache_service.GetUserSettingsCascade(ctx, userID)
 		_ = AddUserToSpeedCache(ctx, userFromPg, settingsPayload)
 
+		pgBadges := userFromPg.Badges
+		if pgBadges == nil {
+			pgBadges = lite_models.UserBadges{}
+		}
+
 		return lite_models.UserLiteRequest{
 			ID:                     userFromPg.ID,
 			Username:               userFromPg.Username,
@@ -205,7 +220,7 @@ func GetUserLite(ctx context.Context, userID int64) (lite_models.UserLiteRequest
 			ProfilePictureID:       userFromPg.ProfilePictureID,
 			Bio:                    userFromPg.Bio,
 			Grade:                  userFromPg.Grade,
-			Badges:                 userFromPg.Badges,
+			Badges:                 pgBadges,
 			ConversationPermission: settingsPayload.Privacy.ConversationPermission,
 			AddGroupPermission:     settingsPayload.Privacy.AddGroupPermission,
 			HideConnections:        settingsPayload.Privacy.HideConnections,

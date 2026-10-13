@@ -18,9 +18,10 @@ const (
 	MessageTypeSurvey = 9
 
 	// System Actions
-	SysActionMemberJoined   = "member_joined"
-	SysActionMemberBanned   = "member_banned"
-	SysActionMemberPromoted = "member_promoted"
-	SysActionMemberDemoted  = "member_demoted"
-	SysActionMemberMuted    = "member_muted"
+	SysActionMemberJoinedWithLink = "member_joined_link"
+	SysActionMemberJoinedThanksTo = "memner_joined_thanks_to"
+	SysActionMemberBanned         = "member_banned"
+	SysActionMemberPromoted       = "member_promoted"
+	SysActionMemberDemoted        = "member_demoted"
+	SysActionMemberMuted          = "member_muted"
 )

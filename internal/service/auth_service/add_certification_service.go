@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/auth_models"
@@ -39,12 +40,24 @@ func AddCertification(ctx context.Context, userID int64, input auth_models.AddCe
 	// On nettoie les inputs pour éviter toute injection
 	badgeName := "certification_" + pkg.CleanStr(input.Prestataire)
 
-	if pkg.Exists(userPayload.Badges, badgeName) {
-		return auth_models.AddCertificationOutput{}, numan_error.NewConflict(numan_error.CodeConflict, "Vous possédez déjà cette certification.", nil)
+	if userPayload.Badges == nil {
+		userPayload.Badges = make(auth_models.UserBadges)
 	}
 
-	// Mutation
-	userPayload.Badges = append(userPayload.Badges, badgeName)
+	now := time.Now().UTC()
+	if existing, exists := userPayload.Badges[badgeName]; exists {
+		// Conflit si la certification est toujours active (non expirée)
+		if existing.ExpiresAt == nil || existing.ExpiresAt.After(now) {
+			return auth_models.AddCertificationOutput{}, numan_error.NewConflict(numan_error.CodeConflict, "Vous possédez déjà cette certification.", nil)
+		}
+	}
+
+	// Certification annuelle : attribution avec validité de 1 an
+	expiresAt := now.AddDate(1, 0, 0)
+	userPayload.Badges[badgeName] = auth_models.BadgeMetadata{
+		IssuedAt:  now,
+		ExpiresAt: &expiresAt,
+	}
 	userPayload.UpdatedAt = domain.NowMillis()
 
 	// ÉTAPE 4 : SYNCHRONISATION DES CACHES ET BDD

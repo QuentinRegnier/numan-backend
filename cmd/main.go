@@ -129,8 +129,13 @@ func main() {
 		log.Printf("✅ Cache Redis déjà peuplé (%d éléments). Seeding ignoré, démarrage éclair !", count)
 	}
 
-	// Lance le moteur V12
-	worker.StartBackgroundWorkers(context.Background())
+	// On ne lance les workers internes que si le serveur est en mode monolith ou worker
+	serverRole := os.Getenv("SERVER_ROLE")
+	if serverRole == "monolith" || serverRole == "worker_node" {
+		worker.StartBackgroundWorkers(context.Background())
+	} else {
+		logger.Log.Info().Msg("Mode API_NODE : Les workers de fond sont désactivés sur cette instance.")
+	}
 
 	// On passe de gin.Default() à gin.New() pour retirer les vieux middlewares
 	r := gin.New()

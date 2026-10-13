@@ -20,7 +20,7 @@ type UserPayload struct { // CreateUser
 	Work         string `bson:"work" json:"work"`
 	BanReason    string `bson:"ban_reason" json:"ban_reason"`
 
-	Badges []string `bson:"badges" json:"badges"`
+	Badges UserBadges `bson:"badges" json:"badges"`
 
 	Sex   int `bson:"sex" json:"sex"`
 	Grade int `bson:"grade" json:"grade"`

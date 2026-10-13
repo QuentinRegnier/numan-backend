@@ -2,7 +2,6 @@ package conversation_service
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
@@ -160,11 +159,23 @@ func AddMembersToConversation(ctx context.Context, callerID int64, input convers
 
 			// Message système d'intégration
 			callerLite, _ := cache_service.GetUserLite(ctx, callerID)
-			systemMessageContent := fmt.Sprintf("%s a ajouté %s", callerLite.Username, targetUserLite.Username)
+
 			systemMessageInput := message_models.CreateMessageInput{
 				MessageType: variables.MessageTypeSystem,
-				Content:     systemMessageContent,
+				Content:     "",
+				Attachments: map[string]any{
+					"sys_action": variables.SysActionMemberJoinedThanksTo,
+					"actor": map[string]any{
+						"id":       callerLite.ID,
+						"username": callerLite.Username,
+					},
+					"target": map[string]any{
+						"id":       targetUserLite.ID,
+						"username": targetUserLite.Username,
+					},
+				},
 			}
+			// Expédition du message de bienvenue système
 			_, _ = message_service.CreateMessage(ctx, callerID, input.ConversationID, systemMessageInput, true)
 
 			output.AddedUserIDs = append(output.AddedUserIDs, targetUserID)

@@ -154,11 +154,17 @@ func (m *userMapper) ToRow(data any) ([]any, error) {
 		banExpiresDB = nil
 	}
 
+	badgesJSON, _ := json.Marshal(u.Badges)
+	var badgesDB any = string(badgesJSON)
+	if u.Badges == nil || len(u.Badges) == 0 {
+		badgesDB = "{}"
+	}
+
 	// ── ÉTAPE 3 : FORMATAGE DE LA LIGNE SQL ─────────────────────────────────
 	return []any{
 		u.ID, u.Username, u.Email, u.EmailVerified, phoneDB, u.PhoneVerified,
 		u.PasswordHash, u.FirstName, u.LastName, birthdateDB, u.Sex, bioDB,
-		ppDB, u.Grade, locDB, schoolDB, workDB, pq.Array(u.Badges),
+		ppDB, u.Grade, locDB, schoolDB, workDB, badgesDB,
 		u.Desactivated, u.Banned, banReasonDB, banExpiresDB,
 		u.CreatedAt, u.UpdatedAt,
 	}, nil

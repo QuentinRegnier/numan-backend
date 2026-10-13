@@ -1,0 +1,54 @@
+# Traefik Middleware resources. The CRDs (traefik.io/v1alpha1) are installed by the Traefik that K3s bundles.
+# No external operator is required. Verify:  kubectl get crd middlewares.traefik.io
+# (If your Traefik is older than v2.10 the apiVersion is traefik.containo.us/v1alpha1; K3s >= 1.31 ships Traefik v3.)
+#
+# They are attached to Ingresses with the documented annotation
+#   traefik.ingress.kubernetes.io/router.middlewares: <namespace>-<name>@kubernetescrd
+# (same-namespace references; no allowCrossNamespace setting is needed).
+---
+# Legacy nginx: add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+# NOTE: includeSubDomains (deployment variable HSTS_INCLUDE_SUBDOMAINS) pins EVERY subdomain of the host to HTTPS for the max-age period.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: hsts
+  namespace: numan
+  labels:
+    app.kubernetes.io/part-of: numan
+spec:
+  headers:
+    stsSeconds: 31536000
+    stsIncludeSubdomains: ${HSTS_INCLUDE_SUBDOMAINS}
+---
+# Legacy nginx: server :80 { return 301 https://$host$request_uri; }
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: redirect-https
+  namespace: numan
+  labels:
+    app.kubernetes.io/part-of: numan
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+---
+# Legacy nginx: client_max_body_size 20M;  (20 MiB = 20971520 bytes)
+# Traefik has no dedicated "max body" middleware; `buffering` is the documented mechanism and answers 413 above the limit.
+# SCOPE: attached to /process ONLY. Buffering also covers response bodies (memResponseBodyBytes/maxResponseBodyBytes), which
+# is exactly what must not sit in front of media streaming, so it is NOT attached to / or /ws. Consequence of removing the
+# nginx hop: / and /ws are no longer limited to 20 MiB at the edge; the application's own limit applies (the legacy nginx
+# comment states the app enforces 15 MB with MaxBytesReader, which is stricter than 20 MiB). Verify on any upload endpoint
+# that lacks that limit.
+# Cost on /process: Traefik buffers bodies (first 1 MiB in memory, the rest on disk in the Traefik pod's /tmp).
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: limit-body-20m
+  namespace: numan
+  labels:
+    app.kubernetes.io/part-of: numan
+spec:
+  buffering:
+    maxRequestBodyBytes: 20971520
+    memRequestBodyBytes: 1048576

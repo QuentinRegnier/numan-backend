@@ -92,7 +92,7 @@ func CreateUser(ctx context.Context, input auth_models.SignUpInput, ipAddress st
 		Location:         pkg.CleanStr(input.Location),
 		School:           pkg.CleanStr(input.School),
 		Work:             pkg.CleanStr(input.Work),
-		Badges:           []string{},
+		Badges:           auth_models.UserBadges{},
 		Desactivated:     false,
 		Banned:           false,
 		CreatedAt:        domain.TimeToMillis(currentTime),

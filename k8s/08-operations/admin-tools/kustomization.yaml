@@ -1,0 +1,10 @@
+# TEMPLATE: render first (make render); the rendered copy lives in build/rendered/.
+# Optional. Not included in the root kustomization. Deploy (still at replicas 0) with:
+#   kubectl apply -k 08-operations/admin-tools
+# then enable one tool at a time with scripts/admin.sh. Requires the matching *-credentials Secrets.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: numan
+resources:
+  - __TEMPLATE_NOT_RENDERED__run-make-render-first.yaml
+  - admin-tools.yaml

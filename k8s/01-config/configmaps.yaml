@@ -1,0 +1,83 @@
+# NON-SENSITIVE configuration only. Passwords/tokens/keys live in Secrets (see secret-templates.yaml).
+#
+# Service names are intentionally kept identical to the legacy Compose hostnames
+# (postgres, mongo, redis, watermark) so the legacy variable VALUES keep working
+# inside the namespace. The one deliberate change is MINIO_ENDPOINT, which now points
+# at the "hot" MinIO (see docs/01-ARCHITECTURE.md).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: numan-config
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: numan-config
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: config
+data:
+  # --- APPLICATION (source: .env) ---------------------------------------------
+  PORT: "8080"
+  # Legacy default. API pods keep "monolith" (the legacy prod stack ran api1/api2 as
+  # monoliths and had NO separate worker service). The worker StatefulSet overrides this.
+  SERVER_ROLE: "monolith"
+  # MUST stay "false". With Kubernetes restarts a "true" would wipe the DB on every restart.
+  # scripts/validate.sh refuses to proceed if this is not "false".
+  CLEAN_DB_ON_STARTUP: "false"
+
+  # --- WORKER TUNING (source: .env) --------------------------------------------
+  WORKER_MAX_BATCH_SIZE: "5000"
+  WORKER_MIN_BACKOFF_MS: "50"
+  WORKER_MAX_BACKOFF_MS: "1000"
+
+  # --- TOPOLOGY (Kubernetes Service names; same short names as legacy Compose) --
+  POSTGRES_HOST: "postgres"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "numan"
+  MONGO_HOST: "mongo"
+  MONGO_PORT: "27017"
+  MONGO_DB: "numan"
+  REDIS_ADDR: "redis:6379"
+  # Stable internal name of the hot MinIO S3 endpoint (Service minio-hot, port 9000).
+  MINIO_ENDPOINT: "minio-hot:9000"
+  # Deployment variable: the same value feeds the bootstrap Job, so app and bucket cannot drift apart.
+  MINIO_BUCKET_NAME: "${MINIO_HOT_BUCKET}"
+  WATERMARK_API_URL: "http://watermark:8080"
+
+  # --- REDIS SIZING (source: .env; also consumed by the redis StatefulSet) ------
+  REDIS_MAXMEMORY: "4gb"
+  # Informational for the app (if it reads it). The real container limit is set in
+  # 03-databases/redis.yaml (4608Mi). Keep the two consistent.
+  REDIS_CONTAINER_LIMIT: "4.5gb"
+---
+# Settings used ONLY by the MinIO bootstrap Jobs (04-storage/bucket-init-jobs.yaml).
+# Not injected into the application.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: minio-init-config
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: minio-init-config
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: config
+data:
+  HOT_BUCKET: "${MINIO_HOT_BUCKET}"
+  COLD_BUCKET: "${MINIO_COLD_BUCKET}"
+
+  # Anonymous read on the hot bucket. The Go application streams media itself with its own S3 credentials
+  # (confirmed), so nothing in the cluster needs unauthenticated reads. Default is therefore "false".
+  # MIGRATION NOTE: the legacy bootstrap script requested anonymous read (mc policy set download). If any
+  # consumer still fetches unsigned object URLs, set the variable to true. The Job applies the value on every run,
+  # so "false" also REMOVES a pre-existing anonymous policy from an already existing bucket.
+  HOT_ANONYMOUS_READ: "${MINIO_HOT_ANONYMOUS_READ}"
+  # The cold bucket is never anonymous.
+
+  # Versioning protects against accidental deletes/overwrites. Reversible (can be suspended).
+  HOT_VERSIONING: "${MINIO_HOT_VERSIONING}"
+  COLD_VERSIONING: "${MINIO_COLD_VERSIONING}"
+
+  # Object Lock can only be enabled when a bucket is created, and requires versioning. Retention duration/mode is a
+  # legal decision (docs/01-ARCHITECTURE.md section 7). Defaults: no lock, no retention, nothing is auto-deleted.
+  COLD_OBJECT_LOCK: "${MINIO_COLD_OBJECT_LOCK}"
+  # Only honoured when COLD_OBJECT_LOCK is true.
+  COLD_DEFAULT_RETENTION_MODE: "${MINIO_COLD_RETENTION_MODE}"
+  COLD_DEFAULT_RETENTION_DAYS: "${MINIO_COLD_RETENTION_DAYS}"

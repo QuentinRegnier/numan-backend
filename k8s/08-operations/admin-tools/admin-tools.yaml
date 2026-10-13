@@ -1,0 +1,200 @@
+# OPTIONAL administrative web UIs: pgAdmin, mongo-express, Redis Commander.
+# Safe-by-default design:
+#   * replicas: 0  -> nothing runs until an operator enables a tool (scripts/admin.sh on <tool>).
+#   * ClusterIP Services only, NO Ingress, and NetworkPolicies allow NO inbound traffic to these pods.
+#     Access is `kubectl port-forward` from an authenticated operator workstation (kubectl auth = the access control;
+#     put the Kubernetes API behind VPN/IP allow-list). Do NOT add a public Ingress without an auth layer + explicit decision.
+#   * Separate credentials per tool (Secrets *-credentials). mongo-express and Redis Commander still need the
+#     datastore credentials themselves (mongo root; redis password) - an inherent property of those tools.
+#   * Disable again when done: scripts/admin.sh off <tool>.
+# The UIDs below are numeric (runAsNonRoot must be verifiable) and VALIDATED ONLY AGAINST DOCUMENTATION, not the images.
+apiVersion: v1
+kind: Service
+metadata:
+  name: pgadmin
+  namespace: numan
+  labels: {app.kubernetes.io/name: pgadmin, app.kubernetes.io/part-of: numan, app.kubernetes.io/component: admin}
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: pgadmin}
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pgadmin
+  namespace: numan
+  labels: {app.kubernetes.io/name: pgadmin, app.kubernetes.io/part-of: numan, app.kubernetes.io/component: admin}
+spec:
+  replicas: 0
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/name: pgadmin}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pgadmin
+        app.kubernetes.io/part-of: numan
+        app.kubernetes.io/component: admin
+        numan.io/uses-postgres: "true"
+    spec:
+      serviceAccountName: admin-tools
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 5050            # "pgadmin" user of dpage/pgadmin4
+        runAsGroup: 5050
+        fsGroup: 5050
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: pgadmin
+          image: dpage/pgadmin4:9.0
+          ports:
+            - {name: http, containerPort: 8080}
+          env:
+            - name: PGADMIN_LISTEN_PORT      # unprivileged port (capabilities are dropped, so :80 is not bindable)
+              value: "8080"
+            - name: PGADMIN_DEFAULT_EMAIL
+              valueFrom: {secretKeyRef: {name: pgadmin-credentials, key: PGADMIN_DEFAULT_EMAIL}}
+            - name: PGADMIN_DEFAULT_PASSWORD
+              valueFrom: {secretKeyRef: {name: pgadmin-credentials, key: PGADMIN_DEFAULT_PASSWORD}}
+          readinessProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 768Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}     # root FS is writable: pgAdmin writes in several places
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/pgadmin}
+      volumes:
+        - {name: data, emptyDir: {}}          # ephemeral: saved server definitions are lost on restart
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo-express
+  namespace: numan
+  labels: {app.kubernetes.io/name: mongo-express, app.kubernetes.io/part-of: numan, app.kubernetes.io/component: admin}
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: mongo-express}
+  ports:
+    - {name: http, port: 8081, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongo-express
+  namespace: numan
+  labels: {app.kubernetes.io/name: mongo-express, app.kubernetes.io/part-of: numan, app.kubernetes.io/component: admin}
+spec:
+  replicas: 0
+  selector:
+    matchLabels: {app.kubernetes.io/name: mongo-express}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mongo-express
+        app.kubernetes.io/part-of: numan
+        app.kubernetes.io/component: admin
+        numan.io/uses-mongo: "true"
+    spec:
+      serviceAccountName: admin-tools
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: mongo-express
+          image: mongo-express:1.0.2-20     # legacy used :latest (unpinned)
+          ports:
+            - {name: http, containerPort: 8081}
+          env:
+            - name: ME_CONFIG_MONGODB_SERVER
+              value: mongo
+            - name: ME_CONFIG_MONGODB_ADMINUSERNAME
+              valueFrom: {secretKeyRef: {name: mongo-credentials, key: MONGO_ROOT_USER}}
+            - name: ME_CONFIG_MONGODB_ADMINPASSWORD
+              valueFrom: {secretKeyRef: {name: mongo-credentials, key: MONGO_ROOT_PASSWORD}}
+            - name: ME_CONFIG_BASICAUTH_USERNAME
+              valueFrom: {secretKeyRef: {name: mongo-express-credentials, key: ME_CONFIG_BASICAUTH_USERNAME}}
+            - name: ME_CONFIG_BASICAUTH_PASSWORD
+              valueFrom: {secretKeyRef: {name: mongo-express-credentials, key: ME_CONFIG_BASICAUTH_PASSWORD}}
+          readinessProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 384Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-commander
+  namespace: numan
+  labels: {app.kubernetes.io/name: redis-commander, app.kubernetes.io/part-of: numan, app.kubernetes.io/component: admin}
+spec:
+  type: ClusterIP
+  selector: {app.kubernetes.io/name: redis-commander}
+  ports:
+    - {name: http, port: 8081, targetPort: http}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-commander
+  namespace: numan
+  labels: {app.kubernetes.io/name: redis-commander, app.kubernetes.io/part-of: numan, app.kubernetes.io/component: admin}
+spec:
+  replicas: 0
+  selector:
+    matchLabels: {app.kubernetes.io/name: redis-commander}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis-commander
+        app.kubernetes.io/part-of: numan
+        app.kubernetes.io/component: admin
+        numan.io/uses-redis: "true"
+    spec:
+      serviceAccountName: admin-tools
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: redis-commander
+          image: ghcr.io/joeferner/redis-commander:0.9.0     # legacy used :latest (unpinned)
+          ports:
+            - {name: http, containerPort: 8081}
+          env:
+            - name: REDIS_HOST
+              value: redis
+            - name: REDIS_PORT
+              value: "6379"
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: redis-credentials, key: REDIS_PASSWORD}}
+            - name: HTTP_USER
+              valueFrom: {secretKeyRef: {name: redis-commander-credentials, key: HTTP_USER}}
+            - name: HTTP_PASSWORD
+              valueFrom: {secretKeyRef: {name: redis-commander-credentials, key: HTTP_PASSWORD}}
+          readinessProbe:
+            tcpSocket: {port: http}
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 96Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}

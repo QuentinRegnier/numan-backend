@@ -15,7 +15,7 @@ var Rdb *redis.Client
 func InitRedis() {
 	Rdb = redis.NewClient(&redis.Options{
 		Addr:     os.Getenv("REDIS_ADDR"),
-		Password: "", // pas de mot de passe par défaut
+		Password: os.Getenv("REDIS_PASSWORD"), // Doit lire le .env / Secret Kubernetes
 		DB:       0,
 	})
 

@@ -29,14 +29,14 @@ import (
 // @Description  2. Validation du payload JSON pour récupérer le `prestataire` et le `certification_id`.
 // @Description  3. Simulation de l'appel HTTP externe vers l'API de la fédération (Vérification du retour 200 OK).
 // @Description  4. Recherche de l'utilisateur courant (Cascade L2 MongoDB -> L3 PostgreSQL).
-// @Description  5. Vérification de l'absence du badge pour éviter les doublons.
-// @Description  6. Ajout du badge (ex: `certification_federation_francaise`) au profil de l'utilisateur.
+// @Description  5. Vérification de l'absence du badge ou de son expiration pour éviter les conflits d'attribution.
+// @Description  6. Ajout du badge structuré (ex: `certification_federation_francaise`) avec dates d'émission et d'expiration au profil de l'utilisateur.
 // @Description  7. Éviction immédiate de l'utilisateur du cache L1 (RAM) via `redis.UsersLite.DeleteObject` pour forcer la réhydratation.
 // @Description  8. Mise en file d'attente asynchrone (Write-Behind vers Redis) pour persister l'utilisateur sur L2 (Mongo) et L3 (Postgres).
 // @Description
 // @Description  **Success Behavior:**
 // @Description  - HTTP status: 200 OK
-// @Description  - Response body: JSON `auth_models.AddCertificationOutput` contenant un message de succès et la nouvelle liste de badges.
+// @Description  - Response body: JSON `auth_models.AddCertificationOutput` contenant un message de succès et le dictionnaire de badges structuré.
 // @Description  - Persistence guarantees: L'invalidation en RAM est synchrone. L'écriture physique en BDD est asynchrone (Write-Behind).
 // @Description  - Side effects: Badge attribué, cache L1 purgé, worker Redis mobilisé.
 // @Description

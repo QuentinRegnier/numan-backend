@@ -12,7 +12,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
-	"github.com/lib/pq"
 )
 
 func FuncLoadUser(ctx context.Context, ID int64, Username string, Email string, Phone string) (auth_models.UserPayload, error) {
@@ -73,7 +72,7 @@ func FuncLoadUser(ctx context.Context, ID int64, Username string, Email string, 
 		&location,
 		&school,
 		&work,
-		pq.Array(&res.Badges),
+		&res.Badges,
 		&res.Desactivated,
 		&res.Banned,
 		&banReason,

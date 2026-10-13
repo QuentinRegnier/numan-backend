@@ -1,0 +1,96 @@
+# Public routing (Kubernetes Ingress API + documented Traefik annotations). Replaces the legacy nginx.conf routes:
+#
+#   legacy nginx                        ->  here
+#   location /ws        -> api1/api2    ->  Ingress numan-https-app       /ws       -> Service api:8080 (Traefik upgrades WebSockets natively)
+#   location /process   -> watermark    ->  Ingress numan-https-watermark /process  -> Service watermark:8080 (+ 20 MiB body limit)
+#   location /          -> api1/api2    ->  Ingress numan-https-app       /         -> Service api:8080 (direct; no proxy hop)
+#   server :80 -> 301 https             ->  Ingress numan-http-redirect + Middleware redirect-https
+#   HSTS header                         ->  Middleware hsts
+#
+# The Go application streams media itself (confirmed), so nothing between Traefik and the API rewrites or buffers
+# responses. The only buffering middleware (limit-body-20m) is attached to /process, never to / or /ws.
+# Path matching: Traefik picks the most specific (longest) rule, like nginx's longest-prefix match, so /ws and
+# /process win over /. No path rewriting is used (the legacy config has none).
+#
+# TEMPLATE: the public host is the deployment variable NUMAN_DOMAIN (infrastructure.env.template). Render with
+# `make render`; never apply this source file directly.
+#
+# HTTPS only works once ALL of these exist: DNS A/AAAA record -> the node(s)/IP running Traefik, ports 80+443
+# reachable from the Internet, and the numan-tls Secret (06-ingress/tls, needs cert-manager). Until then Traefik
+# serves its built-in self-signed default certificate for this host.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: numan-https-app
+  namespace: numan
+  labels:
+    app.kubernetes.io/part-of: numan
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.middlewares: numan-hsts@kubernetescrd
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: ["${NUMAN_DOMAIN}"]
+      secretName: numan-tls
+  rules:
+    - host: "${NUMAN_DOMAIN}"
+      http:
+        paths:
+          - path: /ws
+            pathType: Prefix
+            backend:
+              service: {name: api, port: {number: 8080}}
+          - path: /
+            pathType: Prefix
+            backend:
+              service: {name: api, port: {number: 8080}}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: numan-https-watermark
+  namespace: numan
+  labels:
+    app.kubernetes.io/part-of: numan
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.middlewares: numan-hsts@kubernetescrd,numan-limit-body-20m@kubernetescrd
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: ["${NUMAN_DOMAIN}"]
+      secretName: numan-tls
+  rules:
+    - host: "${NUMAN_DOMAIN}"
+      http:
+        paths:
+          - path: /process
+            pathType: Prefix
+            backend:
+              service: {name: watermark, port: {number: 8080}}
+---
+# Port 80: redirect everything to HTTPS. cert-manager's HTTP-01 solver Ingress has a longer, more specific path
+# (/.well-known/acme-challenge/<token>), so Traefik routes challenges to the solver instead of redirecting them.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: numan-http-redirect
+  namespace: numan
+  labels:
+    app.kubernetes.io/part-of: numan
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    traefik.ingress.kubernetes.io/router.middlewares: numan-redirect-https@kubernetescrd
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: "${NUMAN_DOMAIN}"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:                      # never reached: the redirect middleware answers 301 first
+              service: {name: api, port: {number: 8080}}

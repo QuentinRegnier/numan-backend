@@ -101,7 +101,7 @@ SET default_table_access_method = heap;
  *     content.media, which itself references auth.users.
  *   • grade    — user tier / trust level (application-defined enum encoded as
  *                smallint: e.g. 0=basic, 1=verified, 2=moderator …).
- *   • badges   — text[] array of awarded achievement slugs.
+ *   • badges   — jsonb map of awarded achievement slugs to structured metadata.
  *   • ban_*    — soft-ban support: banned flag + optional expiry timestamp.
  *   • desactivated — soft-delete / account suspension flag.
  */
@@ -123,7 +123,7 @@ CREATE TABLE auth.users (
     location            text,
     school              text,
     work                text,
-    badges              text[],
+    badges              jsonb                    DEFAULT '{}'::jsonb,
     desactivated        boolean,
     banned              boolean,
     ban_reason          text,
@@ -547,7 +547,7 @@ RETURNS TABLE(
     location            text,
     school              text,
     work                text,
-    badges              text[],
+    badges              jsonb,
     desactivated        boolean,
     banned              boolean,
     ban_reason          text,
@@ -2791,16 +2791,16 @@ RETURNS TABLE(
     location            text,
     school              text,
     work                text,
-    badges              text[]
+    badges              jsonb
     -- On supprime privacy, notifications et display_and_content ici aussi
 )
 LANGUAGE plpgsql STABLE
 AS $$
 BEGIN
-RETURN QUERY
-SELECT *
-FROM views.user_public_profile
-WHERE (p_user_id IS NULL OR user_public_profile.user_id = p_user_id);
+    RETURN QUERY
+    SELECT *
+    FROM views.user_public_profile
+    WHERE (p_user_id IS NULL OR user_public_profile.user_id = p_user_id);
 END;
 $$;
 
@@ -3234,6 +3234,9 @@ CREATE INDEX idx_users_email ON auth.users USING btree (email);
 
 -- Supports phone-based login
 CREATE INDEX idx_users_phone ON auth.users USING btree (phone);
+
+-- Supports badge lookups and JSONB containment queries
+CREATE INDEX idx_users_badges ON auth.users USING gin (badges);
 
 -- Accelerates outgoing relation queries (who does this user follow?)
 CREATE INDEX idx_relations_primary_id ON auth.relations USING btree (primary_id);

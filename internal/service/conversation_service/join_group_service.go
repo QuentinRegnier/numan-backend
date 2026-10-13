@@ -222,7 +222,7 @@ func JoinGroup(ctx context.Context, callerID int64, input conversation_models.Jo
 					MessageType: variables.MessageTypeSystem,
 					Content:     "",
 					Attachments: map[string]any{
-						"sys_action": variables.SysActionMemberJoined,
+						"sys_action": variables.SysActionMemberJoinedWithLink,
 						"actor": map[string]any{
 							"id":       callerID,
 							"username": callerUsername,

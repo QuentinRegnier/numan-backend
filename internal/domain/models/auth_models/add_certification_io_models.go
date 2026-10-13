@@ -9,6 +9,6 @@ type AddCertificationInput struct {
 
 // AddCertificationOutput est la réponse renvoyée au client après l'attribution du badge.
 type AddCertificationOutput struct {
-	Message string   `json:"message"`
-	Badges  []string `json:"badges"` // On renvoie la nouvelle liste de badges pour mettre à jour l'UI locale
+	Message string     `json:"message"`
+	Badges  UserBadges `json:"badges"` // On renvoie la nouvelle map de badges pour mettre à jour l'UI locale
 }

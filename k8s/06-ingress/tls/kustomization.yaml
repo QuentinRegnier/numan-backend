@@ -1,0 +1,8 @@
+# TEMPLATE: render first (make render); the rendered copy lives in build/rendered/.
+# Apply AFTER cert-manager is installed:  kubectl apply -k 06-ingress/tls
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - __TEMPLATE_NOT_RENDERED__run-make-render-first.yaml
+  - cluster-issuers.yaml
+  - certificate.yaml

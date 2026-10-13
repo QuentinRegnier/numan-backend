@@ -1,120 +1,131 @@
 networks:
   internal:
     driver: bridge
+
 services:
-  # --- 1. LOAD BALANCER & PROXY ---
-  nginx:
-    image: nginx:latest
-    container_name: numan_nginx
+  # --- 1. ROUTEUR LOCAL (Simule parfaitement l'Ingress K3s) ---
+  traefik:
+    image: traefik:v3.0
+    container_name: numan_traefik_dev
+    command:
+      - "--api.insecure=true" # Ouvre le dashboard Traefik local
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
     ports:
       - "80:80"
-      - "443:443"
+      - "8080:8080" # Dashboard Traefik (http://localhost:8080)
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./certs:/etc/nginx/certs:ro
-    depends_on:
-      - api1
-      - api2
-      - minio
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     restart: always
 
-  # --- 2. APIS (Go) ---
-  api1:
+  # --- 2. API (Go) ---
+  api:
     build:
       context: .
       dockerfile: Dockerfile
-      target: dev       # <--- IMPORTANT : On vise l'étape "dev" (celle avec Air)
-    container_name: numan_api1
+      target: dev       # Live Reload avec Air
+    container_name: numan_api
     volumes:
-      - ./:/app         # <--- IMPORTANT : On "monte" ton code local dans le conteneur
-      - /app/tmp        # On ignore le dossier temporaire de Air pour éviter les conflits
-      - ./docs:/app/docs:ro  # On monte le dossier docs pour la documentation
-    env_file:
-      - .env
-    environment:
-      - NODE_ID=1  # <--- SPÉCIFIQUE À API 1
-    depends_on:
-      - minio
-      - postgres
-      - redis
-      - mongo
-    restart: always
-
-  api2:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: dev       # <--- Idem ici
-    container_name: numan_api2
-    volumes:
-      - ./:/app         # <--- Idem ici
+      - ./:/app
       - /app/tmp
-      - ./docs:/app/docs:ro  # On monte le dossier docs pour la documentation
+      - ./docs:/app/docs:ro
     env_file:
-      - .env
+      - ./k8s/infrastructure.env
+      - ./k8s/01-config/secrets.env
     environment:
-      - NODE_ID=2  # <--- SPÉCIFIQUE À API 2
+      - NODE_ID=1
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.api.entrypoints=web"
+      - "traefik.http.services.api.loadbalancer.server.port=8080"
     depends_on:
-      - minio
+      - minio-hot
       - postgres
       - redis
       - mongo
     restart: always
 
-  # --- NOUVEAU SERVICE : TATOUAGE (Simulation Serverless) ---
+  # --- 3. WATERMARK (Serverless) ---
   watermark:
     build:
       context: .
       dockerfile: Dockerfile
       target: dev
     container_name: numan_watermark
-    command: sh -c "go run cmd/watermark/main.go" # On lance le second main
+    command: sh -c "go run cmd/watermark/main.go"
     volumes:
       - ./:/app
+      - /app/tmp
     env_file:
-      - .env
-    networks:
-      - internal
-    # On l'expose sur un port différent (ex: 8083) pour que ton navigateur/mobile puisse l'atteindre
-    ports:
-      - "8083:8080"
+      - ./k8s/infrastructure.env
+      - ./k8s/01-config/secrets.env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.watermark.rule=PathPrefix(`/process`)"
+      - "traefik.http.routers.watermark.entrypoints=web"
+      - "traefik.http.services.watermark.loadbalancer.server.port=8080"
     restart: always
 
-  # --- 3. STOCKAGE MINIO ---
-  minio:
+  # --- 4. STOCKAGE MINIO (DOUBLE S3) ---
+  minio-hot:
     image: minio/minio
-    container_name: numan_minio
+    container_name: numan_minio_hot
     command: server /data --console-address ":9001"
-    expose:
-      - "9000" # API S3 (Interne)
     ports:
+      - "9000:9000" # S3 API
       - "9001:9001" # Console Admin
-    # ICI : MinIO va lire MINIO_ROOT_USER et PASSWORD depuis le .env
-    env_file:
-      - .env
+    environment:
+      - MINIO_ROOT_USER=${MINIO_HOT_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_HOT_ROOT_PASSWORD}
     volumes:
-      - minio_data:/data
+      - minio_hot_data:/data
     restart: always
 
-  # Utilitaire d'initialisation (Création du bucket)
+  minio-cold:
+    image: minio/minio
+    container_name: numan_minio_cold
+    command: server /data --console-address ":9003"
+    ports:
+      - "9002:9000" # S3 API (Port décalé sur Mac pour ne pas clasher avec le Hot)
+      - "9003:9003" # Console Admin
+    environment:
+      - MINIO_ROOT_USER=${MINIO_COLD_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_COLD_ROOT_PASSWORD}
+    volumes:
+      - minio_cold_data:/data
+    restart: always
+
   createbuckets:
     image: minio/mc
     depends_on:
-      - minio
-    env_file:
-      - .env
-    # On utilise les variables du .env ici ($MINIO_ROOT_USER, etc.)
+      - minio-hot
+      - minio-cold
+    environment:
+      - MINIO_HOT_ROOT_USER=${MINIO_HOT_ROOT_USER}
+      - MINIO_HOT_ROOT_PASSWORD=${MINIO_HOT_ROOT_PASSWORD}
+      - MINIO_COLD_ROOT_USER=${MINIO_COLD_ROOT_USER}
+      - MINIO_COLD_ROOT_PASSWORD=${MINIO_COLD_ROOT_PASSWORD}
+      - MINIO_HOT_BUCKET=${MINIO_HOT_BUCKET}
+      - MINIO_COLD_BUCKET=${MINIO_COLD_BUCKET}
+      - MINIO_HOT_ANONYMOUS_READ=${MINIO_HOT_ANONYMOUS_READ}
     entrypoint: >
       /bin/sh -c "
-      /usr/bin/mc alias set myminio http://minio:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD;
-      /usr/bin/mc mb --ignore-existing myminio/$MINIO_BUCKET_NAME;
-      /usr/bin/mc policy set download myminio/$MINIO_BUCKET_NAME;
+      sleep 5;
+      mc alias set hot http://minio-hot:9000 $MINIO_HOT_ROOT_USER$MINIO_HOT_ROOT_PASSWORD;
+      mc mb --ignore-existing hot/$MINIO_HOT_BUCKET;
+      if [ '$MINIO_HOT_ANONYMOUS_READ' = 'true' ]; then mc anonymous set download hot/$MINIO_HOT_BUCKET; fi;
+      mc alias set cold http://minio-cold:9000 $MINIO_COLD_ROOT_USER$MINIO_COLD_ROOT_PASSWORD;
+      mc mb --ignore-existing cold/$MINIO_COLD_BUCKET;
       exit 0;
       "
+
+  # --- 5. BASES DE DONNÉES ---
   redis:
     image: redis:7
     container_name: numan_redis
-    command: redis-server --maxmemory 4gb --maxmemory-policy volatile-lfu --lfu-log-factor 10 --lfu-decay-time 120 --appendonly yes
+    command: redis-server --maxmemory 4gb --maxmemory-policy volatile-lfu --lfu-log-factor 10 --lfu-decay-time 120 --appendonly yes --requirepass "${REDIS_PASSWORD}"
     ports:
       - "6379:6379"
     volumes:
@@ -124,40 +135,38 @@ services:
   postgres:
     image: postgres:16
     container_name: numan_postgres
-    env_file:
-      - .env
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: always
 
+  mongo:
+    image: mongo:7
+    container_name: numan_mongo
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USER}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD}
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./mongo-data:/data/db
+
+  # --- 6. ADMIN TOOLS ---
   pgadmin:
     image: dpage/pgadmin4
     container_name: numan_pgadmin
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@numan.com
       PGADMIN_DEFAULT_PASSWORD: admin
-      PGADMIN_CONFIG_CONSOLE_LOG_LEVEL: 10
-      PGADMIN_CONFIG_SERVER_MODE: 'False'
-      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'False'
-      PGADMIN_CONFIG_SESSION_EXPIRATION_TIME: 86400  # 24h
-      PGADMIN_CONFIG_SESSION_COOKIE_LIFETIME: 86400  # 24h
     volumes:
       - pgadmin_data:/var/lib/pgadmin
     ports:
       - "8082:80"
-  
-  mongo:
-    image: mongo:7
-    container_name: numan_mongo
-    ports:
-      - "27017:27017"
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
-    volumes:
-      - ./mongo-data:/data/db
 
   mongo-express:
     image: mongo-express:latest
@@ -165,16 +174,16 @@ services:
     environment:
       ME_CONFIG_BASICAUTH_USERNAME: ${MONGO_UI_USER}
       ME_CONFIG_BASICAUTH_PASSWORD: ${MONGO_UI_PASSWORD}
-      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_ROOT_USER}      # Utilise la variable du .env
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_ROOT_USER}
       ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_ROOT_PASSWORD}
       ME_CONFIG_MONGODB_SERVER: mongo
     ports:
-      - "8083:8081"
+      - "8084:8081"
     depends_on:
       - mongo
 
   redis-commander:
-    image: ghcr.io/joeferner/redis-commander:latest  # version ARM64 compatible
+    image: ghcr.io/joeferner/redis-commander:latest
     container_name: numan_redis_commander
     environment:
       - REDIS_HOSTS=local:redis:6379
@@ -182,10 +191,11 @@ services:
       - "8081:8081"
     depends_on:
       - redis
-  
+
 volumes:
   redis_data:
   postgres_data:
   mongo_data:
-  minio_data:
+  minio_hot_data:
+  minio_cold_data:
   pgadmin_data:

@@ -359,7 +359,7 @@ func acceptAllPendingMembers(ctx context.Context, conversationID int64, callerAd
 					MessageType: variables.MessageTypeSystem,
 					Content:     "",
 					Attachments: map[string]any{
-						"sys_action": variables.SysActionMemberJoined,
+						"sys_action": variables.SysActionMemberJoinedThanksTo,
 						"actor": map[string]any{
 							"id":       callerAdminID,
 							"username": callerUsername,

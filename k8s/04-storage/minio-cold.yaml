@@ -1,0 +1,143 @@
+# MinIO "cold" - archived / soft-deleted media subject to retention decisions.
+# Separate workload, volume, credentials and Service = separate operational and access boundary.
+# NOTE: the legacy files contain NO cold-storage endpoint variable; the application wiring is unverified.
+# Single node, single drive, NO erasure coding: this gives NO redundancy and NO object replication.
+#   * Node failure: with the default local-path StorageClass the pod stays Pending until the node returns.
+#   * Disk failure : data is lost unless restored from the off-site mirror (08-operations/backup-jobs.yaml).
+#   * Accidental deletion: only protected if bucket versioning is on (minio-init-config) AND off-site copies exist.
+#   * Site loss    : only the off-site mirror protects you.
+# Only the S3 API (9000) is exposed, and only inside the cluster (legacy prod: expose 9000, console unpublished).
+# The console (9001) has no Service on purpose: kubectl -n numan port-forward pod/minio-cold-0 9001:9001
+#
+# SUPPLY-CHAIN WARNING (verified Oct 2026): the MinIO community repository is archived (Apr 2026) and
+# minio/minio + minio/mc were reported removed from Docker Hub. The last official community images live on
+# Quay and PRE-DATE the fix for CVE-2025-62506 (service-account/STS session-policy bypass; fixed only in source
+# release RELEASE.2025-10-15T17-29-55Z). This repo avoids service accounts/STS (plain users only) and never
+# exposes MinIO, but you must make a decision - see README "MinIO supply chain" - before production.
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio-cold-headless
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: minio-cold
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: storage
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: minio-cold
+  ports:
+    - {name: api, port: 9000, targetPort: api}
+---
+# Client-facing S3 endpoint: minio-cold:9000 (the application's MINIO_ENDPOINT for "hot").
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio-cold
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: minio-cold
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: storage
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: minio-cold
+  ports:
+    - {name: api, port: 9000, targetPort: api}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: minio-cold
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: minio-cold
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: storage
+spec:
+  serviceName: minio-cold-headless
+  replicas: 1                      # single-drive mode only supports 1; distributed MinIO is a different design
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: minio-cold
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: minio-cold
+        app.kubernetes.io/part-of: numan
+        app.kubernetes.io/component: storage
+    spec:
+      serviceAccountName: minio-cold
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: minio
+          # Image is a deployment variable (MINIO_IMAGE): see SUPPLY-CHAIN WARNING above.
+          image: ${MINIO_IMAGE}
+          imagePullPolicy: IfNotPresent
+          # Same arguments as the legacy Compose command. The image entrypoint prepends "minio".
+          args: ["server", "/data", "--console-address", ":9001"]
+          ports:
+            - {name: api, containerPort: 9000}
+            - {name: console, containerPort: 9001}
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom: {secretKeyRef: {name: minio-cold-root, key: MINIO_ROOT_USER}}
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom: {secretKeyRef: {name: minio-cold-root, key: MINIO_ROOT_PASSWORD}}
+            - name: MINIO_UPDATE       # no self-update checks (outbound traffic is denied anyway)
+              value: "off"
+            - name: HOME               # read-only root FS: give MinIO a writable home for its config dir
+              value: /tmp
+          readinessProbe:
+            httpGet: {path: /minio/health/ready, port: api}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: {path: /minio/health/live, port: api}
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          startupProbe:
+            httpGet: {path: /minio/health/live, port: api}
+            periodSeconds: 5
+            failureThreshold: 60
+          resources:                 # INITIAL RECOMMENDATION
+            requests: {cpu: "${MINIO_COLD_CPU_REQUEST}", memory: "${MINIO_COLD_MEMORY_REQUEST}"}
+            limits: {cpu: "${MINIO_COLD_CPU_LIMIT}", memory: "${MINIO_COLD_MEMORY_LIMIT}"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {}}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: minio-cold
+          app.kubernetes.io/part-of: numan
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: "${PVC_SIZE_MINIO_COLD}"            # size: see infrastructure.env.template (immutable once created)

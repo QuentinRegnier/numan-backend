@@ -118,6 +118,11 @@ func GetProfile(ctx context.Context, callerID int64, input profile_models.GetPro
 		isUserOnline = false
 	}
 
+	userBadges := userPayload.Badges
+	if userBadges == nil {
+		userBadges = auth_models.UserBadges{}
+	}
+
 	profileOutput.User = auth_models.UserProfileView{
 		ID:        userPayload.ID,
 		Username:  userPayload.Username,
@@ -130,7 +135,7 @@ func GetProfile(ctx context.Context, callerID int64, input profile_models.GetPro
 		Location:  censoredLocation,
 		School:    userPayload.School,
 		Work:      userPayload.Work,
-		Badges:    userPayload.Badges,
+		Badges:    userBadges,
 		CreatedAt: userPayload.CreatedAt,
 		UpdatedAt: userPayload.UpdatedAt,
 		IsOnline:  isUserOnline,

@@ -1,0 +1,165 @@
+# Background workers as a separate workload - DISABLED BY DEFAULT (replicas: 0). Read before enabling:
+#
+#  1. Evidence: the legacy prod stack (docker-compose.prod.yml) has NO worker service; api1/api2 run with
+#     SERVER_ROLE=monolith (.env), i.e. background workers run INSIDE the API processes (2 concurrent
+#     instances today). Only docker-compose.infra.yml defines a "worker" with command ./numan-worker.
+#  2. If you enable this while the API still runs SERVER_ROLE=monolith, jobs are processed by BOTH. That is
+#     a duplicate-processing risk unless the Go code claims jobs atomically/idempotently (UNVERIFIED).
+#     Safe cut-over order: (a) confirm ./numan-worker exists in the image and the role semantics in the
+#     Go code, (b) set SERVER_ROLE=api_node on the API, (c) scale this to 1, watch, then scale further.
+#  3. The command ./numan-worker comes from docker-compose.infra.yml and is relative to the image WORKDIR
+#     (no Dockerfile was supplied) - VERIFY. SERVER_ROLE=worker_node is one of the values listed in .env.
+#  4. NODE_ID: same reasoning as the API; ordinals start at 11 so worker IDs never collide with API IDs
+#     (1..10). VERIFY the maximum NODE_ID the application accepts.
+#  5. Concurrency is controlled by WORKER_MAX_BATCH_SIZE / WORKER_MIN_BACKOFF_MS / WORKER_MAX_BACKOFF_MS
+#     (numan-config). No other concurrency variable exists in the supplied files.
+#  6. No HPA: CPU is a poor signal for queue workers (consider KEDA on Redis queue length later).
+#  7. No health probes: the supplied files expose no worker health surface.
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker-headless
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: worker
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: worker
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: worker
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: worker
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: worker
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: worker
+spec:
+  serviceName: worker-headless
+  replicas: ${WORKER_REPLICAS}                       # default 0: DISABLED until verified (see header)
+  podManagementPolicy: Parallel
+  minReadySeconds: 10
+  ordinals:
+    start: 11
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: worker
+        app.kubernetes.io/part-of: numan
+        app.kubernetes.io/component: worker
+        numan.io/uses-postgres: "true"
+        numan.io/uses-mongo: "true"
+        numan.io/uses-redis: "true"
+        numan.io/uses-minio-hot: "true"
+        numan.io/uses-minio-cold: "true"
+        numan.io/egress-internet: "true"
+    spec:
+      serviceAccountName: worker
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 120   # time for in-flight batches to finish after SIGTERM (if the app handles it)
+      # imagePullSecrets: [{name: registry-credentials}]
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: worker
+      initContainers:
+        - name: wait-for-datastores
+          image: busybox:1.37.0
+          command: ["sh", "-c"]
+          args:
+            - |
+              for hp in "postgres 5432" "mongo 27017" "redis 6379" "minio-hot 9000"; do
+                set -- $hp
+                until nc -z -w 2 "$1" "$2"; do echo "waiting for $1:$2"; sleep 3; done
+              done
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 100m, memory: 32Mi}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+      containers:
+        - name: worker
+          image: numan-api                  # same application image as the API (infra compose: same build, other command)
+          imagePullPolicy: IfNotPresent
+          command: ["./numan-worker"]     # VERIFY (from docker-compose.infra.yml)
+          envFrom:
+            - configMapRef: {name: numan-config}
+          env:
+            # ---- identity: unique per pod, derived from the StatefulSet ordinal (no shell/wrapper needed) ----
+            - name: NODE_ID
+              valueFrom: {fieldRef: {fieldPath: "metadata.labels['apps.kubernetes.io/pod-index']"}}
+            - name: SERVER_ROLE         # overrides the "monolith" default from numan-config
+              value: worker_node
+            # ---- PostgreSQL: DB_DSN rebuilt from parts; Kubernetes expands $(VAR) only from vars defined ABOVE it ----
+            - name: POSTGRES_HOST
+              valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_HOST}}
+            - name: POSTGRES_PORT
+              valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_PORT}}
+            - name: POSTGRES_DB
+              valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_DB}}
+            - name: POSTGRES_USER
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: POSTGRES_USER}}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: POSTGRES_PASSWORD}}
+            - name: DB_DSN             # same format as the legacy .env; sslmode=disable is a legacy value (see docs)
+              value: "host=$(POSTGRES_HOST) user=$(POSTGRES_USER) password=$(POSTGRES_PASSWORD) dbname=$(POSTGRES_DB) port=$(POSTGRES_PORT) sslmode=disable"
+            # ---- MongoDB (the legacy app is given the ROOT credentials; no app-specific user var exists) ----
+            - name: MONGO_ROOT_USER
+              valueFrom: {secretKeyRef: {name: mongo-credentials, key: MONGO_ROOT_USER}}
+            - name: MONGO_ROOT_PASSWORD
+              valueFrom: {secretKeyRef: {name: mongo-credentials, key: MONGO_ROOT_PASSWORD}}
+            # ---- Redis ----
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: redis-credentials, key: REDIS_PASSWORD}}
+            # ---- application secrets ----
+            - name: JWT_SECRET
+              valueFrom: {secretKeyRef: {name: numan-app-secrets, key: JWT_SECRET}}
+            - name: HMAC_SECRET
+              valueFrom: {secretKeyRef: {name: numan-app-secrets, key: HMAC_SECRET}}
+            - name: WATERMARK_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: numan-app-secrets, key: WATERMARK_SECRET_KEY}}
+            # ---- S3 (hot): least-privilege user created by minio-hot-init (legacy value was the MinIO root user) ----
+            - name: S3_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: minio-hot-users, key: S3_ACCESS_KEY}}
+            - name: S3_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: minio-hot-users, key: S3_SECRET_KEY}}
+            # ---- COLD STORAGE WIRING: PLACEHOLDER. The legacy .env has NO cold-storage variables, so the
+            # ---- variable names the Go code expects are unknown. Once known, add them here, e.g.:
+            # - name: <COLD_ENDPOINT_VAR>      value: "minio-cold:9000"
+            # - name: <COLD_ACCESS_KEY_VAR>    valueFrom: {secretKeyRef: {name: minio-cold-users, key: S3_ACCESS_KEY}}
+            # - name: <COLD_SECRET_KEY_VAR>    valueFrom: {secretKeyRef: {name: minio-cold-users, key: S3_SECRET_KEY}}
+            # NetworkPolicy access to minio-cold is already granted by the numan.io/uses-minio-cold label below.
+          resources:                      # INITIAL RECOMMENDATION
+            requests: {cpu: "${WORKER_CPU_REQUEST}", memory: "${WORKER_MEMORY_REQUEST}"}
+            limits: {cpu: "${WORKER_CPU_LIMIT}", memory: "${WORKER_MEMORY_LIMIT}"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 512Mi}

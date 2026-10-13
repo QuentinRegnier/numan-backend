@@ -1,0 +1,28 @@
+# OPTIONAL, CLUSTER-WIDE: tunes the Traefik that K3s bundles (K3s helm-controller CRD, built in - no operator needed).
+# It lives in kube-system, so it is NOT part of the root kustomization. Apply deliberately:
+#     kubectl apply -f 06-ingress/optional/traefik-helmchartconfig.yaml
+#
+# Why:
+#  * externalTrafficPolicy: Local  -> preserves the real client IP (needed for logs/rate limits/LCEN-style
+#    connection logging; with the default "Cluster" policy the app sees a node IP). Consequence: DNS/the load
+#    balancer must only point at nodes that RUN a Traefik pod (with replicas: 2, use 2 nodes).
+#  * replicas: 2                   -> ingress survives the loss of one Traefik pod (and one node if they land on different nodes).
+#  * access logs enabled           -> request log with client IPs, status and latency (also the only ingress error-rate source
+#    until Traefik metrics are scraped).
+# VALIDATE the keys against the chart bundled with YOUR K3s version (the Traefik chart changes between K3s releases):
+#     kubectl -n kube-system get helmchart traefik -o jsonpath='{.spec.chart}{"\n"}{.spec.version}{"\n"}'
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    deployment:
+      replicas: ${TRAEFIK_REPLICAS}
+    service:
+      spec:
+        externalTrafficPolicy: Local
+    logs:
+      access:
+        enabled: true

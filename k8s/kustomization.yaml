@@ -1,0 +1,64 @@
+# Root kustomization = everything that must exist for a working deployment.
+#
+# THIS FILE IS A TEMPLATE. It must be rendered (make render) before Kustomize may build it: the rendered copy
+# lives in build/rendered/ and is the only tree that is ever built or applied. The first resource below is a
+# deliberate guard: building or applying this source tree directly fails with a message naming it; the renderer
+# removes that single line when it produces the rendered copy.
+#
+# NOT included (deployed separately, on purpose):
+#   01-config/secret-templates.yaml        -> created by scripts/create-secrets.sh (never from git, never rendered)
+#   06-ingress/tls/                        -> needs cert-manager (external operator)
+#   06-ingress/optional/                   -> cluster-wide Traefik tuning in kube-system
+#   08-operations/admin-tools/             -> optional, disabled by default
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: numan
+
+resources:
+  - __TEMPLATE_NOT_RENDERED__run-make-render-first.yaml
+  - namespace.yaml
+  - 01-config/configmaps.yaml
+  - 02-security/serviceaccounts.yaml
+  - 02-security/resourcequotas.yaml
+  - 02-security/networkpolicies.yaml
+  - 03-databases/postgresql.yaml
+  - 03-databases/mongodb.yaml
+  - 03-databases/redis.yaml
+  - 04-storage/minio-hot.yaml
+  - 04-storage/minio-cold.yaml
+  - 04-storage/bucket-init-jobs.yaml
+  - 05-apps/api.yaml
+  - 05-apps/worker.yaml
+  - 05-apps/watermark.yaml
+  - 06-ingress/middleware.yaml
+  - 06-ingress/ingress.yaml
+  - 07-autoscaling/hpa.yaml
+  - 08-operations/backup-jobs.yaml
+
+# ---------------------------------------------------------------------------------------------
+# IMAGES - application images. Manifests reference the symbolic names numan-api / numan-watermark;
+# the worker uses the API image (same build, different command), hence API_IMAGE_TAG for both.
+# Third-party images (databases, MinIO, restic, ...) are pinned inside their manifests, except the two
+# MinIO images, which are deployment variables because their supply chain is an operator decision.
+# ---------------------------------------------------------------------------------------------
+images:
+  - name: numan-api
+    newName: ${IMAGE_REGISTRY}/numan-api
+    newTag: "${API_IMAGE_TAG}"
+  - name: numan-watermark
+    newName: ${IMAGE_REGISTRY}/numan-watermark
+    newTag: "${WATERMARK_IMAGE_TAG}"
+
+# ---------------------------------------------------------------------------------------------
+# STORAGE CLASS - the one place that sets it for every StatefulSet volume (database and object storage).
+# volumeClaimTemplates are immutable after the first creation: changing the value later does not migrate
+# existing volumes.
+# ---------------------------------------------------------------------------------------------
+patches:
+  - target:
+      kind: StatefulSet
+      labelSelector: "app.kubernetes.io/component in (database,storage)"
+    patch: |-
+      - op: add
+        path: /spec/volumeClaimTemplates/0/spec/storageClassName
+        value: "${STORAGE_CLASS}"

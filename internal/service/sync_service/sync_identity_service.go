@@ -60,6 +60,11 @@ func SyncIdentity(ctx context.Context, callerID int64, input sync_models.SyncIde
 	if userPayload.UpdatedAt > input.ProfileUpdatedAt {
 		output.ProfileUpdated = true
 
+		userBadges := userPayload.Badges
+		if userBadges == nil {
+			userBadges = auth_models.UserBadges{}
+		}
+
 		// MAPPING SÉCURISÉ : On transfère uniquement les champs publics et autorisés au client
 		output.Profile = auth_models.UserProfileView{
 			ID:        userPayload.ID,
@@ -75,7 +80,7 @@ func SyncIdentity(ctx context.Context, callerID int64, input sync_models.SyncIde
 			Location:  userPayload.Location,
 			School:    userPayload.School,
 			Work:      userPayload.Work,
-			Badges:    userPayload.Badges,
+			Badges:    userBadges,
 			CreatedAt: userPayload.CreatedAt,
 			UpdatedAt: userPayload.UpdatedAt,
 			IsOnline:  cache_service.IsUserOnline(ctx, userPayload.ID), // O(1) L1 Call
