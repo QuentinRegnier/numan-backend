@@ -16,6 +16,7 @@ const (
 	MessageTypeLink   = 7
 	MessageTypeSystem = 8
 	MessageTypeSurvey = 9
+	MessageTypeWidget = 10
 
 	// System Actions
 	SysActionMemberJoinedWithLink = "member_joined_link"
@@ -25,3 +26,5 @@ const (
 	SysActionMemberDemoted        = "member_demoted"
 	SysActionMemberMuted          = "member_muted"
 )
+
+var AllowedWidgetTypes = []string{"action_button", "link_card", "poll"}

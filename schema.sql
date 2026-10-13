@@ -397,7 +397,7 @@ CREATE TABLE messaging.messages (
     id               bigint                   NOT NULL,
     conversation_id  bigint,                  -- FK → messaging.conversations.id
     sender_id        bigint                   NOT NULL,  -- soft ref → auth.users.id
-    message_type     smallint                 NOT NULL, -- 0=text, 1=vocal, 2=image, 3=gif, 4=video, 5=publication, 6=invite, 7=link, 8=system-event, 9=survey
+    message_type     smallint                 NOT NULL, -- 0=text, 1=vocal, 2=image, 3=gif, 4=video, 5=publication, 6=invite, 7=link, 8=system-event, 9=survey, 10=widget
     visibility       boolean,
     content          text,
     attachments      jsonb                    DEFAULT '{}'::jsonb,

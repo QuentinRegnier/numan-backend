@@ -12,6 +12,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/media_service"
+	"github.com/QuentinRegnier/numan-backend/internal/service/message_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/security_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
@@ -111,6 +112,11 @@ func SyncMessages(ctx context.Context, callerID int64, input sync_models.SyncMes
 					}
 				}
 			}
+		}
+
+		// A.bis Hydratation du widget (Widget Message)
+		if messagePayload.MessageType == variables.MessageTypeWidget {
+			message_service.HydrateWidgetMedia(ctx, &messagePayload, callerID)
 		}
 
 		// B. Hydratation de l'expéditeur (Profil Lite L1)

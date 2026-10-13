@@ -3,6 +3,8 @@ package message_service
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
@@ -36,7 +38,7 @@ func CreateMessage(ctx context.Context, senderID int64, conversationID int64, in
 
 	if !isInternalCall {
 		switch input.MessageType {
-		case variables.MessageTypeText, variables.MessageTypeMedia, variables.MessageTypeGIF, variables.MessageTypeSurvey:
+		case variables.MessageTypeText, variables.MessageTypeMedia, variables.MessageTypeGIF, variables.MessageTypeSurvey, variables.MessageTypeWidget:
 			// Validés pour une entrée utilisateur
 		case variables.MessageTypeVoice, variables.MessageTypeVideo:
 			return message_models.CreateMessageOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Les messages vocaux et vidéos ne sont pas encore supportés par cette version.", nil)
@@ -112,6 +114,18 @@ func CreateMessage(ctx context.Context, senderID int64, conversationID int64, in
 		return message_models.CreateMessageOutput{}, numan_error.NewForbidden(numan_error.CodeForbidden, "Les sondages sont désactivés ou non supportés dans cette conversation.", nil)
 	}
 
+	if input.MessageType == variables.MessageTypeWidget {
+		// Règle A : La conversation doit être une communauté publique (Type 3)
+		if conversationPayload.Type != variables.ConversationTypeCommunityPub {
+			return message_models.CreateMessageOutput{}, numan_error.NewForbidden(numan_error.CodeForbidden, "Les messages widgets ne sont autorisés que dans les communautés publiques.", nil)
+		}
+
+		// Règle B : L'expéditeur doit être administrateur ou propriétaire (Role >= 1)
+		if senderMemberPayload.Role < variables.MemberRoleAdmin {
+			return message_models.CreateMessageOutput{}, numan_error.NewForbidden(numan_error.CodeForbidden, "Seuls les administrateurs peuvent envoyer des messages widgets.", nil)
+		}
+	}
+
 	if !isInternalCall && conversationPayload.Type > variables.ConversationTypeDirect {
 
 		// 1 : Seuls les Admins peuvent écrire.
@@ -138,7 +152,42 @@ func CreateMessage(ctx context.Context, senderID int64, conversationID int64, in
 		messageAttachments = make(map[string]any)
 	}
 
-	if input.MessageType == variables.MessageTypeMedia {
+	if input.MessageType == variables.MessageTypeWidget {
+		rawWidget, hasWidget := messageAttachments["widget"]
+		if !hasWidget || rawWidget == nil {
+			return message_models.CreateMessageOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le widget est manquant dans les pièces jointes.", nil)
+		}
+
+		widgetPayload, errParse := message_models.ParseWidgetPayload(rawWidget)
+		if errParse != nil {
+			return message_models.CreateMessageOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le payload du widget est invalide.", errParse)
+		}
+
+		widgetPayload.Type = strings.TrimSpace(widgetPayload.Type)
+		if !slices.Contains(variables.AllowedWidgetTypes, widgetPayload.Type) {
+			return message_models.CreateMessageOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Type de widget non supporté.", nil)
+		}
+
+		// Assainissement des chaînes fournies par l'utilisateur
+		widgetPayload.Title = pkg.CleanStr(widgetPayload.Title)
+		widgetPayload.Description = pkg.CleanStr(widgetPayload.Description)
+		widgetPayload.Action.Label = pkg.CleanStr(widgetPayload.Action.Label)
+		widgetPayload.Action.URL = pkg.CleanStr(widgetPayload.Action.URL)
+		widgetPayload.Visuals.Style = pkg.CleanStr(widgetPayload.Visuals.Style)
+		widgetPayload.Visuals.Icon = pkg.CleanStr(widgetPayload.Visuals.Icon)
+
+		// Activation facultative du média de couverture
+		if widgetPayload.Visuals.CoverMediaID > 0 {
+			if errActivation := media_service.ActivateMediaBatch(ctx, []int64{widgetPayload.Visuals.CoverMediaID}, senderID); errActivation != nil {
+				return message_models.CreateMessageOutput{}, errActivation
+			}
+		}
+
+		// Réécriture des données assainies dans les pièces jointes
+		messageAttachments["widget"] = message_models.WidgetPayloadToMap(widgetPayload)
+
+		input.Content = pkg.CleanStr(input.Content)
+	} else if input.MessageType == variables.MessageTypeMedia {
 		rawMediaID, hasMediaID := messageAttachments["media_id"]
 		if !hasMediaID {
 			return message_models.CreateMessageOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant du média est manquant dans les pièces jointes.", nil)

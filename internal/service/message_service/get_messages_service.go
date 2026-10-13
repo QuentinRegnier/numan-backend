@@ -113,6 +113,11 @@ func GetMessages(ctx context.Context, callerID int64, input message_models.GetMe
 			}
 		}
 
+		// A.bis Hydratation du widget (Widget Message)
+		if messagesPayloadList[i].MessageType == variables.MessageTypeWidget {
+			HydrateWidgetMedia(ctx, &messagesPayloadList[i], callerID)
+		}
+
 		// B. Hydratation de l'expéditeur (Pseudo et Avatar)
 		var resolvedSenderUsername string
 		var resolvedSenderAvatar media_models.MediaView
