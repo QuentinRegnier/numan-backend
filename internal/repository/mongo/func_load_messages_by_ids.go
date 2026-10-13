@@ -7,6 +7,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
 
 // MongoLoadMessagesByIDs est le fallback L2 d'hydratation
@@ -26,6 +27,9 @@ func MongoLoadMessagesByIDs(ctx context.Context, messageIDs []int64) ([]message_
 	for _, doc := range docs {
 		var m message_models.MessagePayload
 		if err := pkg.ToStruct(doc, &m); err == nil {
+			if _, exists := doc["allow_new_reactions"]; !exists {
+				m.AllowNewReactions = variables.ShouldAllowNewReactions(m.MessageType)
+			}
 			messages = append(messages, m)
 		}
 	}

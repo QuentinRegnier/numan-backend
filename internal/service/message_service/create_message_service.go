@@ -223,16 +223,22 @@ func CreateMessage(ctx context.Context, senderID int64, conversationID int64, in
 	newMessageID := pkg.GenerateID()
 	currentTimestamp := time.Now().UTC()
 
+	allowNewReactions := true
+	if !variables.ShouldAllowNewReactions(input.MessageType) {
+		allowNewReactions = false
+	}
+
 	messagePayload := message_models.MessagePayload{
-		ID:             newMessageID,
-		ConversationID: conversationID,
-		SenderID:       senderID,
-		MessageType:    input.MessageType,
-		Visibility:     true,
-		Content:        input.Content,
-		Attachments:    messageAttachments,
-		CreatedAt:      domain.TimeToMillis(currentTimestamp),
-		UpdatedAt:      domain.TimeToMillis(currentTimestamp),
+		ID:                newMessageID,
+		ConversationID:    conversationID,
+		SenderID:          senderID,
+		MessageType:       input.MessageType,
+		Visibility:        true,
+		Content:           input.Content,
+		Attachments:       messageAttachments,
+		AllowNewReactions: allowNewReactions,
+		CreatedAt:         domain.TimeToMillis(currentTimestamp),
+		UpdatedAt:         domain.TimeToMillis(currentTimestamp),
 	}
 
 	_ = object_cache_service.SetMessageInObjectCache(ctx, messagePayload)

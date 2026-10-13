@@ -28,3 +28,14 @@ const (
 )
 
 var AllowedWidgetTypes = []string{"action_button", "link_card", "poll"}
+
+// ShouldAllowNewReactions determines whether a message type is permitted to allow new reactions.
+// Restricted message types 6 (Invite), 8 (System), 9 (Survey), and 10 (Widget) strictly prohibit new reactions.
+func ShouldAllowNewReactions(messageType int) bool {
+	switch messageType {
+	case MessageTypeInvite, MessageTypeSystem, MessageTypeSurvey, MessageTypeWidget:
+		return false
+	default:
+		return true
+	}
+}

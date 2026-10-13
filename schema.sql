@@ -401,6 +401,7 @@ CREATE TABLE messaging.messages (
     visibility       boolean,
     content          text,
     attachments      jsonb                    DEFAULT '{}'::jsonb,
+    allow_new_reactions boolean               NOT NULL DEFAULT TRUE,
     created_at       timestamp with time zone,
     updated_at       timestamp with time zone
 );

@@ -566,7 +566,7 @@ type messageMapper struct{}
 func (m *messageMapper) TableName() string { return "messaging.messages" }
 
 func (m *messageMapper) Columns() []string {
-	return []string{"id", "conversation_id", "sender_id", "message_type", "visibility", "content", "attachments", "created_at", "updated_at"}
+	return []string{"id", "conversation_id", "sender_id", "message_type", "visibility", "content", "attachments", "allow_new_reactions", "created_at", "updated_at"}
 }
 
 func (m *messageMapper) ToRow(data any) ([]any, error) {
@@ -598,7 +598,7 @@ func (m *messageMapper) ToRow(data any) ([]any, error) {
 
 	// ── ÉTAPE 3 : FORMATAGE DE LA LIGNE SQL ─────────────────────────────────
 	return []any{
-		msg.ID, msg.ConversationID, msg.SenderID, msg.MessageType, msg.Visibility, contentDB, attachDB, msg.CreatedAt, msg.UpdatedAt,
+		msg.ID, msg.ConversationID, msg.SenderID, msg.MessageType, msg.Visibility, contentDB, attachDB, msg.AllowNewReactions, msg.CreatedAt, msg.UpdatedAt,
 	}, nil
 }
 

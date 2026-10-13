@@ -44,7 +44,19 @@ func ReactToMessage(ctx context.Context, callerID int64, input message_models.Re
 		return nil // Idempotence : L'utilisateur a cliqué sur le même emoji, succès silencieux.
 	}
 
-	// ── ÉTAPE 3 : APPLICATION DU DELTA (RAM L1 & WORKER BATCH) ──────────────
+	// ── ÉTAPE 3 : AUTORISATION DES NOUVEAUX TYPES DE RÉACTIONS ──────────────
+	if !messagePayload.AllowNewReactions {
+		reactionCountsMap, errReaction := cache_service.GetMessageReactionCounts(ctx, messagePayload.ID)
+		if errReaction != nil {
+			return errReaction
+		}
+		count, exists := reactionCountsMap[sanitizedEmoji]
+		if !exists || count <= 0 {
+			return numan_error.NewForbidden(numan_error.CodeForbidden, "You cannot add new types of reactions to this specific message.", nil)
+		}
+	}
+
+	// ── ÉTAPE 4 : APPLICATION DU DELTA (RAM L1 & WORKER BATCH) ──────────────
 
 	// Si l'utilisateur avait une ancienne réaction, on la décrémente d'abord.
 	if previousEmoji != "" {
@@ -59,7 +71,7 @@ func ReactToMessage(ctx context.Context, callerID int64, input message_models.Re
 	// Sauvegarde de l'état personnel de l'utilisateur
 	_ = cache_service.SetUserReaction(ctx, messagePayload.ID, callerID, sanitizedEmoji)
 
-	// ── ÉTAPE 4 : PERSISTANCE ASYNCHRONE (WRITE-BEHIND) ─────────────────────
+	// ── ÉTAPE 5 : PERSISTANCE ASYNCHRONE (WRITE-BEHIND) ─────────────────────
 
 	reactionPayload := message_models.MessageReactionPayload{
 		ID:        pkg.GenerateID(),
@@ -76,7 +88,7 @@ func ReactToMessage(ctx context.Context, callerID int64, input message_models.Re
 		return numan_error.NewInternal()
 	}
 
-	// ── ÉTAPE 5 : DIFFUSION TEMPS RÉEL (WEBSOCKETS) ─────────────────────────
+	// ── ÉTAPE 6 : DIFFUSION TEMPS RÉEL (WEBSOCKETS) ─────────────────────────
 
 	go func() {
 		backgroundCtx := context.Background()
