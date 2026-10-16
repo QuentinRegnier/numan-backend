@@ -5,7 +5,7 @@ package variables
 // ============================================================================
 
 const (
-	// Rôles des participants au sein d'une conversation ou communauté
+	// Rôles des participants (Énumérations BDD immuables)
 	MemberRolePendingApproval = -4 // Rejeté / Demande refusée
 	MemberRolePending         = -3 // En attente d'approbation (Candidature communauté)
 	MemberRoleBanned          = -2 // Banni définitivement du groupe
@@ -15,6 +15,6 @@ const (
 	MemberRoleOwner           = 2  // Propriétaire (Gestion intégrale et transfert)
 )
 
-const (
+var (
 	MaxAddMemberCount = 100 // Nombre maximum de membres pouvant être ajoutés en une seule opération
 )

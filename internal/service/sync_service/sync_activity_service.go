@@ -28,7 +28,7 @@ func SyncActivity(ctx context.Context, callerID int64, input sync_models.SyncAct
 
 	// L'offset 0 et limit 100 garantissent l'aspiration du sommet du ZSET chronologique.
 	requestPayload := notification_models.GetNotificationsInput{
-		Limit:  variables.MaxZsetNotification,
+		Limit:  int64(variables.MaxZsetNotification),
 		Offset: 0,
 		Force:  false,
 	}

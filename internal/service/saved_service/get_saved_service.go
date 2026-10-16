@@ -43,7 +43,7 @@ func GetSavedPosts(ctx context.Context, callerID int64, input saved_models.GetSa
 		} else {
 
 			// ── ÉTAPE 3 : FALLBACK ABSOLU L3 (POSTGRESQL COLD STORAGE) ──────
-			savedPayloadsFromPostgres, errPg := postgres.FuncLoadSavedPosts(ctx, callerID, input.Limit, input.Offset)
+			savedPayloadsFromPostgres, errPg := postgres.FuncLoadSavedPostsKeyset(ctx, callerID, input.BeforeCreatedAt, input.BeforeID, input.Limit)
 			if errPg != nil {
 				numan_log.Error(ctx).Err(errPg).Int64("user_id", callerID).Msg("Erreur L3 lors de la récupération des posts sauvegardés")
 				return nil, numan_error.NewInternal()
@@ -77,7 +77,7 @@ func GetSavedPosts(ctx context.Context, callerID int64, input saved_models.GetSa
 
 	// On passe la liste d'IDs au pipeline unifié GetPosts qui va s'occuper :
 	// - De vérifier les droits d'accès
-	// - De filtrer les posts supprimés/privés
+	// - De filtrer les posts supprimés ou restreints (abonnés/amis)
 	// - De générer les URLs S3/MinIO signées (HMAC)
 	// - D'hydrater les commentaires
 	requestInput := post_models.GetPostInput{

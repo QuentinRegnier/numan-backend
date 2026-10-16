@@ -78,8 +78,8 @@ func GetComments(ctx context.Context, callerID int64, input comment_models.GetCo
 		if postPayload.Visibility == variables.PostVisibilityFriend && relationState != variables.RelationStateFriend {
 			return nil, numan_error.NewForbidden(numan_error.CodeForbidden, "Les commentaires sont réservés aux amis de cet utilisateur.", nil)
 		}
-		if postPayload.Visibility == 3 {
-			return nil, numan_error.NewForbidden(numan_error.CodeForbidden, "Ce post est privé.", nil)
+		if postPayload.Visibility < variables.PostVisibilityAll || postPayload.Visibility > variables.PostVisibilityFriend {
+			return nil, numan_error.NewForbidden(numan_error.CodeForbidden, "Accès refusé.", nil)
 		}
 	}
 
@@ -91,7 +91,7 @@ func GetComments(ctx context.Context, callerID int64, input comment_models.GetCo
 	}
 
 	// On n'utilise le ZSET L1 que pour les premiers commentaires (Offset faible)
-	if input.Offset < variables.MaxZsetPostComment && object_cache_service.IsPostInObjectCache(ctx, input.PostID) {
+	if input.Offset < int64(variables.MaxZsetPostComment) && object_cache_service.IsPostInObjectCache(ctx, input.PostID) {
 		commentIDs, _ := object_cache_service.GetTopCommentIDs(ctx, input.PostID, input.Offset, input.Limit)
 
 		if len(commentIDs) > 0 {
@@ -121,7 +121,7 @@ func GetComments(ctx context.Context, callerID int64, input comment_models.GetCo
 		for _, commentPayload := range commentsFromMongo {
 			_ = object_cache_service.SetCommentInObjectCache(ctx, commentPayload)
 
-			if input.Offset < variables.MaxZsetPostComment {
+			if input.Offset < int64(variables.MaxZsetPostComment) {
 				_ = object_cache_service.AddCommentToZSET(ctx, commentPayload.PostID, commentPayload.ID, float64(commentPayload.Score))
 			}
 			finalResults = append(finalResults, hydrateCommentOutput(ctx, callerID, commentPayload))
@@ -131,8 +131,8 @@ func GetComments(ctx context.Context, callerID int64, input comment_models.GetCo
 
 	// ── ÉTAPE 3 : TENTATIVE L3 (POSTGRESQL - SOURCE DE VÉRITÉ) ──────────────
 
-	if input.Offset == 0 {
-		commentsFromPostgres, errPg := postgres.FuncLoadCommentsPaginated(ctx, input.PostID, input.Offset, input.Limit)
+	if input.Offset == 0 || input.AfterID != nil {
+		commentsFromPostgres, errPg := postgres.FuncLoadCommentsKeyset(ctx, input.PostID, input.AfterScore, input.AfterCreatedAt, input.AfterID, input.Limit)
 		if errPg != nil {
 			numan_log.Error(ctx).Err(errPg).Int64("post_id", input.PostID).Msg("Erreur L3 lors de la récupération des commentaires")
 			return nil, numan_error.NewInternal()

@@ -10,10 +10,10 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 )
 
-// FuncGetMessageReactionsPaginated lit la liste des réactions d'un message depuis le L3
-func FuncGetMessageReactionsPaginated(ctx context.Context, messageID int64, limit int, offset int) ([]message_models.MessageReactionPayload, error) {
-	query := `SELECT id, message_id, user_id, reaction, created_at FROM messaging.func_get_message_reactions_paginated($1, $2, $3)`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, messageID, limit, offset)
+// FuncGetMessageReactionsPaginated lit la liste des réactions d'un message depuis le L3 via messaging.func_get_message_reactions_keyset.
+func FuncGetMessageReactionsPaginated(ctx context.Context, messageID int64, beforeCreatedAt *int64, beforeID *int64, limit int) ([]message_models.MessageReactionPayload, error) {
+	query := `SELECT id, message_id, user_id, reaction, created_at FROM messaging.func_get_message_reactions_keyset($1, $2, $3, $4)`
+	rows, err := postgres.PostgresDB.QueryContext(ctx, query, messageID, beforeCreatedAt, beforeID, limit)
 	if err != nil {
 		numan_log.Error(ctx).Err(err).Msg("Échec de l'exécution de la requête SQL (QueryContext)")
 		return nil, numan_error.NewInternal()

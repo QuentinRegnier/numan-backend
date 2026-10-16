@@ -10,7 +10,7 @@ import (
 
 // FuncGetPinnedIndices récupère les indices d'épingles (Source of Truth)
 func FuncGetPinnedIndices(ctx context.Context, userID int64) ([]int, error) {
-	query := `SELECT (settings->>'pinned')::int FROM messaging.members WHERE user_id = $1 AND (settings->>'pinned')::int >= 0`
+	query := `SELECT pinned FROM messaging.func_get_pinned_indices($1)`
 	rows, err := postgres.PostgresDB.QueryContext(ctx, query, userID)
 	if err != nil {
 		return nil, err

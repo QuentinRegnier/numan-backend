@@ -2,12 +2,8 @@ package variables
 
 import "time"
 
-// Configuration temporelle OBJECT Cache
-const (
-	StandardTTL = 7 * 24 * time.Hour // TTL STANDARD : 7 Jours (Pragmatique, évite la saturation).
-)
-
-// objectif_cache_comment_service.go
-const (
+// Configuration temporelle et limites OBJECT Cache (Modifiables à chaud)
+var (
+	StandardTTL        = 7 * 24 * time.Hour // TTL STANDARD : 7 Jours
 	MaxZsetPostComment = 100
 )

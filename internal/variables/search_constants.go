@@ -1,7 +1,7 @@
 package variables
 
 // ############################################################################
-// # PARAMÈTRES ET CONSTANTES DU DOMAINE RECHERCHE (SEARCH)
+// # CONSTANTES PROTOCOLAIRES & MODES SQL DU DOMAINE RECHERCHE (IMMUABLES)
 // ############################################################################
 
 const (
@@ -19,8 +19,13 @@ const (
 	OrderModeComments = 2
 	OrderModeRecent   = 3
 	OrderModeOldest   = 4
+)
 
-	// Limites de sécurité par défaut pour la taille des listes retournées
-	DefaultAutocompleteLimit = 15
-	DefaultGlobalSearchLimit = 10
+// ############################################################################
+// # LIMITES DYNAMIQUES DE RECHERCHE
+// ############################################################################
+
+var (
+	DefaultAutocompleteLimit int64 = 15
+	DefaultGlobalSearchLimit int64 = 10
 )

@@ -45,7 +45,7 @@ func GetUserPosts(ctx context.Context, callerID int64, input post_models.GetUser
 	}
 
 	// ── ÉTAPE 2 : FALLBACK ABSOLU L3 (POSTGRESQL) - CONTOURNEMENT MONGO ─────
-	postsFromPostgres, errPg := postgres.FuncLoadUserPosts(ctx, input.TargetUserID, input.Limit, input.Offset)
+	postsFromPostgres, errPg := postgres.FuncLoadUserPostsKeyset(ctx, input.TargetUserID, input.BeforeCreatedAt, input.BeforeID, input.Limit)
 	if errPg != nil {
 		numan_log.Error(ctx).Err(errPg).Int64("target_user_id", input.TargetUserID).Msg("Échec L3 lors de la récupération de la timeline utilisateur")
 		return []post_models.GetPostOutput{}, numan_error.NewInternal(errPg)

@@ -22,6 +22,7 @@ import (
 	redisgo "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
+	"github.com/QuentinRegnier/numan-backend/internal/service/variables_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 	"github.com/QuentinRegnier/numan-backend/internal/worker"
 	"github.com/gin-gonic/gin"
@@ -88,6 +89,9 @@ func main() {
 	} else {
 		log.Println("💾 Démarrage classique : Conservation des données existantes (AOF Actif)")
 	}
+
+	// Initialisation et synchronisation des variables dynamiques depuis Redis (L1)
+	variables_service.InitDynamicVariables(context.Background())
 
 	// Initialiser le Hub et lancer sa boucle
 	websocket.InitHub()

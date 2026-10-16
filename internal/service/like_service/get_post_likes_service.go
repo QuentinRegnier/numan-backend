@@ -89,6 +89,9 @@ func GetPostLikes(ctx context.Context, input like_models.GetPostLikesInput) (lik
 		if postPayload.Visibility == variables.PostVisibilityFriend && relationState != variables.RelationStateFriend { // Réservé aux Amis
 			return like_models.GetPostLikesOutput{}, numan_error.NewForbidden(numan_error.CodeForbidden, "Liste des likes réservée aux amis de l'auteur.", nil)
 		}
+		if postPayload.Visibility < variables.PostVisibilityAll || postPayload.Visibility > variables.PostVisibilityFriend {
+			return like_models.GetPostLikesOutput{}, numan_error.NewForbidden(numan_error.CodeForbidden, "Accès refusé.", nil)
+		}
 	}
 
 	// ── ÉTAPE 2 : RÉCUPÉRATION DES LIKES (L2 Mongo -> L3 Postgres) ──────────

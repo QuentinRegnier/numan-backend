@@ -72,27 +72,39 @@ func flushPostgres(ctx context.Context, events []redis.AsyncEvent) {
 		redis.EntityMessage,
 	}
 
+	var persistedEvents []redis.AsyncEvent
+
 	// 1. Exécution ordonnée pour les entités liées
 	for _, entityType := range executionOrder {
-		if events, exists := grouped[entityType]; exists {
-			processEntityEvents(ctx, entityType, events)
+		if evts, exists := grouped[entityType]; exists {
+			persisted := processEntityEvents(ctx, entityType, evts)
+			persistedEvents = append(persistedEvents, persisted...)
 			delete(grouped, entityType)
 		}
 	}
 
 	// 2. Exécution du reste (Entités sans dépendances critiques)
 	for entityType, evts := range grouped {
-		processEntityEvents(ctx, entityType, evts)
+		persisted := processEntityEvents(ctx, entityType, evts)
+		persistedEvents = append(persistedEvents, persisted...)
 	}
 
 	// ── ÉTAPE 3 : MISE À JOUR DES COMPTEURS (DÉNORMALISATION SQL) ───────────
-	updateCountersPostgres(ctx, events)
+	// WB-4: Seuls les événements dont la persistance a réussi modifient les compteurs
+	updateCountersPostgres(ctx, persistedEvents)
 }
 
 // processEntityEvents achemine le lot d'événements vers la bonne opération SQL (Fast Path).
 // Si le lot échoue, il déclenche le mécanisme de résilience par dichotomie (Slow Path).
-func processEntityEvents(ctx context.Context, entityType redis.EntityType, events []redis.AsyncEvent) {
-	var inserts, updates, deletes []redis.AsyncEvent
+// Retourne uniquement les événements qui ont été persistés avec succès.
+func processEntityEvents(ctx context.Context, entityType redis.EntityType, events []redis.AsyncEvent) []redis.AsyncEvent {
+	// WB-9: Exclusion explicite des entités sans table relationnelle (Vues, Télémétrie).
+	// Elles n'ont pas de mapper et sont consommées exclusivement par updateCountersPostgres.
+	if entityType == redis.EntityView || entityType == redis.EntityTelemetry {
+		return events
+	}
+
+	var inserts, updates, deletes, others []redis.AsyncEvent
 
 	for _, e := range events {
 		switch e.Action {
@@ -102,27 +114,42 @@ func processEntityEvents(ctx context.Context, entityType redis.EntityType, event
 			updates = append(updates, e)
 		case redis.ActionDelete:
 			deletes = append(deletes, e)
+		default:
+			others = append(others, e)
 		}
 	}
+
+	var persisted []redis.AsyncEvent
 
 	if len(inserts) > 0 {
 		if err := bulkInsertPostgres(ctx, entityType, inserts); err != nil {
 			numan_log.Warn(ctx).Interface("entity", entityType).Msg("Fast Path Insert échoué. Déclenchement Dichotomie...")
-			slowPathDichotomy(ctx, entityType, redis.ActionCreate, inserts)
+			persisted = append(persisted, slowPathDichotomy(ctx, entityType, redis.ActionCreate, inserts)...)
+		} else {
+			persisted = append(persisted, inserts...)
 		}
 	}
 	if len(updates) > 0 {
 		if err := bulkUpdatePostgres(ctx, entityType, updates); err != nil {
 			numan_log.Warn(ctx).Interface("entity", entityType).Msg("Fast Path Update échoué. Déclenchement Dichotomie...")
-			slowPathDichotomy(ctx, entityType, redis.ActionUpdate, updates)
+			persisted = append(persisted, slowPathDichotomy(ctx, entityType, redis.ActionUpdate, updates)...)
+		} else {
+			persisted = append(persisted, updates...)
 		}
 	}
 	if len(deletes) > 0 {
 		if err := bulkDeletePostgres(ctx, entityType, deletes); err != nil {
 			numan_log.Warn(ctx).Interface("entity", entityType).Msg("Fast Path Delete échoué. Déclenchement Dichotomie...")
-			slowPathDichotomy(ctx, entityType, redis.ActionDelete, deletes)
+			persisted = append(persisted, slowPathDichotomy(ctx, entityType, redis.ActionDelete, deletes)...)
+		} else {
+			persisted = append(persisted, deletes...)
 		}
 	}
+
+	// Préserver les actions spéciales (ex: ActionBuild pour les réactions de messages)
+	persisted = append(persisted, others...)
+
+	return persisted
 }
 
 // ============================================================================
@@ -131,9 +158,10 @@ func processEntityEvents(ctx context.Context, entityType redis.EntityType, event
 
 // slowPathDichotomy divise récursivement un lot en échec pour isoler la requête corrompue
 // (ex: Doublon de clé unique, Violation de Foreign Key) sans bloquer les autres requêtes valides.
-func slowPathDichotomy(ctx context.Context, entity redis.EntityType, action redis.ActionType, events []redis.AsyncEvent) {
+// Retourne la liste des événements dont la persistance a réussi.
+func slowPathDichotomy(ctx context.Context, entity redis.EntityType, action redis.ActionType, events []redis.AsyncEvent) []redis.AsyncEvent {
 	if len(events) == 0 {
-		return
+		return nil
 	}
 
 	var err error
@@ -148,19 +176,20 @@ func slowPathDichotomy(ctx context.Context, entity redis.EntityType, action redi
 
 	// Si ça passe, on a sauvé ce sous-lot, on arrête l'exploration.
 	if err == nil {
-		return
+		return events
 	}
 
 	// Si on échoue et qu'il n'y a qu'UN SEUL élément, c'est le coupable (Poison Pill) !
 	if len(events) == 1 {
 		sendToDLQ(ctx, entity, action, events[0], err)
-		return
+		return nil
 	}
 
 	// Sinon on coupe en deux et on relance l'arbre de recherche.
 	mid := len(events) / 2
-	slowPathDichotomy(ctx, entity, action, events[:mid])
-	slowPathDichotomy(ctx, entity, action, events[mid:])
+	left := slowPathDichotomy(ctx, entity, action, events[:mid])
+	right := slowPathDichotomy(ctx, entity, action, events[mid:])
+	return append(left, right...)
 }
 
 // sendToDLQ place l'événement impossible à exécuter en quarantaine.
@@ -342,7 +371,7 @@ func bulkUpdatePostgres(ctx context.Context, entity redis.EntityType, events []r
 	safeTableName := strings.ReplaceAll(mapper.TableName(), ".", "_")
 	tempTable := fmt.Sprintf("tmp_%s_%d", safeTableName, time.Now().UnixNano())
 
-	queryCreateTable := fmt.Sprintf("CREATE TEMP TABLE %s (LIKE %s INCLUDING ALL) ON COMMIT DROP", tempTable, mapper.TableName())
+	queryCreateTable := fmt.Sprintf("CREATE TEMP TABLE %s (LIKE %s INCLUDING DEFAULTS) ON COMMIT DROP", tempTable, mapper.TableName())
 	if _, errExec := tx.ExecContext(ctx, queryCreateTable); errExec != nil {
 		numan_log.Error(ctx).Err(errExec).Msg("Échec création table temporaire BulkUpdate")
 		return numan_error.NewInternal()
@@ -589,12 +618,12 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 		_, _ = postgres.PostgresDB.ExecContext(ctx, "UPDATE content.comments SET visibility = -1, updated_at = NOW() WHERE post_id = ANY($1)", pq.Array(ids))
 		_, _ = postgres.PostgresDB.ExecContext(ctx, "DELETE FROM content.likes WHERE target_type = 0 AND target_id = ANY($1)", pq.Array(ids))
 		_, _ = postgres.PostgresDB.ExecContext(ctx, "DELETE FROM content.saved WHERE post_id = ANY($1)", pq.Array(ids))
-		_, _ = postgres.PostgresDB.ExecContext(ctx, "UPDATE content.media SET visibility = false, updated_at = NOW() WHERE id IN (SELECT unnest(media_ids) FROM content.posts WHERE id = ANY($1))", pq.Array(ids))
+		_, _ = postgres.PostgresDB.ExecContext(ctx, "UPDATE content.media SET visibility = false, updated_at = util.now_ms() WHERE id IN (SELECT unnest(media_ids) FROM content.posts WHERE id = ANY($1))", pq.Array(ids))
 		return nil
 
 	} else if entity == redis.EntityMessage {
 		// Soft Delete du Message (visibility = false)
-		query = fmt.Sprintf("UPDATE %s SET visibility = false, updated_at = NOW() WHERE id = ANY($1)", mapper.TableName())
+		query = fmt.Sprintf("UPDATE %s SET visibility = false, updated_at = util.now_ms() WHERE id = ANY($1)", mapper.TableName())
 		if _, errExec := postgres.PostgresDB.ExecContext(ctx, query, pq.Array(ids)); errExec != nil {
 			numan_log.Error(ctx).Err(errExec).Msg("Échec Soft Delete Message")
 			return numan_error.NewInternal()
@@ -636,8 +665,10 @@ func updateCountersPostgres(ctx context.Context, events []redis.AsyncEvent) {
 
 	// A. Agréggation des Métriques
 	for _, e := range events {
-		delta := 1
-		if e.Action == redis.ActionDelete {
+		delta := 0
+		if e.Action == redis.ActionCreate {
+			delta = 1
+		} else if e.Action == redis.ActionDelete {
 			delta = -1
 		}
 
@@ -648,6 +679,9 @@ func updateCountersPostgres(ctx context.Context, events []redis.AsyncEvent) {
 		}
 
 		if e.Type == redis.EntityLike {
+			if delta == 0 {
+				continue
+			}
 			var p struct {
 				TargetType int   `json:"target_type"`
 				TargetID   int64 `json:"target_id"`
@@ -660,6 +694,9 @@ func updateCountersPostgres(ctx context.Context, events []redis.AsyncEvent) {
 				}
 			}
 		} else if e.Type == redis.EntityComment {
+			if delta == 0 {
+				continue
+			}
 			var p struct {
 				PostID int64 `json:"post_id"`
 			}
@@ -667,17 +704,26 @@ func updateCountersPostgres(ctx context.Context, events []redis.AsyncEvent) {
 				commentDeltas[p.PostID] += delta
 			}
 		} else if e.Type == redis.EntityView {
+			if e.Action != redis.ActionCreate {
+				continue
+			}
 			var p struct {
 				TargetID int64 `json:"target_id"`
 				Count    int   `json:"count"`
 			}
 			if err := json.Unmarshal(jsonBytes, &p); err == nil && p.TargetID != 0 {
+				vDelta := 1
 				if p.Count != 0 {
-					delta = p.Count
+					vDelta = p.Count
 				}
-				viewDeltas[p.TargetID] += delta
+				if vDelta != 0 {
+					viewDeltas[p.TargetID] += vDelta
+				}
 			}
 		} else if e.Type == redis.EntityReport {
+			if delta == 0 {
+				continue
+			}
 			var r struct {
 				TargetType int     `json:"target_type"`
 				TargetIDs  []int64 `json:"target_ids"`
@@ -688,6 +734,9 @@ func updateCountersPostgres(ctx context.Context, events []redis.AsyncEvent) {
 				}
 			}
 		} else if e.Type == redis.EntityTelemetry {
+			if e.Action != redis.ActionCreate {
+				continue
+			}
 			var t struct {
 				PostID       int64 `json:"post_id"`
 				DwellTimeMs  int   `json:"dwell_time_ms"`
@@ -733,26 +782,41 @@ func updateCountersPostgres(ctx context.Context, events []redis.AsyncEvent) {
 
 	// B. Exécution vers Procédures Stockées PostgreSQL
 	for id, delta := range likeDeltas {
+		if delta == 0 {
+			continue
+		}
 		if _, err := postgres.PostgresDB.ExecContext(ctx, "SELECT content.func_increment_post_like($1, $2)", id, delta); err != nil {
 			numan_log.Error(ctx).Err(err).Int64("post_id", id).Msg("Échec exécution fonction func_increment_post_like")
 		}
 	}
 	for id, delta := range commentDeltas {
+		if delta == 0 {
+			continue
+		}
 		if _, err := postgres.PostgresDB.ExecContext(ctx, "SELECT content.func_increment_post_comment($1, $2)", id, delta); err != nil {
 			numan_log.Error(ctx).Err(err).Int64("post_id", id).Msg("Échec exécution fonction func_increment_post_comment")
 		}
 	}
 	for id, delta := range viewDeltas {
+		if delta == 0 {
+			continue
+		}
 		if _, err := postgres.PostgresDB.ExecContext(ctx, "SELECT content.func_increment_post_view($1, $2)", id, delta); err != nil {
 			numan_log.Error(ctx).Err(err).Int64("post_id", id).Msg("Échec exécution fonction func_increment_post_view")
 		}
 	}
 	for id, delta := range commentLikeDeltas {
+		if delta == 0 {
+			continue
+		}
 		if _, err := postgres.PostgresDB.ExecContext(ctx, "SELECT content.func_increment_comment_metrics($1, $2)", id, delta); err != nil {
 			numan_log.Error(ctx).Err(err).Int64("comment_id", id).Msg("Échec exécution fonction func_increment_comment_metrics")
 		}
 	}
 	for id, delta := range reportDeltas {
+		if delta == 0 {
+			continue
+		}
 		if _, err := postgres.PostgresDB.ExecContext(ctx, "SELECT content.func_increment_post_report($1, $2)", id, delta); err != nil {
 			numan_log.Error(ctx).Err(err).Int64("post_id", id).Msg("Échec exécution fonction func_increment_post_report")
 		}

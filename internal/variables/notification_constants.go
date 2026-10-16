@@ -3,7 +3,7 @@ package variables
 import "time"
 
 // ############################################################################
-// # PARAMÈTRES ET CONSTANTES DU DOMAINE NOTIFICATIONS
+// # CONSTANTES PROTOCOLAIRES & FILES REDIS DU DOMAINE NOTIFICATIONS (IMMUABLES)
 // ############################################################################
 
 const (
@@ -15,17 +15,17 @@ const (
 	EventFriendshipEst    = "friendship_established"
 	EventGroupInvited     = "group_invited"
 
-	// Nom de la file d'attente asynchrone Redis pour les Push Firebase
+	// Noms des files d'attente asynchrones Redis pour les Push Firebase
 	WorkerQueueFirebase = "firebase"
-
-	MaxZsetNotification = 100
+	PushWorkerQueueName = "worker:queue:firebase"
 )
 
-// ============================================================================
-// CONSTANTES SPÉCIFIQUES AU WORKER DE PUSH NOTIFICATIONS
-// ============================================================================
-const (
-	PushWorkerQueueName      = "worker:queue:firebase"
+// ############################################################################
+// # PARAMÈTRES DYNAMIQUES DU WORKER DE PUSH NOTIFICATIONS
+// ############################################################################
+
+var (
+	MaxZsetNotification      = 100
 	PushWorkerBLPopTimeout   = 2 * time.Second
 	PushWorkerDefaultTitle   = "numan"
 	PushWorkerDefaultBody    = "Nouvelle notification"

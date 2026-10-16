@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -111,6 +112,10 @@ var (
 	ChannelUser      *Collection
 	ChannelCommunity *Collection
 	WorkerQueue      *Collection
+
+	// --- CONFIGURATION DYNAMIQUE CENTRALISÉE ---
+	DynamicVariables     *Collection
+	DynamicVariablesSync *Collection
 )
 
 // ============================================================================
@@ -210,6 +215,10 @@ func InitCacheDatabase() {
 	ChannelUser = newCollection("channel:user", 0)
 	ChannelCommunity = newCollection("channel:community", 0)
 	WorkerQueue = newCollection("worker:queue", 0)
+
+	// --- CONFIGURATION DYNAMIQUE CENTRALISÉE ---
+	DynamicVariables = newCollection("system:variables", 0)
+	DynamicVariablesSync = newCollection("system:variables:sync", 10*time.Second)
 }
 
 // ============================================================================
@@ -522,4 +531,123 @@ func (c *Collection) PublishMultiple(ctx context.Context, ids []int64, message a
 	}
 	_, err := pipe.Exec(ctx)
 	return err
+}
+
+// ============================================================================
+// 13. CONFIGURATION DYNAMIQUE ATOMIQUE (LUA SCRIPTS - DDD)
+// ============================================================================
+
+const applyVariablesPatchScript = `
+local overrides_key = KEYS[1]
+local version_key = KEYS[2]
+local set_count = tonumber(ARGV[1])
+local idx = 2
+
+for i = 1, set_count do
+    local k = ARGV[idx]
+    local v = ARGV[idx + 1]
+    redis.call('HSET', overrides_key, k, v)
+    idx = idx + 2
+end
+
+local del_count = tonumber(ARGV[idx])
+idx = idx + 1
+for i = 1, del_count do
+    local k = ARGV[idx]
+    redis.call('HDEL', overrides_key, k)
+    idx = idx + 1
+end
+
+local new_version = redis.call('INCR', version_key)
+return new_version
+`
+
+const loadVariablesStateScript = `
+local overrides_key = KEYS[1]
+local version_key = KEYS[2]
+local ver = tonumber(redis.call('GET', version_key) or '0')
+local raw = redis.call('HGETALL', overrides_key)
+return {ver, raw}
+`
+
+// ApplyVariablesPatchAtomic applique un lot de mises à jour/suppressions dans le Hash Redis
+// et incrémente le numéro de version global en une seule transaction atomique Lua.
+func (c *Collection) ApplyVariablesPatchAtomic(
+	ctx context.Context,
+	overridesID any,
+	versionID any,
+	toSet map[string]string,
+	toDelete []string,
+) (int64, error) {
+	if c == nil || c.Client == nil {
+		return 0, numan_error.NewInternal(errors.New("collection Redis non initialisée"))
+	}
+
+	args := make([]any, 0, 2+len(toSet)*2+len(toDelete))
+	args = append(args, len(toSet))
+	for k, v := range toSet {
+		args = append(args, k, v)
+	}
+	args = append(args, len(toDelete))
+	for _, k := range toDelete {
+		args = append(args, k)
+	}
+
+	keys := []string{c.Key(overridesID), c.Key(versionID)}
+	return c.Client.Eval(ctx, applyVariablesPatchScript, keys, args...).Int64()
+}
+
+// LoadVariablesStateAtomic récupère de manière atomique le couple (version, overrides) en 1 seul RTT.
+func (c *Collection) LoadVariablesStateAtomic(
+	ctx context.Context,
+	overridesID any,
+	versionID any,
+) (map[string]string, int64, error) {
+	if c == nil || c.Client == nil {
+		return nil, 0, numan_error.NewInternal(errors.New("collection Redis non initialisée"))
+	}
+
+	keys := []string{c.Key(overridesID), c.Key(versionID)}
+	res, err := c.Client.Eval(ctx, loadVariablesStateScript, keys).Result()
+	if err != nil {
+		return nil, 0, err
+	}
+
+	slice, ok := res.([]any)
+	if !ok || len(slice) != 2 {
+		return nil, 0, numan_error.NewInternal(errors.New("réponse Lua inattendue pour LoadVariablesStateAtomic"))
+	}
+
+	version, _ := slice[0].(int64)
+	overrides := make(map[string]string)
+
+	if rawList, ok := slice[1].([]any); ok {
+		for i := 0; i+1 < len(rawList); i += 2 {
+			k, kOk := rawList[i].(string)
+			v, vOk := rawList[i+1].(string)
+			if kOk && vOk {
+				overrides[k] = v
+			}
+		}
+	}
+
+	return overrides, version, nil
+}
+
+// RefreshStandardTTL met à jour dynamiquement le DefaultTTL de toutes les collections
+// indexées sur StandardTTL lorsqu'un administrateur modifie StandardTTL à chaud.
+func RefreshStandardTTL(newTTL time.Duration) {
+	collections := []*Collection{
+		Users, UserSettings, Sessions, Posts, Comments, Media, Messages,
+		Conversations, Members, Relations, Saved, PostComments, UserTimeline,
+		NotificationsObj, ConvMeta, ConvMembers, SpeedAddable, SpeedCommunity,
+		FeedsObject, FeedsMailbox, FeedsPersonalized, ContentVectors, RankedPosts,
+		TagPosts, SessionIndexes, CuckooSeen, LSHBuckets, ConvWatermarks,
+		MessageReactionCounts, MessageUserReactions, NotificationsZSet, TelemetryProfiles,
+	}
+	for _, col := range collections {
+		if col != nil {
+			col.DefaultTTL = newTTL
+		}
+	}
 }

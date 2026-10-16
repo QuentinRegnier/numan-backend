@@ -207,6 +207,10 @@ func purifyBatch(ctx context.Context, events []redis.AsyncEvent) []redis.AsyncEv
 						if p.Visibility == 2 && relationState != 2 {
 							continue
 						}
+						// D. Visibilité non supportée (ancien mode privé ou hors limites)
+						if p.Visibility < 0 || p.Visibility > 2 {
+							continue
+						}
 					}
 				}
 			} else {

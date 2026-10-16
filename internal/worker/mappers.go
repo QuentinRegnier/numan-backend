@@ -68,6 +68,10 @@ func getMapper(entity redis.EntityType) entityMapper {
 		return &memberMapper{}
 	case redis.EntityReport:
 		return &reportMapper{}
+	case redis.EntityView, redis.EntityTelemetry:
+		// WB-9: Ces entités sont traitées exclusivement au niveau de la dénormalisation des métriques
+		// (updateCountersPostgres) et ne représentent pas de lignes relationnelles indépendantes.
+		return nil
 	default:
 		return nil
 	}
@@ -354,7 +358,7 @@ func (m *postMapper) TableName() string { return "content.posts" }
 
 func (m *postMapper) Columns() []string {
 	return []string{
-		"id", "user_id", "content", "hashtags", "identifiers", "media_ids",
+		"id", "user_id", "content", "hashtags", "indirect_hashtags", "identifiers", "media_ids",
 		"visibility", "priority_level", "location", "like_count",
 		"comment_count", "view_count", "report_count", "has_media",
 		"vector", "vector_version", "telemetry_dwell_sum", "telemetry_dwell_sq",

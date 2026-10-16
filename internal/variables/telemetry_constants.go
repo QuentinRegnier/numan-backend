@@ -1,6 +1,6 @@
 package variables
 
-const (
+var (
 	MaxGhostScrollTime   = 500
 	MinCognitiveReadTime = 1500
 )

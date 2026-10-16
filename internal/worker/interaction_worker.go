@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
@@ -100,14 +99,10 @@ func flushInteractionsPeriodically() {
 func processCacheUpdates(ctx context.Context, batch []interaction) {
 
 	// ── ÉTAPE 1 : AGRÉGATION MATHÉMATIQUE EN RAM (RÉDUCTION DES I/O) ────────
-	unreadsToAdd := make(map[string]int)             // Clé composée: "convID:userID"
 	reactionsToAdd := make(map[int64]map[string]int) // Map tridimensionnelle: msgID -> emoji -> delta
 
 	for _, interaction := range batch {
-		if interaction.Type == "unread" {
-			key := fmt.Sprintf("%d:%d", interaction.TargetID, interaction.ActorID)
-			unreadsToAdd[key]++
-		} else if interaction.Type == "msg_reaction" {
+		if interaction.Type == "msg_reaction" {
 			if reactionsToAdd[interaction.TargetID] == nil {
 				reactionsToAdd[interaction.TargetID] = make(map[string]int)
 			}

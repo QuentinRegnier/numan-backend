@@ -99,6 +99,15 @@ func GetPosts(ctx context.Context, callerID int64, input post_models.GetPostInpu
 			}
 		}
 
+		// Règle D : Sécurité - Visibilité non supportée (ancien mode privé ou invalide)
+		if (postPayload.Visibility < variables.PostVisibilityAll || postPayload.Visibility > variables.PostVisibilityFriend) && !isCallerAuthor {
+			hydratedPostsResults = append(hydratedPostsResults, post_models.GetPostOutput{
+				PostID: requestedPostID,
+				Error:  "Cette publication est introuvable ou n'est plus accessible.",
+			})
+			continue
+		}
+
 		// ── ÉTAPE 2 : HYDRATATION DU DTO (AUTEUR, MÉDIAS, COMMENTAIRES) ─────
 
 		var resolvedAuthorUsername string
@@ -120,7 +129,7 @@ func GetPosts(ctx context.Context, callerID int64, input post_models.GetPostInpu
 		// Chargement direct des Top Commentaires
 		commentRequestInput := comment_models.GetCommentsInput{
 			PostID: requestedPostID,
-			Limit:  variables.MaxZsetPostComment, // Aligné sur le Cap L1 ZSET
+			Limit:  int64(variables.MaxZsetPostComment), // Aligné sur le Cap L1 ZSET
 			Offset: 0,
 		}
 

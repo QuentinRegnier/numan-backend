@@ -21,6 +21,10 @@ import (
 // UpdatePrivacy modifie les paramètres de confidentialité, synchronise le Speed Cache
 // et délègue la sauvegarde au système de Write-Behind.
 func UpdatePrivacy(ctx context.Context, userID int64, input user_settings_models.UpdatePrivacyInput) (user_settings_models.UpdatePrivacyOutput, error) {
+	// ── ÉTAPE 0 : VÉRIFICATION DE LA VISIBILITÉ PAR DÉFAUT ──────────────────
+	if input.PostVisibilityDefault < variables.PostVisibilityAll || input.PostVisibilityDefault > variables.PostVisibilityFriend {
+		return user_settings_models.UpdatePrivacyOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Visibilité par défaut des posts invalide.", nil)
+	}
 
 	// ── ÉTAPE 1 : RÉCUPÉRATION DES PARAMÈTRES (CASCADE L1 -> L2 -> L3) ──────
 	userSettingsPayload, errCache := object_cache_service.GetUserSettingsCascade(ctx, userID)

@@ -6,7 +6,7 @@ type CreatePostInput struct {
 	Identifiers []int64  `json:"identifiers" binding:"max=10"`
 	MediaIDs    []int64  `json:"media_ids" binding:"max=4"` // <-- NOUVEAU : Maximum 4 médias par post
 	Location    string   `json:"location" binding:"max=100"`
-	Visibility  int      `json:"visibility" binding:"oneof=0 1 2"`
+	Visibility  int      `json:"visibility" binding:"oneof=0 1 2"` // 0: Public, 1: Abonnés, 2: Amis (Mode 3 Privé supprimé)
 }
 
 type CreatePostResponse struct {

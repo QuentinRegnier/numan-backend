@@ -10,7 +10,15 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
+
+// normalizeUserSettings assainit les réglages historiques (ex: ancien mode visibilité privée 3).
+func normalizeUserSettings(s *user_settings_models.UserSettingsPayload) {
+	if s.Privacy.PostVisibilityDefault < variables.PostVisibilityAll || s.Privacy.PostVisibilityDefault > variables.PostVisibilityFriend {
+		s.Privacy.PostVisibilityDefault = variables.PostVisibilityFriend
+	}
+}
 
 // ############################################################################
 // # SERVICE : OBJECT CACHE (PARAMÈTRES UTILISATEUR LFU)
@@ -45,6 +53,7 @@ func GetUserSettingsCascade(ctx context.Context, userID int64) (user_settings_mo
 	// ── ÉTAPE 1 : TENTATIVE L1 (REDIS RAM) ──────────────────────────────────
 	cachedSettings, errL1 := getUserSettings(ctx, userID)
 	if errL1 == nil && cachedSettings.ID != 0 {
+		normalizeUserSettings(&cachedSettings)
 		return cachedSettings, nil
 	}
 
@@ -54,6 +63,7 @@ func GetUserSettingsCascade(ctx context.Context, userID int64) (user_settings_mo
 
 	if errMongo == nil && len(mongoDocumentsList) > 0 {
 		if errStruct := pkg.ToStruct(mongoDocumentsList[0], &mongoSettingsPayload); errStruct == nil {
+			normalizeUserSettings(&mongoSettingsPayload)
 			_ = SetUserSettings(ctx, mongoSettingsPayload) // Réhydratation L1 silencieuse
 			return mongoSettingsPayload, nil
 		}
@@ -67,6 +77,8 @@ func GetUserSettingsCascade(ctx context.Context, userID int64) (user_settings_mo
 	}
 
 	if postgresSettings.ID != 0 {
+		normalizeUserSettings(&postgresSettings)
+
 		// A. Réhydratation L1 (Redis - Immédiate en RAM)
 		_ = SetUserSettings(ctx, postgresSettings)
 

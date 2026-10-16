@@ -131,8 +131,8 @@ func updateMostCache(ctx context.Context, events []redis.AsyncEvent) {
 					// Vérification des droits : L'événement n'influence l'algorithme que s'il est légitime
 					if callerID != 0 && p.UserID != callerID {
 						relationState := cache_service.RelationValue(ctx, p.UserID, callerID)
-						if relationState == -1 || (p.Visibility == 1 && relationState < 1) || (p.Visibility == 2 && relationState != 2) {
-							continue // Rejet de l'événement (Accès bloqué ou droits insuffisants)
+						if relationState == -1 || (p.Visibility == 1 && relationState < 1) || (p.Visibility == 2 && relationState != 2) || (p.Visibility != 0 && p.Visibility != 1 && p.Visibility != 2) {
+							continue // Rejet de l'événement (Accès bloqué ou droits insuffisants ou visibilité non supportée)
 						}
 					}
 

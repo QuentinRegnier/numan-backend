@@ -137,10 +137,10 @@ func handleSocialFanOut(ctx context.Context, events []redis.AsyncEvent) {
 			var errGraph error
 
 			// ── ÉTAPE 2 : FILTRE DE VISIBILITÉ ET ROUTAGE HYBRIDE ───────────
-			if p.Visibility == 2 {
-				// POST PRIVÉ : Graphe Bidirectionnel Strict (Amis Uniquement)
+			if p.Visibility == variables.PostVisibilityFriend {
+				// POST AMIS : Graphe Bidirectionnel Strict (Amis Uniquement)
 				targetIDs, errGraph = cache_service.GetSpeedFriends(ctx, authorID)
-			} else {
+			} else if p.Visibility == variables.PostVisibilityAll || p.Visibility == variables.PostVisibilitySubcriber {
 				// POST PUBLIC/ABONNÉS : Graphe Unidirectionnel
 				// Coupe-Circuit : Empêcher le blocage RAM pour les comptes hyper-suivis
 				followerCount := cache_service.GetFollowerCount(ctx, authorID)
@@ -153,6 +153,8 @@ func handleSocialFanOut(ctx context.Context, events []redis.AsyncEvent) {
 				}
 
 				targetIDs, errGraph = cache_service.GetSpeedRelationsIndex(ctx, authorID)
+			} else {
+				continue // Visibilité non supportée
 			}
 
 			if errGraph != nil {

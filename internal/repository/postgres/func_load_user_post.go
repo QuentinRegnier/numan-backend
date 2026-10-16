@@ -10,11 +10,12 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 )
 
-// FuncLoadUserPosts est le fallback absolu. Il ramène le payload complet depuis L3 pour hydrater la RAM.
-func FuncLoadUserPosts(ctx context.Context, userID int64, limit int64, offset int64) ([]post_models.PostPayload, error) {
-	query := `SELECT * FROM content.func_load_user_posts($1, $2, $3)`
+// FuncLoadUserPostsKeyset charge les publications d'un utilisateur via content.func_load_user_posts_keyset.
+// Le curseur est composé de (beforeCreatedAt, beforeID). Si les deux sont nil, la première page est renvoyée.
+func FuncLoadUserPostsKeyset(ctx context.Context, userID int64, beforeCreatedAt *int64, beforeID *int64, limit int64) ([]post_models.PostPayload, error) {
+	query := `SELECT * FROM content.func_load_user_posts_keyset($1, $2, $3, $4)`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, userID, limit, offset)
+	rows, err := postgres.PostgresDB.QueryContext(ctx, query, userID, beforeCreatedAt, beforeID, limit)
 	if err != nil {
 		numan_log.Error(ctx).Err(err).Msg("Échec de l'exécution de la requête SQL (QueryContext)")
 		return nil, numan_error.NewInternal()

@@ -22,5 +22,5 @@ func FuncCheckUnique(ctx context.Context, entity redis.EntityType, field string,
 
 	err = postgres.PostgresDB.QueryRowContext(ctx, query, target.Schema, target.Table, field, value).Scan(&exists)
 
-	return exists, numan_error.NewInternal()
+	return exists, err
 }

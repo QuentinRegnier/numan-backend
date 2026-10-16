@@ -42,7 +42,7 @@ func GetMessageReactions(ctx context.Context, callerID int64, input message_mode
 		messageReactions = reactionsFromMongo
 	} else {
 		// FALLBACK ABSOLU L3 (PostgreSQL - Cold Storage)
-		reactionsFromPostgres, errPg := postgres.FuncGetMessageReactionsPaginated(ctx, input.MessageID, input.Limit, input.Offset)
+		reactionsFromPostgres, errPg := postgres.FuncGetMessageReactionsPaginated(ctx, input.MessageID, input.BeforeCreatedAt, input.BeforeID, input.Limit)
 		if errPg != nil {
 			numan_log.Error(ctx).Err(errPg).Int64("message_id", input.MessageID).Msg("Erreur L3 lors de la récupération des réactions de message")
 			return message_models.GetMessageReactionsOutput{}, numan_error.NewInternal()

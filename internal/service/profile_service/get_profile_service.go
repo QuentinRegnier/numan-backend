@@ -196,7 +196,7 @@ func GetProfile(ctx context.Context, callerID int64, input profile_models.GetPro
 		}
 
 		// Hydratation des sauvegardes (Saved Posts) du caller
-		recentSavedPosts, _ := postgres.FuncLoadSavedPosts(ctx, callerID, 500, 0)
+		recentSavedPosts, _ := postgres.FuncLoadSavedPostsKeyset(ctx, callerID, nil, nil, 500)
 		savedPostsMap := make(map[int64]bool)
 		for _, savedRecord := range recentSavedPosts {
 			savedPostsMap[savedRecord.PostID] = true

@@ -127,6 +127,9 @@ func CreateUser(ctx context.Context, input auth_models.SignUpInput, ipAddress st
 	}
 
 	// C. Hydratation des Paramètres Utilisateurs (Settings)
+	if input.Privacy.PostVisibilityDefault < variables.PostVisibilityAll || input.Privacy.PostVisibilityDefault > variables.PostVisibilityFriend {
+		input.Privacy.PostVisibilityDefault = variables.PostVisibilityAll
+	}
 	settingsID := pkg.GenerateID()
 	userSettingsPayload := user_settings_models.UserSettingsPayload{
 		ID:                 settingsID,

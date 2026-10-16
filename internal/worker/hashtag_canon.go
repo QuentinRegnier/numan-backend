@@ -174,22 +174,16 @@ func min3Int(a, b, c int) int {
 }
 
 // persistCommunityTags sauvegarde les tags communautaires dans PostgreSQL.
-// Utilise UNNEST pour exécuter l'insertion de masse en 1 seul RTT réseau (O(1) côté Go).
+// Utilise la fonction SQL content.func_upsert_community_tags pour l'insertion de masse idempotente.
 func persistCommunityTags(ctx context.Context, tags []string) {
 	if len(tags) == 0 {
 		return
 	}
 
-	// L'instruction ON CONFLICT DO NOTHING garantit que si le tag a déjà été
-	// inséré lors de la nuit précédente, PostgreSQL l'ignore sans crasher.
-	query := `
-		INSERT INTO content.tags (slug, is_community) 
-		SELECT unnest($1::text[]), true 
-		ON CONFLICT (slug) DO NOTHING
-	`
+	query := "SELECT content.func_upsert_community_tags($1)"
 
-	// Exécution atomique
-	_, err := postgres.PostgresDB.ExecContext(ctx, query, pq.Array(tags))
+	var inserted int
+	err := postgres.PostgresDB.QueryRowContext(ctx, query, pq.Array(tags)).Scan(&inserted)
 	if err != nil {
 		numan_log.Error(ctx).Err(err).Msg("Échec lors de la persistance SQL des tags communautaires (L3)")
 	} else {

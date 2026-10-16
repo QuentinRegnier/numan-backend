@@ -44,6 +44,10 @@ func CreatePost(ctx context.Context, callerID int64, input post_models.CreatePos
 		return -1, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le nombre de médias dépasse la limite autorisée.", err_media)
 	}
 
+	if input.Visibility < variables.PostVisibilityAll || input.Visibility > variables.PostVisibilityFriend {
+		return -1, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Niveau de visibilité non supporté.", nil)
+	}
+
 	// ── ÉTAPE 1 : BOUCLIER DE CONFIDENTIALITÉ (TAGS ET MENTIONS) ────────────
 
 	mentionedUserIDs := pkg.ExtractMentions(input.Content)

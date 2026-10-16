@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/admin_handlers/variables_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/auth_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/comment_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/conversation_handlers"
@@ -155,6 +156,8 @@ func SetupRoutes(r *gin.Engine) {
 	secured.PUT("/settings/display/update", user_settings_handlers.UpdateDisplayHandler)             //
 
 	// --- Administration / Modération ---
+	secured.GET("/admin/variables/get", variables_handlers.GetVariablesHandler)
+	secured.PATCH("/admin/variables/update", variables_handlers.UpdateVariablesHandler)
 	secured.POST("/ban", BanHandler)                                            // ℹ️❌
 	secured.POST("/restriction", RestrictionHandler)                            // ℹ️❌
 	secured.POST("/warning", WarningHandler)                                    // ℹ️❌

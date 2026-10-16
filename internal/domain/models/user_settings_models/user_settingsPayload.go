@@ -2,7 +2,7 @@ package user_settings_models
 
 type PrivacySettings struct {
 	ProfileVisibility      int  `json:"profile_visibility" bson:"profile_visibility"`           // 0: Public, 2: Amis
-	PostVisibilityDefault  int  `json:"post_visibility_default" bson:"post_visibility_default"` // 0: Public, 1: Abonnés, 2: Amis
+	PostVisibilityDefault  int  `json:"post_visibility_default" bson:"post_visibility_default"` // 0: Public, 1: Abonnés, 2: Amis (Mode 3 Privé supprimé)
 	ConversationPermission int  `json:"conversation_permission" bson:"conversation_permission"` // 0: Tout le monde, 1: Abonnés, 2: Amis, 3: Personne
 	AddGroupPermission     int  `json:"add_group_permission" bson:"add_group_permission"`       // 0: Tout le monde, 1: Amis, 2: Personne
 	AllowTagging           int  `json:"allow_tagging" bson:"allow_tagging"`                     // 0: Tout le monde, 1: Abonnés, 2: Amis

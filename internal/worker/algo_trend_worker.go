@@ -76,7 +76,7 @@ func processHashtagTrends(ctx context.Context) {
 		// Hydratation via le Fallback global (L1 -> L2 -> L3)
 		p, errHydration := getPostWithFallback(ctx, postID)
 		if errHydration != nil || p.Visibility != variables.PostVisibilityAll {
-			continue // Sécurité : Les posts privés (Abonnés/Amis) n'influencent pas les tendances mondiales
+			continue // Sécurité : Seuls les posts publics (PostVisibilityAll) alimentent les tendances mondiales
 		}
 
 		ageSeconds := now.Sub(domain.MillisToTime(p.CreatedAt)).Seconds()

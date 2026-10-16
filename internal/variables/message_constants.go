@@ -5,7 +5,7 @@ package variables
 // ############################################################################
 
 const (
-	// Types de messages
+	// Types de messages (Énumérations BDD immuables)
 	MessageTypeText   = 0
 	MessageTypeVoice  = 1
 	MessageTypeMedia  = 2
@@ -18,7 +18,7 @@ const (
 	MessageTypeSurvey = 9
 	MessageTypeWidget = 10
 
-	// System Actions
+	// System Actions (Clés protocolaires immuables)
 	SysActionMemberJoinedWithLink = "member_joined_link"
 	SysActionMemberJoinedThanksTo = "memner_joined_thanks_to"
 	SysActionMemberBanned         = "member_banned"
@@ -27,7 +27,10 @@ const (
 	SysActionMemberMuted          = "member_muted"
 )
 
-var AllowedWidgetTypes = []string{"action_button", "link_card", "poll"}
+var (
+	// Liste des types de widgets autorisés (Modifiable à chaud)
+	AllowedWidgetTypes = []string{"action_button", "link_card", "poll"}
+)
 
 // ShouldAllowNewReactions determines whether a message type is permitted to allow new reactions.
 // Restricted message types 6 (Invite), 8 (System), 9 (Survey), and 10 (Widget) strictly prohibit new reactions.

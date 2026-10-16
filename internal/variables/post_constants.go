@@ -1,7 +1,7 @@
 package variables
 
 // ############################################################################
-// # PARAMÈTRES ET CONSTANTES DU DOMAINE POSTS
+// # CONSTANTES STRUCTURELLES ET ÉNUMÉRATIONS DU DOMAINE POSTS (IMMUABLES)
 // ############################################################################
 
 const (
@@ -14,14 +14,18 @@ const (
 	TagPermissionFriends   = 2
 	TagPermissionNobody    = 3
 
-	// Niveaux de visibilité pour les posts
+	// Niveaux de visibilité pour les posts (0=Public, 1=Abonnés, 2=Amis, -1=Supprimé)
 	PostVisibilityDeleted   = -1
 	PostVisibilityAll       = 0
 	PostVisibilitySubcriber = 1
 	PostVisibilityFriend    = 2
 )
 
-const (
+// ############################################################################
+// # QUOTAS DYNAMIQUES PAR PUBLICATION
+// ############################################################################
+
+var (
 	MaxHashtagsPerPost    = 20
 	MaxIdentifiersPerPost = 10
 	MaxMediaPerPost       = 4
