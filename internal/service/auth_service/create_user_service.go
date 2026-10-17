@@ -17,6 +17,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
+	"github.com/QuentinRegnier/numan-backend/internal/service/email_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/media_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
@@ -198,6 +199,22 @@ func CreateUser(ctx context.Context, input auth_models.SignUpInput, ipAddress st
 			avatarView = view
 		}
 	}
+
+	// EXPÉDITION ASYNCHRONE DE L'EMAIL DE BIENVENUE
+	// Exécuté dans une goroutine dédiée avec context.Background() pour ne pas impacter le temps de réponse HTTP (< 5ms)
+	go func(targetID int64, email, username string) {
+		bgCtx := context.Background()
+		_ = email_service.DispatchEmail(
+			bgCtx,
+			targetID,
+			email,
+			"welcome",
+			"Bienvenue sur Numan !",
+			map[string]any{
+				"Username": username,
+			},
+		)
+	}(userPayload.ID, userPayload.Email, userPayload.Username)
 
 	return auth_models.SignUpResponse{
 		UserID:      newUserID,

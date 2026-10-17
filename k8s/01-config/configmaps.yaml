@@ -47,6 +47,11 @@ data:
   # Informational for the app (if it reads it). The real container limit is set in
   # 03-databases/redis.yaml (4608Mi). Keep the two consistent.
   REDIS_CONTAINER_LIMIT: "4.5gb"
+
+  # --- SMTP / EMAIL (source: .env) --------------------------------------------
+  SMTP_HOST: "${SMTP_HOST}"
+  SMTP_PORT: "${SMTP_PORT}"
+  SMTP_FROM_ADDRESS: "${SMTP_FROM_ADDRESS}"
 ---
 # Settings used ONLY by the MinIO bootstrap Jobs (04-storage/bucket-init-jobs.yaml).
 # Not injected into the application.

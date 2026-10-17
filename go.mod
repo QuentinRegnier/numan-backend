@@ -11,14 +11,15 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.2.3
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/jdeng/goheif v0.0.0-20260407171156-9bf5264f67af
 	github.com/kljensen/snowball v0.10.0
 	github.com/lib/pq v1.10.9
 	github.com/minio/minio-go/v7 v7.0.97
+	github.com/rs/zerolog v1.35.1
 	github.com/swaggo/swag v1.16.6
 	github.com/vmihailenco/msgpack/v5 v5.4.1
+	github.com/wneessen/go-mail v0.8.1
 	go.mongodb.org/mongo-driver v1.17.4
-	google.golang.org/api v0.293.0
+	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
 require (
@@ -52,7 +53,6 @@ require (
 	github.com/googleapis/gax-go/v2 v2.23.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
-	github.com/rs/zerolog v1.35.1 // indirect
 	github.com/spiffe/go-spiffe/v2 v2.7.0 // indirect
 	github.com/tetratelabs/wazero v1.9.0 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
@@ -67,12 +67,12 @@ require (
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
+	google.golang.org/api v0.293.0 // indirect
 	google.golang.org/appengine/v2 v2.0.6 // indirect
 	google.golang.org/genproto v0.0.0-20260511170946-3700d4141b60 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260630182238-925bb5da69e7 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260807164820-c8921c73eeea // indirect
 	google.golang.org/grpc v1.83.0 // indirect
-	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 )
 
 require (
@@ -125,7 +125,7 @@ require (
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	golang.org/x/arch v0.8.0 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
-	golang.org/x/image v0.39.0
+	golang.org/x/image v0.39.0 // indirect
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect

@@ -1,0 +1,130 @@
+# Maddy Mail Server - SINGLE INSTANCE (MTA / Serveur SMTP sortant)
+#   * Agit comme un relai SMTP intelligent : accepte les emails de l'API Numan sur le port 2525,
+#     les signe avec DKIM, et les expédie vers l'extérieur (Gmail, Apple, etc.).
+#   * StatefulSet : Maddy maintient une file d'attente sur disque (queue). En cas de coupure réseau
+#     vers un serveur cible, il stocke l'email et retente plus tard sans perdre la donnée.
+#   * Sécurité : Ne tourne pas en root, système de fichiers en lecture seule (sauf /data),
+#     et n'est exposé à aucun Ingress public (l'API communique en ClusterIP).
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: maddy-headless
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: maddy
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: app
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: maddy
+  ports:
+    - {name: smtp-internal, port: 2525, targetPort: smtp-internal}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: maddy
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: maddy
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: app
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: maddy
+  ports:
+    - {name: smtp-internal, port: 2525, targetPort: smtp-internal}
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: maddy
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: maddy
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: app
+spec:
+  serviceName: maddy-headless
+  replicas: 1
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: maddy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: maddy
+        app.kubernetes.io/part-of: numan
+        app.kubernetes.io/component: app
+        numan.io/egress-internet-smtp: "true" # Label custom pour autoriser la sortie vers le port 25
+    spec:
+      serviceAccountName: api # On réutilise le service account par défaut sans droits K8s
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000   # Maddy user
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: maddy
+          image: foxcpp/maddy:0.7.1 # Toujours pinner une version en prod
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: smtp-internal, containerPort: 2525}
+          env:
+            - name: MADDY_HOSTNAME
+              value: "mail.${NUMAN_DOMAIN}"
+            - name: MADDY_DOMAIN
+              value: "${NUMAN_DOMAIN}"
+          readinessProbe:
+            tcpSocket: {port: smtp-internal}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket: {port: smtp-internal}
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: data, mountPath: /data} # Base SQLite de maddy et queues
+            - {name: dkim-keys, mountPath: /dkim, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {}}
+        - name: dkim-keys
+          secret:
+            secretName: maddy-dkim-keys # Le secret qu'on créera avec scripts/create-secrets.sh
+            optional: true # Permet au pod de démarrer même si on n'a pas encore setup le DKIM
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: maddy
+          app.kubernetes.io/part-of: numan
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: "1Gi" # Très peu d'espace requis, les emails ne font que transiter

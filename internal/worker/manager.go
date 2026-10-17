@@ -51,6 +51,9 @@ func StartBackgroundWorkers(ctx context.Context) {
 	// Initialise Firebase Cloud Messaging et consomme les requêtes de Push
 	startPushNotificationWorker(ctx)
 
+	// Initialise le client SMTP et consomme les requêtes d'Emails Sortants
+	go startEmailWorker(ctx)
+
 	// ── ÉTAPE 4 : DÉPLOIEMENT DU WORKER POOL (SHARDING) ─────────────────────
 	// L'infrastructure asynchrone repose sur 64 Shards Redis pour annuler
 	// la contention (Locking) et traiter massivement les flux d'E/S en parallèle.

@@ -88,6 +88,7 @@ spec:
         numan.io/uses-minio-hot: "true"
         numan.io/uses-minio-cold: "true"
         numan.io/egress-internet: "true"
+        numan.io/uses-smtp: "true"
     spec:
       serviceAccountName: api
       automountServiceAccountToken: false
@@ -167,6 +168,17 @@ spec:
               valueFrom: {secretKeyRef: {name: numan-app-secrets, key: HMAC_SECRET}}
             - name: WATERMARK_SECRET_KEY
               valueFrom: {secretKeyRef: {name: numan-app-secrets, key: WATERMARK_SECRET_KEY}}
+            # ---- SMTP (Email) ----           # <--- AJOUTE TOUT CE BLOC ICI
+            - name: SMTP_HOST
+              valueFrom: { configMapKeyRef: { name: numan-config, key: SMTP_HOST } }
+            - name: SMTP_PORT
+              valueFrom: { configMapKeyRef: { name: numan-config, key: SMTP_PORT } }
+            - name: SMTP_FROM_ADDRESS
+              valueFrom: { configMapKeyRef: { name: numan-config, key: SMTP_FROM_ADDRESS } }
+            - name: SMTP_USER
+              valueFrom: { secretKeyRef: { name: numan-app-secrets, key: SMTP_USER } }
+            - name: SMTP_PASSWORD
+              valueFrom: { secretKeyRef: { name: numan-app-secrets, key: SMTP_PASSWORD } }
             # ---- S3 (hot): least-privilege user created by minio-hot-init (legacy value was the MinIO root user) ----
             - name: S3_ACCESS_KEY
               valueFrom: {secretKeyRef: {name: minio-hot-users, key: S3_ACCESS_KEY}}

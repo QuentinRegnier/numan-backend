@@ -30,6 +30,7 @@ resources:
   - 05-apps/api.yaml
   - 05-apps/worker.yaml
   - 05-apps/watermark.yaml
+  - 05-apps/maddy.yaml
   - 06-ingress/middleware.yaml
   - 06-ingress/ingress.yaml
   - 07-autoscaling/hpa.yaml

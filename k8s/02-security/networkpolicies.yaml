@@ -289,6 +289,75 @@ spec:
       ports:
         - {protocol: TCP, port: 9000}
 ---
+# -------------------------------------------------------------------------
+# Datastore access: maddy:2525 (MTA Interne)
+# -------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-maddy
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: maddy
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              numan.io/uses-smtp: "true"
+      ports:
+        - {protocol: TCP, port: 2525}
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-to-maddy
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      numan.io/uses-smtp: "true"
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: maddy
+      ports:
+        - {protocol: TCP, port: 2525}
+
+# -------------------------------------------------------------------------
+# Outbound SMTP (pour expédier les emails via Internet)
+# Maddy a besoin d'interroger les serveurs MX distants (port 25, 465, 587)
+# -------------------------------------------------------------------------
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-internet-smtp
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      numan.io/egress-internet-smtp: "true"
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+              - 100.64.0.0/10
+      ports:
+        - {protocol: TCP, port: 25}
+        - {protocol: TCP, port: 465}
+        - {protocol: TCP, port: 587}
 # Outbound HTTPS (push providers, off-site backup target, ...) for labelled pods only.
 # Private/link-local ranges are excluded so this cannot be used to reach the cluster or node network.
 apiVersion: networking.k8s.io/v1

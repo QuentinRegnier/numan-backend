@@ -35,6 +35,10 @@ services:
       - ./k8s/01-config/secrets.env
     environment:
       - NODE_ID=1
+      # --- INJECTION SMTP LOCAL ---
+      - SMTP_HOST=mailpit
+      - SMTP_PORT=1025
+      - SMTP_FROM_ADDRESS=dev@numan.local
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.api.rule=PathPrefix(`/`)"
@@ -191,6 +195,22 @@ services:
       - "8081:8081"
     depends_on:
       - redis
+    
+  # --- 7. SERVEUR MAIL LOCAL (FAUX FACTEUR) ---
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: numan_mailpit
+    environment:
+      MP_MAX_MESSAGES: 500
+      MP_WEBROOT: /mailpit  # Essentiel pour que l'UI fonctionne derrière le PathPrefix Traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mailpit.rule=PathPrefix(`/mailpit`)"
+      - "traefik.http.routers.mailpit.entrypoints=web"
+      - "traefik.http.services.mailpit.loadbalancer.server.port=8025"
+    # Note : Le port 1025 (SMTP) n'est volontairement pas exposé sur l'hôte.
+    # Il reste confiné au réseau 'internal' de Docker pour l'API.
+    restart: always
 
 volumes:
   redis_data:
