@@ -66,6 +66,8 @@ func flushMongo(ctx context.Context, events []redis.AsyncEvent) {
 			c = mongo.Saved
 		case redis.EntityNotification:
 			c = mongo.Notifications
+		case redis.EntityPasskey:
+			c = mongo.Passkeys
 		default:
 			numan_log.Error(ctx).Interface("entity", entity).Msg("Worker Mongo : Entité non reconnue ou sans collection définie")
 			continue

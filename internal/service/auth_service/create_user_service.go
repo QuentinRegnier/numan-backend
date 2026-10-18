@@ -59,6 +59,11 @@ func CreateUser(ctx context.Context, input auth_models.SignUpInput, ipAddress st
 		return auth_models.SignUpResponse{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le genre sélectionné n'est pas reconnu.", nil)
 	}
 
+	// Interception Double Authentification (2FA) si demandée dès l'inscription
+	if input.TwoFactorMethod > 0 {
+		return initiateSignupTwoFactorChallenge(ctx, input, ipAddress)
+	}
+
 	// ── ÉTAPE 2 : GÉNÉRATION DES MODÈLES DE DONNÉES (La source de vérité) ──
 
 	currentTime := time.Now().UTC()
@@ -96,6 +101,9 @@ func CreateUser(ctx context.Context, input auth_models.SignUpInput, ipAddress st
 		Badges:           auth_models.UserBadges{},
 		Desactivated:     false,
 		Banned:           false,
+		TwoFactorEnabled: false,
+		TwoFactorMethod:  0,
+		TOTPSecret:       "",
 		CreatedAt:        domain.TimeToMillis(currentTime),
 		UpdatedAt:        domain.TimeToMillis(currentTime),
 	}
@@ -217,11 +225,12 @@ func CreateUser(ctx context.Context, input auth_models.SignUpInput, ipAddress st
 	}(userPayload.ID, userPayload.Email, userPayload.Username)
 
 	return auth_models.SignUpResponse{
-		UserID:      newUserID,
-		MasterToken: sessionPayload.MasterToken,
-		JWT:         newJWT,
-		ExpiresAt:   sessionPayload.ExpiresAt,
-		Message:     "Inscription validée avec succès.",
-		Avatar:      avatarView,
+		RequiresTwoFactor: false,
+		UserID:            newUserID,
+		MasterToken:       sessionPayload.MasterToken,
+		JWT:               newJWT,
+		ExpiresAt:         sessionPayload.ExpiresAt,
+		Message:           "Inscription validée avec succès.",
+		Avatar:            avatarView,
 	}, nil
 }

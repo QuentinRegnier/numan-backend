@@ -16,6 +16,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/relation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/report_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/saved_models"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/models/two_factor_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/user_settings_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
@@ -72,6 +73,8 @@ func getMapper(entity redis.EntityType) entityMapper {
 		// WB-9: Ces entités sont traitées exclusivement au niveau de la dénormalisation des métriques
 		// (updateCountersPostgres) et ne représentent pas de lignes relationnelles indépendantes.
 		return nil
+	case redis.EntityPasskey:
+		return &passkeyMapper{}
 	default:
 		return nil
 	}
@@ -84,6 +87,7 @@ func getMapper(entity redis.EntityType) entityMapper {
 // ============================================================================
 // MAPPER : UTILISATEURS (auth.users)
 // ============================================================================
+
 type userMapper struct{}
 
 func (m *userMapper) TableName() string { return "auth.users" }
@@ -93,84 +97,79 @@ func (m *userMapper) Columns() []string {
 		"id", "username", "email", "email_verified", "phone", "phone_verified",
 		"password_hash", "first_name", "last_name", "birthdate", "sex", "bio",
 		"profile_picture_id", "grade", "location", "school", "work", "badges",
-		"desactivated", "banned", "ban_reason", "ban_expires_at",
-		"created_at", "updated_at",
+		"desactivated", "banned", "ban_reason", "ban_expires_at", "created_at", "updated_at",
+		"two_factor_enabled", "two_factor_method", "totp_secret",
 	}
 }
 
 func (m *userMapper) ToRow(data any) ([]any, error) {
-	// ── ÉTAPE 1 : DÉSÉRIALISATION ───────────────────────────────────────────
+	// ── ÉTAPE 1 : DÉSÉRIALISATION ──
 	jsonBytes, err := json.Marshal(data)
 	if err != nil {
 		numan_log.Error(context.Background()).Err(err).Msg("UserMapper : Échec de la sérialisation du payload générique")
 		return nil, numan_error.NewInternal()
 	}
-
 	var u auth_models.UserPayload
 	if err := json.Unmarshal(jsonBytes, &u); err != nil {
 		numan_log.Error(context.Background()).Err(err).Msg("UserMapper : Échec de la désérialisation vers le modèle métier")
 		return nil, numan_error.NewInternal()
 	}
 
-	// ── ÉTAPE 2 : TRANSLATION DES VALEURS NULLES (SQL NULL) ─────────────────
+	// ── ÉTAPE 2 : TRANSLATION DES VALEURS NULLES (SQL NULL) ──
 	var phoneDB any = u.Phone
 	if u.Phone == "" {
 		phoneDB = nil
 	}
-
 	var birthdateDB any = u.Birthdate
 	if u.Birthdate == 0 {
 		birthdateDB = nil
 	}
-
 	var bioDB any = u.Bio
 	if u.Bio == "" {
 		bioDB = nil
 	}
-
 	var ppDB any = u.ProfilePictureID
 	if u.ProfilePictureID == 0 {
 		ppDB = nil
 	}
-
 	var locDB any = u.Location
 	if u.Location == "" {
 		locDB = nil
 	}
-
 	var schoolDB any = u.School
 	if u.School == "" {
 		schoolDB = nil
 	}
-
 	var workDB any = u.Work
 	if u.Work == "" {
 		workDB = nil
 	}
-
 	var banReasonDB any = u.BanReason
 	if u.BanReason == "" {
 		banReasonDB = nil
 	}
-
 	var banExpiresDB any = u.BanExpiresAt
 	if u.BanExpiresAt == 0 {
 		banExpiresDB = nil
 	}
+	var totpSecretDB any = u.TOTPSecret
+	if u.TOTPSecret == "" {
+		totpSecretDB = nil
+	}
 
 	badgesJSON, _ := json.Marshal(u.Badges)
 	var badgesDB any = string(badgesJSON)
-	if u.Badges == nil || len(u.Badges) == 0 {
+	if len(u.Badges) == 0 {
 		badgesDB = "{}"
 	}
 
-	// ── ÉTAPE 3 : FORMATAGE DE LA LIGNE SQL ─────────────────────────────────
+	// ── ÉTAPE 3 : FORMATAGE DE LA LIGNE SQL ──
 	return []any{
 		u.ID, u.Username, u.Email, u.EmailVerified, phoneDB, u.PhoneVerified,
 		u.PasswordHash, u.FirstName, u.LastName, birthdateDB, u.Sex, bioDB,
 		ppDB, u.Grade, locDB, schoolDB, workDB, badgesDB,
-		u.Desactivated, u.Banned, banReasonDB, banExpiresDB,
-		u.CreatedAt, u.UpdatedAt,
+		u.Desactivated, u.Banned, banReasonDB, banExpiresDB, u.CreatedAt, u.UpdatedAt,
+		u.TwoFactorEnabled, u.TwoFactorMethod, totpSecretDB,
 	}, nil
 }
 
@@ -305,6 +304,44 @@ func (m *sessionMapper) ToRow(data any) ([]any, error) {
 }
 
 func (m *sessionMapper) BuildUpdateQuery(tempTable string) string {
+	return buildGenericUpdateQuery(m.TableName(), tempTable, m.Columns())
+}
+
+// ============================================================================
+// MAPPER : PASSKEY UTILISATEUR (auth.user_passkeys)
+// ============================================================================
+type passkeyMapper struct{}
+
+func (m *passkeyMapper) TableName() string { return "auth.user_passkeys" }
+func (m *passkeyMapper) Columns() []string {
+	return []string{
+		"id", "user_id", "credential_id", "public_key", "attestation_type",
+		"aaguid", "sign_count", "device_name", "transports", "created_at", "updated_at",
+	}
+}
+
+func (m *passkeyMapper) ToRow(data any) ([]any, error) {
+	jsonBytes, err := json.Marshal(data)
+	if err != nil {
+		numan_log.Error(context.Background()).Err(err).Msg("PasskeyMapper : Échec de la sérialisation")
+		return nil, numan_error.NewInternal()
+	}
+	var p two_factor_models.PasskeyPayload
+	if err := json.Unmarshal(jsonBytes, &p); err != nil {
+		numan_log.Error(context.Background()).Err(err).Msg("PasskeyMapper : Échec de la désérialisation")
+		return nil, numan_error.NewInternal()
+	}
+	var aaguidDB any = p.AAGUID
+	if len(p.AAGUID) == 0 {
+		aaguidDB = nil
+	}
+	return []any{
+		p.ID, p.UserID, p.CredentialID, p.PublicKey, p.AttestationType,
+		aaguidDB, p.SignCount, p.DeviceName, pq.Array(p.Transports), p.CreatedAt, p.UpdatedAt,
+	}, nil
+}
+
+func (m *passkeyMapper) BuildUpdateQuery(tempTable string) string {
 	return buildGenericUpdateQuery(m.TableName(), tempTable, m.Columns())
 }
 

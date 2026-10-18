@@ -60,7 +60,6 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 	members := db.Collection("messaging.conversation_members")
 	messages := db.Collection("messaging.messages")
 	saved := db.Collection("content.saved")
-
 	notifications := db.Collection("activity.notifications")
 
 	// 2. Index de recherche vitaux (comme avant)
@@ -94,9 +93,15 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 		Options: options.Index().SetExpireAfterSeconds(ttl30Days),
 	}
 
+	userPasskeys := db.Collection("auth.user_passkeys")
+	_, _ = userPasskeys.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{Keys: bson.D{{Key: "user_id", Value: 1}, {Key: "created_at", Value: -1}}},
+		{Keys: bson.D{{Key: "credential_id", Value: 1}}, Options: options.Index().SetUnique(true)},
+	})
+
 	slidingCollections := []*mongo.Collection{
 		users, userSettings, sessions, relations, posts, comments,
-		likes, media, conversations, members, messages, saved,
+		likes, media, conversations, members, messages, saved, userPasskeys,
 	}
 
 	var ttlErrs []error

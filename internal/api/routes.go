@@ -24,6 +24,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/security_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/sync_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/telemetry_handlers"
+	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/two_factor_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/user_settings_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/websocket"
 	"github.com/golang-jwt/jwt/v5"
@@ -57,6 +58,10 @@ func SetupRoutes(r *gin.Engine) {
 	r.POST("/signup", auth_handlers.SignUpHandler)                         //
 	r.POST("/login", auth_handlers.LoginHandler)                           //
 	r.POST("/check-username", user_settings_handlers.CheckUsernameHandler) //
+	r.POST("/verify-2fa/email", two_factor_handlers.VerifyTwoFactorEmailHandler)
+	r.POST("/verify-2fa/totp", two_factor_handlers.VerifyTwoFactorTOTPHandler)
+	r.POST("/verify-2fa/passkey", two_factor_handlers.VerifyTwoFactorPasskeyHandler)
+	r.POST("/verify-2fa/email/send", two_factor_handlers.SendTwoFactorEmailCodeHandler)
 
 	// Renouvellement de Tokens (Ratchet / Master)
 	// Ces routes gèrent leur propre sécurité (HMAC spécial, checks BDD...)
@@ -104,6 +109,11 @@ func SetupRoutes(r *gin.Engine) {
 	secured.DELETE("/session/delete", auth_handlers.DeleteSessionHandler) //
 	secured.POST("/profile/get", profile_handlers.GetProfileHandler)
 	secured.POST("/certification", auth_handlers.AddCertificationHandler)
+	secured.POST("/auth/2fa/setup", two_factor_handlers.SetupTwoFactorHandler)
+	secured.POST("/auth/2fa/confirm", two_factor_handlers.ConfirmTwoFactorSetupHandler)
+	secured.POST("/auth/2fa/disable", two_factor_handlers.DisableTwoFactorHandler)
+	secured.GET("/auth/passkeys", two_factor_handlers.GetPasskeysHandler)
+	secured.DELETE("/auth/passkeys", two_factor_handlers.DeletePasskeyHandler)
 
 	// --- Posts ---
 	secured.POST("/feed/get", feed_handlers.GetFeedHandler) //
@@ -156,8 +166,6 @@ func SetupRoutes(r *gin.Engine) {
 	secured.PUT("/settings/display/update", user_settings_handlers.UpdateDisplayHandler)             //
 
 	// --- Administration / Modération ---
-	secured.GET("/admin/variables/get", variables_handlers.GetVariablesHandler)
-	secured.PATCH("/admin/variables/update", variables_handlers.UpdateVariablesHandler)
 	secured.POST("/ban", BanHandler)                                            // ℹ️❌
 	secured.POST("/restriction", RestrictionHandler)                            // ℹ️❌
 	secured.POST("/warning", WarningHandler)                                    // ℹ️❌
@@ -211,6 +219,21 @@ func SetupRoutes(r *gin.Engine) {
 
 	// --- Report ---
 	secured.POST("/report", report_handlers.CreateReportHandler) //
+
+	// =========================================================================
+	// 3. ROUTES ADMIN (JWT + HMAC + RATCHET + WireGuard + Rôle Admin)
+	// Toutes les routes ci-dessous nécessitent :
+	// - Un JWT valide (Identity)
+	// - Une signature HMAC valide (Integrity & Anti-Replay)
+	// =========================================================================
+	adminGroup := r.Group("/admin/")
+	adminGroup.Use(middleware.JWTMiddleware())  // 1. Qui est-ce ? (Populate context with UserID & FirebaseInstallationIDs)
+	adminGroup.Use(middleware.HMACMiddleware()) // 2. Est-ce authentique ? (Check Signature with Redis Secret)
+	adminGroup.Use(middleware.AdminGuard())
+
+	// L'équivalent de ton "Admin.PATCH" devient simplement l'utilisation de ce groupe
+	adminGroup.PATCH("/variables/update", variables_handlers.UpdateVariablesHandler)
+	adminGroup.GET("/variables/get", variables_handlers.GetVariablesHandler)
 }
 
 // BanHandler godoc

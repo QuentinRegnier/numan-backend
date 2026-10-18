@@ -48,8 +48,8 @@ const (
 	EntityReport          EntityType = "Reports"
 	EntityTelemetry       EntityType = "Telemetry" // NOUVEAU : Pour router les Dwell Times et Clics
 	EntitySaved           EntityType = "Saved"
-
-	EntityNotification EntityType = "Notifications"
+	EntityPasskey         EntityType = "Passkeys"
+	EntityNotification    EntityType = "Notifications"
 )
 
 // DBTarget : Bitmask pour savoir où envoyer (Mongo, Postgres, ou les deux)

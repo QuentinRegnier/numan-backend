@@ -33,6 +33,8 @@ func redis2Mongo(ctx context.Context, entity redis.EntityType) (*Collection, err
 		return Members, nil
 	case redis.EntityMessage:
 		return Messages, nil
+	case redis.EntityPasskey:
+		return Passkeys, nil
 	default:
 		numan_log.Error(ctx).Str("entity", string(entity)).Msg("Entité non supportée pour la résolution de la collection MongoDB")
 		return nil, numan_error.NewInternal()

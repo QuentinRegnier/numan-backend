@@ -103,18 +103,12 @@ func LoginHandler(c *gin.Context) {
 		return
 	}
 
-	userID, sessions, jwtToken, err := auth_service.Login(c.Request.Context(), input, []string{c.ClientIP()})
+	response, err := auth_service.Login(c.Request.Context(), input, []string{c.ClientIP()})
 	if err != nil {
 		// Le service a déjà qualifié l'erreur (Banni, Identifiants incorrects, Désactivé)
 		numan_error.RespondWithError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, auth_models.LoginResponse{
-		UserID:      userID,
-		MasterToken: sessions.MasterToken,
-		JWT:         jwtToken,
-		ExpiresAt:   sessions.ExpiresAt,
-		Message:     "Login successful",
-	})
+	c.JSON(http.StatusOK, response)
 }

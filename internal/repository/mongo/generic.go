@@ -31,8 +31,8 @@ var (
 	Messages         *Collection
 	MessageReactions *Collection
 	Saved            *Collection
-
-	Notifications *Collection
+	Passkeys         *Collection
+	Notifications    *Collection
 )
 
 // InitCacheDatabase initialise la structure logique de Redis pour les caches
@@ -52,7 +52,7 @@ func InitCacheDatabase() {
 	schemaMessages := schemas.MessagesSchema
 	schemaMessageReactions := schemas.MessageReactionsSchema
 	schemaSaved := schemas.SavedSchema
-
+	schemaPasskeys := schemas.PasskeysSchema
 	schemaNotifications := schemas.NotificationsSchema
 
 	// variables globales
@@ -69,7 +69,7 @@ func InitCacheDatabase() {
 	Messages = newMongoCollection("numan_mongo", "messaging.messages", schemaMessages)
 	MessageReactions = newMongoCollection("numan_mongo", "messaging.message_reactions", schemaMessageReactions)
 	Saved = newMongoCollection("numan_mongo", "content.saved", schemaSaved)
-
+	Passkeys = newMongoCollection("numan_mongo", "auth.user_passkeys", schemaPasskeys)
 	Notifications = newMongoCollection("numan_mongo", "activity.notifications", schemaNotifications)
 
 	numan_log.Info(context.Background()).Msg("Structure de collections MongoDB initialisée")

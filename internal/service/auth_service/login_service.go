@@ -25,9 +25,9 @@ import (
 // # SERVICE : CONNEXION UTILISATEUR (LOGIN)
 // ############################################################################
 
-// Login retourne uniquement les tokens et l'ID utilisateur.
+// Login retourne la réponse de connexion (tokens directs ou challenge 2FA).
 // Les métadonnées complètes (profil, avatar) seront appelées plus tard via /sync.
-func Login(ctx context.Context, input auth_models.LoginInput, ipAddresses []string) (int64, auth_models.SessionsPayload, string, error) {
+func Login(ctx context.Context, input auth_models.LoginInput, ipAddresses []string) (auth_models.LoginResponse, error) {
 	numan_log.Info(ctx).Str("email", input.Email).Msg("Tentative de connexion entrante...")
 
 	var userPayload auth_models.UserPayload
@@ -46,12 +46,12 @@ func Login(ctx context.Context, input auth_models.LoginInput, ipAddresses []stri
 		var errPg error
 		userPayload, errPg = postgresgo.FuncLoadUser(ctx, -1, "", input.Email, "")
 		if errPg != nil {
-			return -1, auth_models.SessionsPayload{}, "", numan_error.NewInternal()
+			return auth_models.LoginResponse{}, numan_error.NewInternal()
 		}
 
 		if userPayload.ID == 0 {
 			// SÉCURITÉ : On ne dit jamais si l'email existe ou pas (Prévention de l'énumération de comptes)
-			return -1, auth_models.SessionsPayload{}, "", numan_error.NewUnauthorized(numan_error.CodeUnauthorized, "L'email ou le mot de passe est incorrect.", nil)
+			return auth_models.LoginResponse{}, numan_error.NewUnauthorized(numan_error.CodeUnauthorized, "L'email ou le mot de passe est incorrect.", nil)
 		}
 
 		// AUTO-GUÉRISON L3 -> L2 (Asynchrone via Queue)
@@ -64,15 +64,20 @@ func Login(ctx context.Context, input auth_models.LoginInput, ipAddresses []stri
 
 	// Vérification du mot de passe
 	if strings.TrimSpace(userPayload.PasswordHash) != strings.TrimSpace(input.PasswordHash) {
-		return -1, auth_models.SessionsPayload{}, "", numan_error.NewUnauthorized(numan_error.CodeUnauthorized, "L'email ou le mot de passe est incorrect.", nil)
+		return auth_models.LoginResponse{}, numan_error.NewUnauthorized(numan_error.CodeUnauthorized, "L'email ou le mot de passe est incorrect.", nil)
 	}
 
 	// Vérification des suspensions
 	if userPayload.Desactivated || userPayload.Banned {
 		if userPayload.Desactivated {
-			return -1, auth_models.SessionsPayload{}, "", numan_error.NewForbidden(numan_error.CodeForbidden, "Ce compte est actuellement désactivé.", nil)
+			return auth_models.LoginResponse{}, numan_error.NewForbidden(numan_error.CodeForbidden, "Ce compte est actuellement désactivé.", nil)
 		}
-		return -1, auth_models.SessionsPayload{}, "", numan_error.NewForbidden(numan_error.CodeForbidden, "Accès refusé : Ce compte a été banni.", nil)
+		return auth_models.LoginResponse{}, numan_error.NewForbidden(numan_error.CodeForbidden, "Accès refusé : Ce compte a été banni.", nil)
+	}
+
+	// Interception Double Authentification (2FA)
+	if userPayload.TwoFactorEnabled && userPayload.TwoFactorMethod > 0 {
+		return initiateLoginTwoFactorChallenge(ctx, userPayload, input, ipAddresses)
 	}
 
 	// ── ÉTAPE 3 : GESTION DE LA SESSION DE L'APPAREIL (CASCADE L1->L2->L3) ──
@@ -85,22 +90,22 @@ func Login(ctx context.Context, input auth_models.LoginInput, ipAddresses []stri
 	sessionPayload, err := cache_service.LoadSessionFromCache(ctx, userPayload.ID, deviceFirebaseID, "")
 	if err != nil {
 		numan_log.Warn(ctx).Err(err).Int64("user_id", userPayload.ID).Str("firebase_id", deviceFirebaseID).Msg("Échec de la récupération de la session depuis le cache L1")
-		return -1, auth_models.SessionsPayload{}, "", numan_error.NewInternal()
+		return auth_models.LoginResponse{}, numan_error.NewInternal()
 	}
 
 	if sessionPayload.ID == 0 {
 		// FALLBACK L2 (Mongo)
-		sessionPayload, err := mongo.MongoLoadSession(ctx, userPayload.ID, deviceFirebaseID, "", "")
+		sessionPayload, err = mongo.MongoLoadSession(ctx, userPayload.ID, deviceFirebaseID, "", "")
 		if err != nil {
 			numan_log.Warn(ctx).Err(err).Int64("user_id", userPayload.ID).Str("firebase_id", deviceFirebaseID).Msg("Échec de la récupération de la session depuis Mongo L2")
 		}
 
 		if sessionPayload.ID == 0 {
 			// FALLBACK L3 (Postgres)
-			sessionPayload, err := postgresgo.FuncLoadSession(ctx, -1, userPayload.ID, deviceFirebaseID, "")
+			sessionPayload, err = postgresgo.FuncLoadSession(ctx, -1, userPayload.ID, deviceFirebaseID, "")
 			if err != nil {
 				numan_log.Warn(ctx).Err(err).Int64("user_id", userPayload.ID).Str("firebase_id", deviceFirebaseID).Msg("Échec de la récupération de la session depuis Postgres L3")
-				return -1, auth_models.SessionsPayload{}, "", numan_error.NewInternal()
+				return auth_models.LoginResponse{}, numan_error.NewInternal()
 			}
 
 			if sessionPayload.ID != 0 {
@@ -121,7 +126,7 @@ func Login(ctx context.Context, input auth_models.LoginInput, ipAddresses []stri
 			err = cache_service.SetSessionInCache(ctx, sessionPayload)
 			if err != nil {
 				numan_log.Warn(ctx).Err(err).Int64("session_id", sessionPayload.ID).Msg("Échec de la guérison L1 pour la session")
-				return -1, auth_models.SessionsPayload{}, "", numan_error.NewInternal()
+				return auth_models.LoginResponse{}, numan_error.NewInternal()
 			}
 		}
 	}
@@ -145,7 +150,7 @@ func Login(ctx context.Context, input auth_models.LoginInput, ipAddresses []stri
 		if len(ipAddresses) > 0 {
 			sessionPayload.IPHistory = []string{ipAddresses[0]}
 		} else {
-			return -1, auth_models.SessionsPayload{}, "", numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'adresse IP est requise pour authentifier une nouvelle connexion.", nil)
+			return auth_models.LoginResponse{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'adresse IP est requise pour authentifier une nouvelle connexion.", nil)
 		}
 	}
 
@@ -155,7 +160,7 @@ func Login(ctx context.Context, input auth_models.LoginInput, ipAddresses []stri
 
 	sessionPayload.MasterToken, errToken = pkg.GenerateToken(userPayload.ID, deviceFirebaseID, variables.MasterTokenExpirationSeconds)
 	if errToken != nil {
-		return -1, auth_models.SessionsPayload{}, "", numan_error.NewInternal()
+		return auth_models.LoginResponse{}, numan_error.NewInternal()
 	}
 
 	sessionPayload.CurrentSecret = security.DeriveNextSecret(sessionPayload.FirebaseInstallationID, sessionPayload.MasterToken, sessionPayload.MasterToken, sessionPayload.FirebaseInstallationID)
@@ -165,7 +170,7 @@ func Login(ctx context.Context, input auth_models.LoginInput, ipAddresses []stri
 
 	newJWT, errJwt := pkg.GenerateToken(userPayload.ID, sessionPayload.FirebaseInstallationID, variables.JWTExpirationSeconds)
 	if errJwt != nil {
-		return -1, auth_models.SessionsPayload{}, "", numan_error.NewInternal()
+		return auth_models.LoginResponse{}, numan_error.NewInternal()
 	}
 
 	// ── ÉTAPE 4 : SYNCHRONISATION L1 & SPEED CACHE (Cold Start User) ────────
@@ -181,7 +186,7 @@ func Login(ctx context.Context, input auth_models.LoginInput, ipAddresses []stri
 		err = cache_service.MarkUserTimelineEmpty(ctx, userPayload.ID)
 		if err != nil {
 			numan_log.Warn(ctx).Err(err).Int64("user_id", userPayload.ID).Msg("Échec initialisation Timeline ZSET lors du Login")
-			return -1, auth_models.SessionsPayload{}, "", numan_error.NewInternal()
+			return auth_models.LoginResponse{}, numan_error.NewInternal()
 		}
 	}
 
@@ -191,12 +196,12 @@ func Login(ctx context.Context, input auth_models.LoginInput, ipAddresses []stri
 		settingsPayload, err := object_cache_service.GetUserSettingsCascade(ctx, userPayload.ID)
 		if err != nil {
 			numan_log.Warn(ctx).Err(err).Int64("user_id", userPayload.ID).Msg("Échec récupération Settings pour Speed Cache lors du Login")
-			return -1, auth_models.SessionsPayload{}, "", numan_error.NewInternal()
+			return auth_models.LoginResponse{}, numan_error.NewInternal()
 		}
 		err = cache_service.AddUserToSpeedCache(ctx, userPayload, settingsPayload)
 		if err != nil {
 			numan_log.Warn(ctx).Err(err).Int64("user_id", userPayload.ID).Msg("Échec ajout User au Speed Cache lors du Login")
-			return -1, auth_models.SessionsPayload{}, "", numan_error.NewInternal()
+			return auth_models.LoginResponse{}, numan_error.NewInternal()
 		}
 	}
 
@@ -213,5 +218,12 @@ func Login(ctx context.Context, input auth_models.LoginInput, ipAddresses []stri
 		numan_log.Error(context.Background()).Err(errQueue).Int64("session_id", sessionPayload.ID).Msg("Rupture du Write-Behind pour la session lors du Login")
 	}
 
-	return userPayload.ID, sessionPayload, newJWT, nil
+	return auth_models.LoginResponse{
+		RequiresTwoFactor: false,
+		UserID:            userPayload.ID,
+		MasterToken:       sessionPayload.MasterToken,
+		JWT:               newJWT,
+		ExpiresAt:         sessionPayload.ExpiresAt,
+		Message:           "Login successful",
+	}, nil
 }

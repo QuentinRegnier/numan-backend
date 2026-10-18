@@ -50,6 +50,10 @@ const (
 	CodeMissingFile           = "MISSING_FILE"
 	CodeFileReadError         = "FILE_READ_ERROR"
 	CodeUserIsNotIdentified   = "USER_NOT_IDENTIFIED"
+	CodeTwoFactorRequired     = "TWO_FACTOR_REQUIRED"
+	CodeTwoFactorInvalid      = "TWO_FACTOR_INVALID_PROOF"
+	CodeTwoFactorExpired      = "TWO_FACTOR_SESSION_EXPIRED"
+	CodePasskeyCloneAlert     = "PASSKEY_CLONE_DETECTED"
 )
 
 // ############################################################################

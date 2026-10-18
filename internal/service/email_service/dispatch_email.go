@@ -62,3 +62,23 @@ func DispatchEmail(ctx context.Context, userID int64, targetEmail string, templa
 
 	return nil
 }
+
+// DispatchSecurityEmail expédie un email critique de sécurité (OTP 2FA) sans filtrage par les préférences marketing/sociales.
+func DispatchSecurityEmail(ctx context.Context, targetEmail string, templateName string, subject string, data map[string]any) error {
+	payload := email_models.EmailPayload{
+		RecipientEmail: targetEmail,
+		TemplateName:   templateName,
+		Subject:        subject,
+		Data:           data,
+	}
+	payloadBytes, errMarshal := json.Marshal(payload)
+	if errMarshal != nil {
+		numan_log.Error(ctx).Err(errMarshal).Str("recipient", targetEmail).Msg("DispatchSecurityEmail : échec de sérialisation")
+		return numan_error.NewInternal(errMarshal)
+	}
+	if errQueue := redis.WorkerQueue.Client.LPush(ctx, variables.EmailWorkerQueueName, payloadBytes).Err(); errQueue != nil {
+		numan_log.Error(ctx).Err(errQueue).Str("recipient", targetEmail).Msg("DispatchSecurityEmail : échec critique LPush Redis")
+		return numan_error.NewInternal(errQueue)
+	}
+	return nil
+}

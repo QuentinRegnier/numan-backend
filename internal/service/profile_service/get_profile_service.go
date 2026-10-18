@@ -124,21 +124,23 @@ func GetProfile(ctx context.Context, callerID int64, input profile_models.GetPro
 	}
 
 	profileOutput.User = auth_models.UserProfileView{
-		ID:        userPayload.ID,
-		Username:  userPayload.Username,
-		FirstName: userPayload.FirstName,
-		LastName:  userPayload.LastName,
-		Birthdate: userPayload.Birthdate,
-		Sex:       userPayload.Sex,
-		Bio:       userPayload.Bio,
-		Grade:     userPayload.Grade,
-		Location:  censoredLocation,
-		School:    userPayload.School,
-		Work:      userPayload.Work,
-		Badges:    userBadges,
-		CreatedAt: userPayload.CreatedAt,
-		UpdatedAt: userPayload.UpdatedAt,
-		IsOnline:  isUserOnline,
+		ID:               userPayload.ID,
+		Username:         userPayload.Username,
+		FirstName:        userPayload.FirstName,
+		LastName:         userPayload.LastName,
+		TwoFactorMethod:  userPayload.TwoFactorMethod,
+		TwoFactorEnabled: userPayload.TwoFactorEnabled,
+		Birthdate:        userPayload.Birthdate,
+		Sex:              userPayload.Sex,
+		Bio:              userPayload.Bio,
+		Grade:            userPayload.Grade,
+		Location:         censoredLocation,
+		School:           userPayload.School,
+		Work:             userPayload.Work,
+		Badges:           userBadges,
+		CreatedAt:        userPayload.CreatedAt,
+		UpdatedAt:        userPayload.UpdatedAt,
+		IsOnline:         isUserOnline,
 	}
 
 	// ── ÉTAPE 4 : AVATAR (GÉNÉRATION DU LIEN HMAC SIGNÉ) ────────────────────

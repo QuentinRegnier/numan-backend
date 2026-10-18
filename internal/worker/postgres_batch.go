@@ -60,6 +60,7 @@ func flushPostgres(ctx context.Context, events []redis.AsyncEvent) {
 	// Empêche les violations de clés étrangères (Ex: insérer un post avant l'utilisateur).
 	executionOrder := []redis.EntityType{
 		redis.EntityUser,
+		redis.EntityPasskey,
 		redis.EntityUserSettings,
 		redis.EntitySession,
 		redis.EntityRelation,

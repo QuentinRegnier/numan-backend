@@ -23,17 +23,24 @@ type SignUpInput struct {
 	DisplayAndContent      user_settings_models.DisplayAndContentSettings `json:"display_and_content" binding:"omitempty"`
 	Privacy                user_settings_models.PrivacySettings           `json:"privacy" binding:"omitempty"`
 	Notifications          user_settings_models.NotificationSettings      `json:"notifications" binding:"omitempty"`
-	ProfilePictureID       int64                                          `json:"profile_picture_id" binding:"omitempty"` // <-- NOUVEAU
+	ProfilePictureID       int64                                          `json:"profile_picture_id" binding:"omitempty"`
+	TwoFactorMethod        int                                            `json:"two_factor_method" binding:"omitempty,oneof=0 1 2 3"` // 0: Aucun, 1: Email, 2: TOTP, 3: Passkey
 }
 
 type SignUpResponse struct {
-	UserID             int64                  `json:"user_id" example:"42"`
-	MasterToken        string                 `json:"master_token" example:"eyJhbGciOiJIUzI1Ni..."`
-	JWT                string                 `json:"jwt" example:"eyJhbGciOiJIUzI1Ni..."`
-	ExpiresAt          int64                  `json:"expires_at"`
+	RequiresTwoFactor  bool                   `json:"requires_two_factor"`
+	TwoFactorMethod    int                    `json:"two_factor_method,omitempty"`
+	PreAuthToken       string                 `json:"pre_auth_token,omitempty"`
+	TOTPSecret         string                 `json:"totp_secret,omitempty"`
+	TOTPQRCodeURI      string                 `json:"totp_qr_uri,omitempty"`
+	PasskeyOptions     any                    `json:"passkey_options,omitempty"`
+	UserID             int64                  `json:"user_id,omitempty" example:"42"`
+	MasterToken        string                 `json:"master_token,omitempty"`
+	JWT                string                 `json:"jwt,omitempty"`
+	ExpiresAt          int64                  `json:"expires_at,omitempty"`
 	Message            string                 `json:"message" example:"User created successfully"`
-	Avatar             media_models.MediaView `json:"avatar"` // <-- REMPLACE ProfilePictureID
-	TelemetryVector    []float32              `json:"telemetry_vector"`
-	TelemetryTopTags   []string               `json:"telemetry_top_tags"`
-	TelemetryTimestamp int64                  `json:"telemetry_timestamp"`
+	Avatar             media_models.MediaView `json:"avatar"`
+	TelemetryVector    []float32              `json:"telemetry_vector,omitempty"`
+	TelemetryTopTags   []string               `json:"telemetry_top_tags,omitempty"`
+	TelemetryTimestamp int64                  `json:"telemetry_timestamp,omitempty"`
 }

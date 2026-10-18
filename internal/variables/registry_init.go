@@ -219,4 +219,9 @@ func init() {
 	// 19. telemetry_constants.go
 	registerInt("MaxGhostScrollTime", "telemetry", &MaxGhostScrollTime, positiveInt)
 	registerInt("MinCognitiveReadTime", "telemetry", &MinCognitiveReadTime, positiveInt)
+
+	// 20. two_factor_constants.go
+	registerDuration("TwoFactorPreAuthTTL", "security", &TwoFactorPreAuthTTL, positiveDuration, nil)
+	registerInt("TwoFactorMaxAttempts", "security", &TwoFactorMaxAttempts, positiveInt)
+	registerDuration("WebAuthnTimeoutMs", "security", &WebAuthnTimeoutMs, positiveDuration, nil)
 }

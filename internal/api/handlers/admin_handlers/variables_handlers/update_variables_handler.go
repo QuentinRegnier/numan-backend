@@ -109,7 +109,7 @@ import (
 // @Failure      403  {object}  numan_error.PublicErrorResponse "Forbidden (Admin grade required)"
 // @Failure      404  {object}  numan_error.PublicErrorResponse "Admin User Not Found"
 // @Failure      500  {object}  numan_error.PublicErrorResponse "Internal Server Error"
-// @Router       /admin/variables/update [patch]
+// @Router       /variables/update [patch]
 func UpdateVariablesHandler(c *gin.Context) {
 	callerID, err := pkg.GetUserIDFromContext(c)
 	if err != nil {

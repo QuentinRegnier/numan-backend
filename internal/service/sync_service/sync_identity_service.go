@@ -67,23 +67,25 @@ func SyncIdentity(ctx context.Context, callerID int64, input sync_models.SyncIde
 
 		// MAPPING SÉCURISÉ : On transfère uniquement les champs publics et autorisés au client
 		output.Profile = auth_models.UserProfileView{
-			ID:        userPayload.ID,
-			Username:  userPayload.Username,
-			Email:     userPayload.Email,
-			Phone:     userPayload.Phone,
-			FirstName: userPayload.FirstName,
-			LastName:  userPayload.LastName,
-			Birthdate: userPayload.Birthdate,
-			Sex:       userPayload.Sex,
-			Bio:       userPayload.Bio,
-			Grade:     userPayload.Grade,
-			Location:  userPayload.Location,
-			School:    userPayload.School,
-			Work:      userPayload.Work,
-			Badges:    userBadges,
-			CreatedAt: userPayload.CreatedAt,
-			UpdatedAt: userPayload.UpdatedAt,
-			IsOnline:  cache_service.IsUserOnline(ctx, userPayload.ID), // O(1) L1 Call
+			ID:               userPayload.ID,
+			Username:         userPayload.Username,
+			Email:            userPayload.Email,
+			Phone:            userPayload.Phone,
+			TwoFactorMethod:  userPayload.TwoFactorMethod,
+			TwoFactorEnabled: userPayload.TwoFactorEnabled,
+			FirstName:        userPayload.FirstName,
+			LastName:         userPayload.LastName,
+			Birthdate:        userPayload.Birthdate,
+			Sex:              userPayload.Sex,
+			Bio:              userPayload.Bio,
+			Grade:            userPayload.Grade,
+			Location:         userPayload.Location,
+			School:           userPayload.School,
+			Work:             userPayload.Work,
+			Badges:           userBadges,
+			CreatedAt:        userPayload.CreatedAt,
+			UpdatedAt:        userPayload.UpdatedAt,
+			IsOnline:         cache_service.IsUserOnline(ctx, userPayload.ID), // O(1) L1 Call
 		}
 
 		// HYDRATATION DE L'AVATAR (Composition par Valeur avec HMAC de sécurité)

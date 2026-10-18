@@ -11,6 +11,9 @@ var UsersSchema = map[string]reflect.Kind{
 	"phone":              reflect.String,
 	"phone_verified":     reflect.Bool,
 	"password_hash":      reflect.String,
+	"two_factor_enabled": reflect.Bool,
+	"two_factor_method":  reflect.Int,
+	"totp_secret":        reflect.String,
 	"first_name":         reflect.String,
 	"last_name":          reflect.String,
 	"birthdate":          reflect.Struct, // Date au format string

@@ -95,6 +95,9 @@ CREATE TABLE auth.users (
     phone               text,
     phone_verified      boolean  NOT NULL DEFAULT false,
     password_hash       text     NOT NULL,
+    two_factor_enabled  boolean  NOT NULL DEFAULT false,
+    two_factor_method   smallint NOT NULL DEFAULT 0, -- 0: Aucun, 1: Email, 2: TOTP, 3: Passkey
+    totp_secret         text,
     first_name          text     NOT NULL,
     last_name           text     NOT NULL,
     birthdate           bigint,                       -- epoch ms (UTC midnight), NULL = unknown
@@ -152,6 +155,24 @@ CREATE TABLE auth.sessions (
     tolerance_time            bigint,      -- epoch ms
     created_at                bigint NOT NULL DEFAULT util.now_ms(),
     expires_at                bigint NOT NULL
+);
+
+/* auth.user_passkeys — one row per (id, credential_id, user_id). hardware keys FIDO2 / WebAuthn. */
+CREATE TABLE auth.user_passkeys (
+    id               bigint   NOT NULL,
+    user_id          bigint   NOT NULL,
+    credential_id    text     NOT NULL,
+    public_key       bytea    NOT NULL,
+    attestation_type text     NOT NULL DEFAULT 'none'::text,
+    aaguid           bytea,
+    sign_count       bigint   NOT NULL DEFAULT 0,
+    device_name      text     NOT NULL DEFAULT ''::text,
+    transports       text[],
+    created_at       bigint   NOT NULL DEFAULT util.now_ms(),
+    updated_at       bigint   NOT NULL DEFAULT util.now_ms(),
+    CONSTRAINT user_passkeys_pkey PRIMARY KEY (id),
+    CONSTRAINT user_passkeys_credential_id_key UNIQUE (credential_id),
+    CONSTRAINT user_passkeys_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE
 );
 
 /* content.posts — hot table. Visibility: 0 public, 1 followers, 2 friends, -1 soft-deleted.
@@ -382,6 +403,8 @@ CREATE UNIQUE INDEX idx_sessions_user_device ON auth.sessions (user_id, firebase
 -- per-request auth lookup by device id alone (not covered by the composite above) and by master token (equality only -> hash)
 CREATE INDEX idx_sessions_fid          ON auth.sessions (firebase_installation_id, created_at DESC);
 CREATE INDEX idx_sessions_master_token ON auth.sessions USING hash (master_token);
+--
+CREATE INDEX idx_user_passkeys_user_id ON auth.user_passkeys USING btree (user_id, created_at DESC);
 
 -- ---- content ----------------------------------------------------------------
 -- profile timeline (keyset on (created_at,id)); live rows only.
@@ -454,16 +477,37 @@ FROM content.posts p;
 
 /* auth.users_l3 — the 24-column shape scanned by func_load_user.go.
    birthdate is RFC3339 text (Go parses it), the three timestamps are timestamptz (Go scans time.Time/NullTime). */
-CREATE VIEW auth.users_l3 AS
-SELECT u.id, u.username, u.email, u.email_verified,
-       COALESCE(u.phone, '')::text AS phone, u.phone_verified,
-       u.password_hash, u.first_name, u.last_name,
-       CASE WHEN u.birthdate IS NULL THEN NULL ELSE util.ms_to_rfc3339(u.birthdate) END AS birthdate,
-       u.sex, u.bio, u.profile_picture_id, u.grade, u.location, u.school, u.work,
-       u.badges, u.desactivated, u.banned, u.ban_reason,
+CREATE OR REPLACE VIEW auth.users_l3 AS
+SELECT u.id,
+       u.username,
+       u.email,
+       u.email_verified,
+       COALESCE(u.phone, '')::text AS phone,
+    u.phone_verified,
+       u.password_hash,
+       u.first_name,
+       u.last_name,
+       CASE
+           WHEN (u.birthdate IS NULL) THEN NULL::text
+           ELSE util.ms_to_rfc3339(u.birthdate)
+           END AS birthdate,
+       u.sex,
+       u.bio,
+       u.profile_picture_id,
+       u.grade,
+       u.location,
+       u.school,
+       u.work,
+       u.badges,
+       u.desactivated,
+       u.banned,
+       u.ban_reason,
        util.ms_to_ts(u.ban_expires_at) AS ban_expires_at,
        util.ms_to_ts(u.created_at)     AS created_at,
-       util.ms_to_ts(u.updated_at)     AS updated_at
+       util.ms_to_ts(u.updated_at)     AS updated_at,
+       u.two_factor_enabled,
+       u.two_factor_method,
+       COALESCE(u.totp_secret, '')::text AS totp_secret
 FROM auth.users u;
 
 /* auth.sessions_l3 — the 8 non-secret columns scanned by func_load_session(s).go (secrets are never returned). */
@@ -645,6 +689,38 @@ $$;
 /* Cuckoo-filter warm-up (username/email/phone of every user). */
 CREATE FUNCTION auth.func_load_all_user_identifiers() RETURNS TABLE(username text, email text, phone text)
 LANGUAGE sql STABLE AS $$ SELECT u.username, u.email, u.phone FROM auth.users u $$;
+
+/*  */
+CREATE FUNCTION auth.func_get_user_passkeys(p_user_id bigint)
+    RETURNS TABLE(
+                     id bigint, user_id bigint, credential_id text, public_key bytea,
+                     attestation_type text, aaguid bytea, sign_count bigint,
+                     device_name text, transports text[], created_at bigint, updated_at bigint
+                 )
+    LANGUAGE sql STABLE AS $$
+SELECT p.id, p.user_id, p.credential_id, p.public_key,
+       p.attestation_type, p.aaguid, p.sign_count,
+       p.device_name, p.transports, p.created_at, p.updated_at
+FROM auth.user_passkeys p
+WHERE p.user_id = p_user_id
+ORDER BY p.created_at DESC, p.id DESC
+$$;
+
+/*  */
+CREATE FUNCTION auth.func_get_passkey_by_credential_id(p_credential_id text)
+    RETURNS TABLE(
+                     id bigint, user_id bigint, credential_id text, public_key bytea,
+                     attestation_type text, aaguid bytea, sign_count bigint,
+                     device_name text, transports text[], created_at bigint, updated_at bigint
+                 )
+    LANGUAGE sql STABLE AS $$
+SELECT p.id, p.user_id, p.credential_id, p.public_key,
+       p.attestation_type, p.aaguid, p.sign_count,
+       p.device_name, p.transports, p.created_at, p.updated_at
+FROM auth.user_passkeys p
+WHERE p.credential_id = btrim(p_credential_id)
+$$;
+
 /* ---------------------------------------------------------------------------
    7.2 CONTENT — posts
    All post readers return content.posts_l3 (22 columns, epoch-ms timestamps, report_count INCLUDED).

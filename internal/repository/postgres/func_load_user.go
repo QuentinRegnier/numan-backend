@@ -3,8 +3,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"errors"
-	"fmt"
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
@@ -15,93 +13,58 @@ import (
 )
 
 func FuncLoadUser(ctx context.Context, ID int64, Username string, Email string, Phone string) (auth_models.UserPayload, error) {
-
-	// Args...
 	args := make([]any, 4)
-	args[0] = ID
-	if ID == -1 {
-		args[0] = nil
+	if ID != -1 {
+		args[0] = ID
 	}
-	args[1] = Username
-	if Username == "" {
-		args[1] = nil
+	if Username != "" {
+		args[1] = Username
 	}
-	args[2] = Email
-	if Email == "" {
-		args[2] = nil
+	if Email != "" {
+		args[2] = Email
 	}
-	args[3] = Phone
-	if Phone == "" {
-		args[3] = nil
+	if Phone != "" {
+		args[3] = Phone
 	}
-
-	// 🕵️ DEBUG : On affiche la requête exacte
-	fmt.Printf("\n🐘 POSTGRES QUERY : SELECT * FROM auth.func_load_user(%v, %v, '%v', %v)\n", args[0], args[1], args[2], args[3])
 
 	sqlStatement := `SELECT * FROM auth.func_load_user($1, $2, $3, $4)`
-	var res auth_models.UserPayload
-
-	var birthdateRaw sql.NullString
-	var profilePicID sql.NullInt64
-	var banReason sql.NullString
-	var banExpiresAt sql.NullTime
-	var firstName sql.NullString
-	var lastName sql.NullString
-	var bio sql.NullString
-	var location sql.NullString
-	var school sql.NullString
-	var work sql.NullString
-	var createdAt time.Time // NOUVEAU
-	var updatedAt time.Time // NOUVEAU
-
-	err := postgres.PostgresDB.QueryRow(sqlStatement, args...).Scan(
-		&res.ID,
-		&res.Username,
-		&res.Email,
-		&res.EmailVerified,
-		&res.Phone,
-		&res.PhoneVerified,
-		&res.PasswordHash,
-		&firstName,
-		&lastName,
-		&birthdateRaw,
-		&res.Sex,
-		&bio,
-		&profilePicID,
-		&res.Grade,
-		&location,
-		&school,
-		&work,
-		&res.Badges,
-		&res.Desactivated,
-		&res.Banned,
-		&banReason,
-		&banExpiresAt,
-		&createdAt, // AU LIEU DE &res.CreatedAt
-		&updatedAt, // AU LIEU DE &res.UpdatedAt
-	)
-
+	rows, err := postgres.PostgresDB.QueryContext(ctx, sqlStatement, args...)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return auth_models.UserPayload{}, nil // Pas d'erreur technique
-		}
-		numan_log.Error(ctx).Err(err).Msg("Erreur SQL inattendue lors de la vérification de l'enregistrement")
+		numan_log.Error(ctx).Err(err).Msg("Erreur SQL inattendue lors du chargement de l'utilisateur")
+		return auth_models.UserPayload{}, numan_error.NewInternal()
+	}
+	defer func() { _ = rows.Close() }()
+
+	if !rows.Next() {
+		return auth_models.UserPayload{}, nil
+	}
+
+	var res auth_models.UserPayload
+	var birthdateRaw, banReason, firstName, lastName, bio, location, school, work, totpSecret sql.NullString
+	var profilePicID sql.NullInt64
+	var banExpiresAt sql.NullTime
+	var createdAt, updatedAt time.Time
+
+	dest := []any{
+		&res.ID, &res.Username, &res.Email, &res.EmailVerified,
+		&res.Phone, &res.PhoneVerified, &res.PasswordHash,
+		&firstName, &lastName, &birthdateRaw, &res.Sex,
+		&bio, &profilePicID, &res.Grade, &location,
+		&school, &work, &res.Badges, &res.Desactivated,
+		&res.Banned, &banReason, &banExpiresAt,
+		&createdAt, &updatedAt, &res.TwoFactorEnabled, &res.TwoFactorMethod, &totpSecret,
+	}
+
+	if err := rows.Scan(dest...); err != nil {
+		numan_log.Error(ctx).Err(err).Msg("Erreur lors du Scan de auth.func_load_user")
 		return auth_models.UserPayload{}, numan_error.NewInternal()
 	}
 
-	// 🕵️ DEBUG : On affiche ce qu'on a scanné
-	fmt.Printf("🐘 POSTGRES SUCCÈS : ID=%d, Email='%s', Pass='%s'\n", res.ID, res.Email, res.PasswordHash)
-
-	// ... (Le reste de la conversion date/nulls inchangé) ...
 	if birthdateRaw.Valid {
-		t, errTime := time.Parse(time.RFC3339, birthdateRaw.String)
-		if errTime == nil {
+		if t, errTime := time.Parse(time.RFC3339, birthdateRaw.String); errTime == nil {
 			res.Birthdate = domain.TimeToMillis(t)
-		} else {
-			t2, errTime2 := time.Parse("02012006", birthdateRaw.String)
-			if errTime2 == nil {
-				res.Birthdate = domain.TimeToMillis(t2)
-			}
+		} else if t2, errTime2 := time.Parse("02012006", birthdateRaw.String); errTime2 == nil {
+			res.Birthdate = domain.TimeToMillis(t2)
 		}
 	}
 	if profilePicID.Valid {
@@ -131,8 +94,9 @@ func FuncLoadUser(ctx context.Context, ID int64, Username string, Email string, 
 	if work.Valid {
 		res.Work = work.String
 	}
-
-	// Conversion finale des timestamps
+	if totpSecret.Valid {
+		res.TOTPSecret = totpSecret.String
+	}
 	res.CreatedAt = domain.TimeToMillis(createdAt)
 	res.UpdatedAt = domain.TimeToMillis(updatedAt)
 

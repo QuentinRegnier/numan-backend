@@ -1,0 +1,18 @@
+{{define "content"}}
+<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #111827; max-width: 520px; margin: 0 auto; padding: 24px;">
+    <h2 style="font-size: 20px; font-weight: 700; margin-bottom: 16px; color: #0f172a;">
+        Bonjour {{.Username}},
+    </h2>
+    <p style="font-size: 15px; line-height: 1.6; color: #334155; margin-bottom: 24px;">
+        Voici votre code de vérification à usage unique pour sécuriser votre accès à <strong>Numan</strong>. Ce code est valable pendant <strong>5 minutes</strong> :
+    </p>
+    <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 24px;">
+        <span style="font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 32px; font-weight: 800; letter-spacing: 8px; color: #0f172a;">
+            {{.Code}}
+        </span>
+    </div>
+    <p style="font-size: 13px; line-height: 1.5; color: #64748b; margin-top: 24px;">
+        Si vous n'êtes pas à l'origine de cette demande, ne partagez jamais ce code et modifiez immédiatement votre mot de passe.
+    </p>
+</div>
+{{end}}

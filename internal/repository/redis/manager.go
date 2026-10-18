@@ -24,6 +24,7 @@ var (
 	Users            *Collection
 	UserSettings     *Collection
 	Sessions         *Collection
+	Passkeys         *Collection // Object Cache L1 pour les Passkeys FIDO2
 	Posts            *Collection
 	Comments         *Collection
 	Media            *Collection
@@ -116,6 +117,9 @@ var (
 	// --- CONFIGURATION DYNAMIQUE CENTRALISÉE ---
 	DynamicVariables     *Collection
 	DynamicVariablesSync *Collection
+
+	// --- PASSKEY TWO FACTOR ---
+	PreAuth *Collection // Sessions éphémères de challenge 2FA (TTL 5m)
 )
 
 // ============================================================================
@@ -127,6 +131,7 @@ func InitCacheDatabase() {
 	Users = newCollection("object_cache:user", variables.StandardTTL)
 	UserSettings = newCollection("object_cache:user_settings", variables.StandardTTL)
 	Sessions = newCollection("object_cache:session", variables.StandardTTL)
+	Passkeys = newCollection("object_cache:passkey", variables.StandardTTL)
 	Posts = newCollection("object_cache:post_service", variables.StandardTTL)
 	Comments = newCollection("object_cache:comment", variables.StandardTTL)
 	Media = newCollection("object_cache:media", variables.StandardTTL)
@@ -219,6 +224,9 @@ func InitCacheDatabase() {
 	// --- CONFIGURATION DYNAMIQUE CENTRALISÉE ---
 	DynamicVariables = newCollection("system:variables", 0)
 	DynamicVariablesSync = newCollection("system:variables:sync", 10*time.Second)
+
+	// --- PASSKEY TWO FACTOR ---
+	PreAuth = newCollection("auth:pre_auth", variables.TwoFactorPreAuthTTL)
 }
 
 // ============================================================================
@@ -323,6 +331,14 @@ func (c *Collection) GetInt64(ctx context.Context, id any) (int64, error) {
 // Incr incrémente une valeur numérique et retourne le nouveau compteur.
 func (c *Collection) Incr(ctx context.Context, id any) (int64, error) {
 	return c.Client.Incr(ctx, c.Key(id)).Result()
+}
+
+// SetNX pose une valeur atomiquement uniquement si la clé n'existe pas encore (Idempotence / Anti-Replay).
+func (c *Collection) SetNX(ctx context.Context, id any, val any, ttl time.Duration) (bool, error) {
+	if ttl <= 0 {
+		ttl = c.DefaultTTL
+	}
+	return c.Client.SetNX(ctx, c.Key(id), val, ttl).Result()
 }
 
 // ============================================================================
@@ -642,7 +658,7 @@ func RefreshStandardTTL(newTTL time.Duration) {
 		Conversations, Members, Relations, Saved, PostComments, UserTimeline,
 		NotificationsObj, ConvMeta, ConvMembers, SpeedAddable, SpeedCommunity,
 		FeedsObject, FeedsMailbox, FeedsPersonalized, ContentVectors, RankedPosts,
-		TagPosts, SessionIndexes, CuckooSeen, LSHBuckets, ConvWatermarks,
+		TagPosts, SessionIndexes, CuckooSeen, LSHBuckets, ConvWatermarks, Passkeys,
 		MessageReactionCounts, MessageUserReactions, NotificationsZSet, TelemetryProfiles,
 	}
 	for _, col := range collections {

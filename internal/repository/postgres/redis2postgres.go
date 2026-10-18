@@ -38,6 +38,8 @@ func redis2Postgres(ctx context.Context, entity redis.EntityType) (postgresTarge
 		return postgresTarget{Schema: "messaging", Table: "members"}, nil
 	case redis.EntityMessage:
 		return postgresTarget{Schema: "messaging", Table: "messages"}, nil
+	case redis.EntityPasskey:
+		return postgresTarget{Schema: "auth", Table: "user_passkeys"}, nil
 	default:
 		numan_log.Error(ctx).Str("entity", string(entity)).Msg("Entité non supportée pour la vérification PostgreSQL")
 		return postgresTarget{}, numan_error.NewInternal()
