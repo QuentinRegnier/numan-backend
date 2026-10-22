@@ -2,23 +2,33 @@ package mongo
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/media_models"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
 )
 
 func MongoLoadMedia(mediaIDs []int64) ([]media_models.MediaPayload, error) {
-	if len(mediaIDs) == 0 || Media == nil {
+	if Media == nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("MongoDB collection 'Media' is not initialized"),
+		)
+	}
+
+	if len(mediaIDs) == 0 {
 		return []media_models.MediaPayload{}, nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// ✅ On ajoute "visibility: true" au filtre pour ignorer silencieusement les supprimés
+	// On ajoute "visibility: true" au filtre pour ignorer silencieusement les supprimés
 	filter := bson.M{
 		"id":         bson.M{"$in": mediaIDs},
 		"visibility": true,
@@ -26,18 +36,23 @@ func MongoLoadMedia(mediaIDs []int64) ([]media_models.MediaPayload, error) {
 
 	cursor, err := Media.DB.Collection(Media.Name).Find(ctx, filter)
 	if err != nil {
-		return nil, err
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de charger les médias.",
+			err,
+		)
 	}
-	defer func(cursor *mongo.Cursor, ctx context.Context) {
-		err := cursor.Close(ctx)
-		if err != nil {
-			numan_log.Error(ctx).Err(err).Msg("Erreur lors de la fermeture du curseur Mongo (Media)")
-		}
-	}(cursor, ctx)
+	defer cursor.Close(ctx)
 
-	var results []media_models.MediaPayload
+	results := []media_models.MediaPayload{}
 	if err = cursor.All(ctx, &results); err != nil {
-		return nil, err
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible d'extraire les médias de la requête (Storage L2).",
+			err,
+		)
 	}
 
 	return results, nil

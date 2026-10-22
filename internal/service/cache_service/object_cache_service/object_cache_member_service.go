@@ -3,10 +3,10 @@ package object_cache_service
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/member_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 )
 
@@ -35,8 +35,12 @@ func SetMemberInObjectCache(ctx context.Context, memberPayload member_models.Mem
 
 	errRedis := redis.Members.SetObject(ctx, compositeMemberKey, memberPayload)
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Int64("user_id", memberPayload.UserID).Msg("Échec de l'écriture du membre dans l'Object Cache")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de sauvegarder le membre dans l'Object Cache.",
+			errRedis,
+		)
 	}
 
 	return nil

@@ -2,11 +2,13 @@ package mongo
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net/http"
 	"reflect"
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/schemas"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -35,7 +37,7 @@ var (
 	Notifications    *Collection
 )
 
-// InitCacheDatabase initialise la structure logique de Redis pour les caches
+// InitCacheDatabase initialise la structure logique de MongoDB pour les caches (Warm Storage L2)
 func InitCacheDatabase() {
 	// Initialiser les collections
 
@@ -71,8 +73,6 @@ func InitCacheDatabase() {
 	Saved = newMongoCollection("numan_mongo", "content.saved", schemaSaved)
 	Passkeys = newMongoCollection("numan_mongo", "auth.user_passkeys", schemaPasskeys)
 	Notifications = newMongoCollection("numan_mongo", "activity.notifications", schemaNotifications)
-
-	numan_log.Info(context.Background()).Msg("Structure de collections MongoDB initialisée")
 }
 
 // ---------------- Collection et schéma ----------------
@@ -85,21 +85,38 @@ type Collection struct {
 
 // newMongoCollection crée une collection Mongo avec un schéma
 func newMongoCollection(dbName, name string, schema map[string]reflect.Kind) *Collection {
+	var db *mongo.Database
+	if mongogo.MongoClient != nil {
+		db = mongogo.MongoClient.Database(dbName)
+	}
 	return &Collection{
 		Name:   name,
 		Schema: schema,
-		DB:     mongogo.MongoClient.Database(dbName),
+		DB:     db,
 	}
 }
 
 // validate vérifie les types.
 // partial = true : permet de ne vérifier QUE les champs présents (pour update)
 func (c *Collection) validate(ctx context.Context, obj map[string]any, partial bool) error {
+	if c == nil {
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("MongoDB collection is not initialized"),
+		)
+	}
+
 	if !partial {
 		for field := range c.Schema {
 			if _, ok := obj[field]; !ok {
-				numan_log.Error(ctx).Str("field", field).Msg("Champ requis manquant dans le document MongoDB")
-				return numan_error.NewInternal()
+				return numan_error.NewAppError(
+					http.StatusInternalServerError,
+					numan_error.CodeDatabaseError,
+					"Échec de la validation de la structure de données.",
+					fmt.Errorf("champ requis manquant dans le document MongoDB (collection %s) : %s", c.Name, field),
+				)
 			}
 		}
 	}
@@ -110,8 +127,12 @@ func (c *Collection) validate(ctx context.Context, obj map[string]any, partial b
 			continue
 		}
 		if reflect.TypeOf(val).Kind() != expectedKind {
-			numan_log.Error(ctx).Str("field", field).Str("expected_kind", expectedKind.String()).Str("actual_kind", reflect.TypeOf(val).Kind().String()).Msg("Type de donnée invalide détecté dans MongoDB")
-			return numan_error.NewInternal()
+			return numan_error.NewAppError(
+				http.StatusInternalServerError,
+				numan_error.CodeDatabaseError,
+				"Incohérence de typage détectée.",
+				fmt.Errorf("champ %s attendu comme %s, reçu %s (collection %s)", field, expectedKind.String(), reflect.TypeOf(val).Kind().String(), c.Name),
+			)
 		}
 	}
 	return nil
@@ -119,8 +140,18 @@ func (c *Collection) validate(ctx context.Context, obj map[string]any, partial b
 
 // Set insère ou met à jour un objet dans la collection
 func (c *Collection) Set(obj map[string]any) error {
+	if c == nil || c.DB == nil {
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("MongoDB collection or database is not initialized"),
+		)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
 	// false = on veut valider que TOUS les champs sont là
 	if err := c.validate(ctx, obj, false); err != nil {
 		return err
@@ -137,12 +168,29 @@ func (c *Collection) Set(obj map[string]any) error {
 	opts := options.Update().SetUpsert(true)
 
 	_, err := collection.UpdateOne(ctx, filter, update, opts)
-	numan_log.Error(ctx).Err(err).Msg("Échec de l'opération UpdateOne sur MongoDB")
-	return numan_error.NewInternal()
+	if err != nil {
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de sauvegarder l'entité (Storage L2).",
+			fmt.Errorf("échec UpdateOne sur MongoDB (collection %s) : %w", c.Name, err),
+		)
+	}
+
+	return nil
 }
 
 // Get récupère les objets correspondant au filtre avec une projection optionnelle
 func (c *Collection) Get(filter map[string]any, projection map[string]any) ([]map[string]any, error) {
+	if c == nil || c.DB == nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("MongoDB collection or database is not initialized"),
+		)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -155,20 +203,27 @@ func (c *Collection) Get(filter map[string]any, projection map[string]any) ([]ma
 
 	cur, err := collection.Find(ctx, filter, opts)
 	if err != nil {
-		numan_log.Error(ctx).Err(err).Msg("Échec de l'opération Find sur MongoDB")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de lire les données (Storage L2).",
+			fmt.Errorf("échec Find sur MongoDB (collection %s) : %w", c.Name, err),
+		)
 	}
-
-	defer func() {
-		if err := cur.Close(ctx); err != nil {
-			numan_log.Error(ctx).Err(err).Str("collection", c.Name).Msg("Erreur lors de la fermeture du curseur MongoDB")
-		}
-	}()
+	defer cur.Close(ctx) // Erreur de fermeture ignorée pour rester focalisé sur l'action principale
 
 	var results []map[string]any
 	if err := cur.All(ctx, &results); err != nil {
-		numan_log.Error(ctx).Err(err).Msg("Échec de la lecture complète du curseur MongoDB (cur.All)")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible d'extraire les résultats de la requête (Storage L2).",
+			fmt.Errorf("échec cur.All sur MongoDB (collection %s) : %w", c.Name, err),
+		)
+	}
+
+	if results == nil {
+		results = []map[string]any{}
 	}
 
 	return results, nil
@@ -176,16 +231,43 @@ func (c *Collection) Get(filter map[string]any, projection map[string]any) ([]ma
 
 // Delete supprime les objets correspondant au filtre
 func (c *Collection) Delete(filter map[string]any) error {
+	if c == nil || c.DB == nil {
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("MongoDB collection or database is not initialized"),
+		)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	collection := c.DB.Collection(c.Name)
 	_, err := collection.DeleteMany(ctx, filter)
-	return err
+	if err != nil {
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de purger les données (Storage L2).",
+			fmt.Errorf("échec DeleteMany sur MongoDB (collection %s) : %w", c.Name, err),
+		)
+	}
+
+	return nil
 }
 
 // update met à jour les éléments correspondant au filtre avec les nouvelles valeurs fournies dans update
 func (c *Collection) update(filter map[string]any, update map[string]any) error {
+	if c == nil || c.DB == nil {
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("MongoDB collection or database is not initialized"),
+		)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -199,11 +281,29 @@ func (c *Collection) update(filter map[string]any, update map[string]any) error 
 
 	collection := c.DB.Collection(c.Name)
 	_, err := collection.UpdateMany(ctx, filter, bson.M{"$set": update})
-	return err
+	if err != nil {
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de mettre à jour les données (Storage L2).",
+			fmt.Errorf("échec UpdateMany sur MongoDB (collection %s) : %w", c.Name, err),
+		)
+	}
+
+	return nil
 }
 
 // GetPaginated récupère les objets avec pagination (Skip/Limit) et tri (Sort)
-func (c *Collection) GetPaginated(filter map[string]any, sort map[string]any, skip int64, limit int64) ([]map[string]any, error) {
+func (c *Collection) GetPaginated(filter map[string]any, sort any, skip int64, limit int64) ([]map[string]any, error) {
+	if c == nil || c.DB == nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("MongoDB collection or database is not initialized"),
+		)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -218,20 +318,27 @@ func (c *Collection) GetPaginated(filter map[string]any, sort map[string]any, sk
 
 	cur, err := collection.Find(ctx, filter, opts)
 	if err != nil {
-		numan_log.Error(ctx).Err(err).Msg("Échec de l'exécution de la requête Find sur MongoDB")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de lire les données paginées (Storage L2).",
+			fmt.Errorf("échec Find paginé sur MongoDB (collection %s) : %w", c.Name, err),
+		)
 	}
-
-	defer func() {
-		if err := cur.Close(ctx); err != nil {
-			numan_log.Error(ctx).Err(err).Str("collection", c.Name).Msg("Erreur lors de la fermeture du curseur MongoDB")
-		}
-	}()
+	defer cur.Close(ctx)
 
 	var results []map[string]any
 	if err := cur.All(ctx, &results); err != nil {
-		numan_log.Error(ctx).Err(err).Msg("Échec de l'extraction des résultats du curseur MongoDB")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible d'extraire les résultats paginés de la requête (Storage L2).",
+			fmt.Errorf("échec cur.All paginé sur MongoDB (collection %s) : %w", c.Name, err),
+		)
+	}
+
+	if results == nil {
+		results = []map[string]any{}
 	}
 
 	return results, nil

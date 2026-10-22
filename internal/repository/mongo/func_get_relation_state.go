@@ -2,13 +2,24 @@ package mongo
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 )
 
 // MongoGetRelationState vérifie l'état de la relation dans le stockage à froid Mongo.
 func MongoGetRelationState(ctx context.Context, callerID int64, targetID int64) (int, error) {
+	if Relations == nil {
+		return 0, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("MongoDB collection 'Relations' is not initialized"),
+		)
+	}
+
 	// Filtre strict sur l'appelant et la cible
 	filter := map[string]any{
 		"caller_id": callerID,
@@ -16,8 +27,21 @@ func MongoGetRelationState(ctx context.Context, callerID int64, targetID int64) 
 	}
 
 	docs, err := Relations.GetPaginated(filter, nil, 0, 1)
-	if err != nil || len(docs) == 0 {
-		return 0, numan_error.NewNotFound("RELATION_NOT_FOUND", "Relation introuvable dans mongo", err) // L'erreur déclenchera le fallback L3
+	if err != nil {
+		return 0, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de vérifier l'état de la relation.",
+			err,
+		)
+	}
+
+	if len(docs) == 0 {
+		return 0, numan_error.NewNotFound(
+			"RELATION_NOT_FOUND",
+			"Relation introuvable dans mongo",
+			fmt.Errorf("relation between caller %d and target %d was not found in Warm Storage (L2)", callerID, targetID),
+		)
 	}
 
 	// Extraction robuste et défensive de l'entier "state" depuis le BSON générique
@@ -34,6 +58,10 @@ func MongoGetRelationState(ctx context.Context, callerID int64, targetID int64) 
 		return stateInt, nil
 	}
 
-	numan_log.Error(ctx).Msg("Format de 'state' invalide détecté dans la collection relations MongoDB")
-	return 0, numan_error.NewInternal()
+	return 0, numan_error.NewAppError(
+		http.StatusInternalServerError,
+		numan_error.CodeDatabaseError,
+		"Format de relation invalide.",
+		errors.New("invalid 'state' format in MongoDB relations collection"),
+	)
 }

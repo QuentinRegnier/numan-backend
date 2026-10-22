@@ -2,9 +2,10 @@ package postgres
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 )
 
@@ -41,7 +42,11 @@ func redis2Postgres(ctx context.Context, entity redis.EntityType) (postgresTarge
 	case redis.EntityPasskey:
 		return postgresTarget{Schema: "auth", Table: "user_passkeys"}, nil
 	default:
-		numan_log.Error(ctx).Str("entity", string(entity)).Msg("Entité non supportée pour la vérification PostgreSQL")
-		return postgresTarget{}, numan_error.NewInternal()
+		return postgresTarget{}, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Entité non supportée.",
+			fmt.Errorf("unsupported entity type for PostgreSQL resolution: %s", entity),
+		)
 	}
 }

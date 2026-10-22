@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 )
 
@@ -33,7 +32,7 @@ func GetUserFeedState(ctx context.Context, userID int64) (FeedState, error) {
 	err := redis.FeedsObject.GetObject(ctx, userID, &state)
 	if err != nil {
 		// On sécurise l'erreur : si ça ne vient pas de Redis, c'est que la clé n'existe pas.
-		return state, numan_error.NewInternal()
+		return state, err
 	}
 	return state, nil
 }
@@ -42,7 +41,7 @@ func GetUserFeedState(ctx context.Context, userID int64) (FeedState, error) {
 func saveUserFeedState(ctx context.Context, userID int64, state FeedState) error {
 	err := redis.FeedsObject.SetObject(ctx, userID, state)
 	if err != nil {
-		return numan_error.NewInternal()
+		return err
 	}
 	return nil
 }
@@ -52,7 +51,7 @@ func saveUserFeedState(ctx context.Context, userID int64, state FeedState) error
 func DeleteUserFeedState(ctx context.Context, userID int64) error {
 	err := redis.FeedsObject.DeleteObject(ctx, userID)
 	if err != nil {
-		return numan_error.NewInternal()
+		return err
 	}
 	return nil
 }

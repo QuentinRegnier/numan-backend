@@ -2,11 +2,13 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/lib/pq"
 )
@@ -17,6 +19,15 @@ type inboxFallbackResult struct {
 }
 
 func FuncLoadConversationFallback(ctx context.Context, userID int64, convIDs []int64) ([]inboxFallbackResult, error) {
+	if postgres.PostgresDB == nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("PostgreSQL connection 'PostgresDB' is not initialized"),
+		)
+	}
+
 	query := `SELECT messaging.func_load_conversation_fallback_json($1, $2)`
 
 	var b []byte
@@ -27,15 +38,33 @@ func FuncLoadConversationFallback(ctx context.Context, userID int64, convIDs []i
 		pq.Array(convIDs),
 	).Scan(&b)
 	if err != nil {
-		numan_log.Error(ctx).Err(err).Msg("Erreur SQL lors du chargement du fallback de conversation")
-		return nil, numan_error.NewInternal(err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return []inboxFallbackResult{}, nil
+		}
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de charger le fallback des conversations.",
+			err,
+		)
+	}
+
+	if b == nil {
+		return []inboxFallbackResult{}, nil
 	}
 
 	var results []inboxFallbackResult
-	err = json.Unmarshal(b, &results)
-	if err != nil {
-		numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation du fallback de conversation")
-		return nil, numan_error.NewInternal(err)
+	if err := json.Unmarshal(b, &results); err != nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de désérialiser les conversations de secours.",
+			err,
+		)
+	}
+
+	if results == nil {
+		results = []inboxFallbackResult{}
 	}
 
 	return results, nil

@@ -46,7 +46,7 @@ func LeftMember(ctx context.Context, conversationID int64, userID int64) (member
 		pgMember, errPg := postgres.FuncGetMember(ctx, conversationID, userID)
 		if errPg != nil {
 			numan_log.Error(ctx).Err(errPg).Int64("user_id", userID).Msg("Erreur L3 lors de la vérification de l'appartenance d'un membre")
-			return member_models.MemberPayload{}, numan_error.NewInternal()
+			return member_models.MemberPayload{}, errPg
 		}
 
 		if pgMember.ID != 0 {

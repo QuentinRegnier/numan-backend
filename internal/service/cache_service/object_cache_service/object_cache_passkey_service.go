@@ -58,7 +58,7 @@ func GetUserPasskeysCascade(ctx context.Context, userID int64) ([]two_factor_mod
 	// 3. FALLBACK L3 (PostgreSQL Cold Storage)
 	listL3, errL3 := postgres.FuncGetUserPasskeys(ctx, userID)
 	if errL3 != nil {
-		return nil, numan_error.NewInternal(errL3)
+		return nil, errL3
 	}
 
 	if len(listL3) > 0 {
@@ -96,7 +96,7 @@ func GetPasskeyByCredentialIDCascade(ctx context.Context, credentialID string) (
 	// 3. FALLBACK L3 (PostgreSQL Cold Storage)
 	pL3, errL3 := postgres.FuncGetPasskeyByCredentialID(ctx, credentialID)
 	if errL3 != nil {
-		return two_factor_models.PasskeyPayload{}, numan_error.NewInternal(errL3)
+		return two_factor_models.PasskeyPayload{}, errL3
 	}
 	if pL3.ID == 0 {
 		return two_factor_models.PasskeyPayload{}, numan_error.NewNotFound(numan_error.CodeNotFound, "Passkey introuvable.", nil)

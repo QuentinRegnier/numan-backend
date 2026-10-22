@@ -2,6 +2,7 @@ package object_cache_service
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/message_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
@@ -32,8 +33,12 @@ func GetMessageFromObjectCache(ctx context.Context, messageID int64) (message_mo
 func SetMessageInObjectCache(ctx context.Context, messagePayload message_models.MessagePayload) error {
 	errRedis := redis.Messages.SetObject(ctx, messagePayload.ID, messagePayload)
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Int64("msg_id", messagePayload.ID).Msg("Échec de l'écriture du message dans l'Object Cache")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible d'enregistrer le message dans l'Object Cache.",
+			errRedis,
+		)
 	}
 	return nil
 }
@@ -42,8 +47,12 @@ func SetMessageInObjectCache(ctx context.Context, messagePayload message_models.
 func DeleteMessageFromObjectCache(ctx context.Context, messageID int64) error {
 	errRedis := redis.Messages.DeleteObject(ctx, messageID)
 	if errRedis != nil {
-		numan_log.Warn(ctx).Err(errRedis).Int64("msg_id", messageID).Msg("Échec de la suppression du message de l'Object Cache")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de supprimer le message de l'Object Cache.",
+			errRedis,
+		)
 	}
 	return nil
 }

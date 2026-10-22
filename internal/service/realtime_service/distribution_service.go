@@ -3,9 +3,9 @@ package realtime_service
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 )
 
@@ -32,15 +32,13 @@ func DistributeToUsers(ctx context.Context, eventType string, payload any, targe
 
 	serializedEvent, errMarshal := json.Marshal(websocketEvent)
 	if errMarshal != nil {
-		numan_log.Error(ctx).Err(errMarshal).Str("event", eventType).Msg("Erreur lors de la sérialisation de l'événement WebSocket")
-		return numan_error.NewInternal()
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Erreur lors de la sérialisation de l'événement WebSocket", errMarshal)
 	}
 
 	// Appel pur du Repository Redis (Pub/Sub)
 	errRedis := redis.ChannelUser.PublishMultiple(ctx, targetUserIDs, serializedEvent)
 	if errRedis != nil {
-		numan_log.Warn(ctx).Err(errRedis).Msg("Échec de la publication multiple sur le ChannelUser Redis")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeCacheError, "Échec de la publication multiple sur le ChannelUser Redis", errRedis)
 	}
 
 	return nil
@@ -55,15 +53,13 @@ func DistributeToCommunity(ctx context.Context, eventType string, payload any, c
 
 	serializedEvent, errMarshal := json.Marshal(websocketEvent)
 	if errMarshal != nil {
-		numan_log.Error(ctx).Err(errMarshal).Str("event", eventType).Msg("Erreur lors de la sérialisation de l'événement WebSocket (Communauté)")
-		return numan_error.NewInternal()
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Erreur lors de la sérialisation de l'événement WebSocket (Communauté)", errMarshal)
 	}
 
 	// Appel pur du Repository Redis (Pub/Sub)
 	errRedis := redis.ChannelCommunity.Publish(ctx, communityID, serializedEvent)
 	if errRedis != nil {
-		numan_log.Warn(ctx).Err(errRedis).Int64("community_id", communityID).Msg("Échec de la publication sur le ChannelCommunity Redis")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeCacheError, "Échec de la publication sur le ChannelCommunity Redis", errRedis)
 	}
 
 	return nil

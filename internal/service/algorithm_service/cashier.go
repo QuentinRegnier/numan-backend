@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
@@ -67,7 +66,7 @@ func buildPersonalizedFeed(ctx context.Context, options PersonalizedFeedOptions)
 	rawScores, err := redis.ZScores(ctx, dailyTrendRedisKey, memberStrings)
 	if err != nil {
 		numan_log.Error(ctx).Err(err).Str("dailyTrendRedisKey", dailyTrendRedisKey).Msg("buildPersonalizedFeed: Échec de la récupération des scores de tendance")
-		return nil, numan_error.NewInternal()
+		return nil, err
 	}
 
 	trendScoresMap := make(map[int64]float64, len(postIDs))
@@ -87,7 +86,7 @@ func buildPersonalizedFeed(ctx context.Context, options PersonalizedFeedOptions)
 
 	vectorBatchResult, err := redis.ContentVectors.GetMany(ctx, postIDs)
 	if err != nil {
-		return nil, numan_error.NewInternal()
+		return nil, err
 	}
 
 	allCandidates := make([]postCandidate, 0, len(postIDs))
@@ -123,7 +122,7 @@ func buildPersonalizedFeed(ctx context.Context, options PersonalizedFeedOptions)
 		mongoPosts, err := mongo.MongoLoadPosts(ctx, missingIDs)
 		if err != nil {
 			numan_log.Error(ctx).Err(err).Msg("buildPersonalizedFeed: Échec du chargement des posts depuis MongoDB")
-			return nil, numan_error.NewInternal()
+			return nil, err
 		}
 		foundInMongo := make(map[int64]bool)
 
@@ -155,7 +154,7 @@ func buildPersonalizedFeed(ctx context.Context, options PersonalizedFeedOptions)
 			pgPosts, err := postgres.FuncLoadPosts(ctx, stillMissingIDs, 1, 0)
 			if err != nil {
 				numan_log.Error(ctx).Err(err).Msg("buildPersonalizedFeed: Échec du chargement des posts depuis PostgreSQL")
-				return nil, numan_error.NewInternal()
+				return nil, err
 			}
 			for _, post := range pgPosts {
 				if len(post.Vector) == variables.VectorDimTotal {
@@ -197,7 +196,7 @@ func buildPersonalizedFeed(ctx context.Context, options PersonalizedFeedOptions)
 		lshTargetIDSet, err := getLSHCandidateIDs(ctx, lshHash)
 		if err != nil {
 			numan_log.Error(ctx).Err(err).Msg("buildPersonalizedFeed: Échec de la récupération des candidats LSH")
-			return nil, numan_error.NewInternal()
+			return nil, err
 		}
 
 		filtered := make([]postCandidate, 0, len(lshTargetIDSet))
@@ -276,7 +275,7 @@ func buildPersonalizedFeed(ctx context.Context, options PersonalizedFeedOptions)
 	err = redis.FeedsPersonalized.SetObject(ctx, options.UserID, finalFeedIDs)
 	if err != nil {
 		numan_log.Error(ctx).Err(err).Msg("buildPersonalizedFeed: Échec de la sauvegarde du feed personnalisé")
-		return nil, numan_error.NewInternal()
+		return nil, err
 	}
 
 	return finalFeedIDs, nil

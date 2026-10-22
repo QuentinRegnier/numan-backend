@@ -2,10 +2,10 @@ package object_cache_service
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/media_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 )
 
@@ -18,8 +18,7 @@ func SetMediaInObjectCache(ctx context.Context, mediaPayload media_models.MediaP
 	// Le TTL (ex: 24h) est défini dans le manager Redis et se réinitialise à chaque GET
 	errRedis := redis.Media.SetObject(ctx, mediaPayload.ID, mediaPayload)
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Int64("media_id", mediaPayload.ID).Msg("Impossible de placer le média dans l'Object Cache")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(500, numan_error.CodeCacheError, "Impossible de placer le média dans l'Object Cache.", errRedis)
 	}
 	return nil
 }
@@ -46,8 +45,12 @@ func GetMediaFromObjectCache(ctx context.Context, mediaID int64) (media_models.M
 func DeleteMediaFromObjectCache(ctx context.Context, mediaID int64) error {
 	errRedis := redis.Media.DeleteObject(ctx, mediaID)
 	if errRedis != nil {
-		numan_log.Warn(ctx).Err(errRedis).Int64("media_id", mediaID).Msg("Échec de la suppression du média de l'Object Cache")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de supprimer le média de l'Object Cache.",
+			errRedis,
+		)
 	}
 	return nil
 }

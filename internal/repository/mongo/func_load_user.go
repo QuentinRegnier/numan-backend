@@ -2,18 +2,28 @@ package mongo
 
 import (
 	"context"
+	"errors"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/auth_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 )
 
 func MongoLoadUser(ctx context.Context, ID int64, Username string, Email string, Phone string) (auth_models.UserPayload, error) {
 	var u auth_models.UserPayload
 
+	if Users == nil {
+		return u, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("MongoDB collection 'Users' is not initialized"),
+		)
+	}
+
 	// Construction du filtre de recherche
-	filter := make(map[string]interface{})
+	filter := make(map[string]any)
 	if ID != -1 && ID != 0 {
 		filter["id"] = ID // ID Snowflake
 	} else if Email != "" {
@@ -23,28 +33,40 @@ func MongoLoadUser(ctx context.Context, ID int64, Username string, Email string,
 	} else if Phone != "" {
 		filter["phone"] = Phone
 	} else {
-		numan_log.Error(ctx).Msg("Construction du filtre Mongo échouée : aucun critère de recherche valide fourni")
-		return auth_models.UserPayload{}, numan_error.NewInternal()
+		return auth_models.UserPayload{}, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Critères de recherche invalides.",
+			errors.New("no valid search criteria provided to load user"),
+		)
 	}
 
-	if len(filter) == 0 {
-		numan_log.Error(ctx).Msg("MongoLoadUser : Aucun critère de recherche fourni pour charger l'utilisateur")
-		return u, numan_error.NewInternal()
-	}
-
-	// Appel à ta fonction utilitaire existante
 	docs, err := Users.Get(filter, nil)
 	if err != nil {
-		return u, err
+		return u, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de charger l'utilisateur.",
+			err,
+		)
 	}
 
 	if len(docs) == 0 {
-		return u, nil // Retourne une structure vide, pas d'erreur.
+		return u, numan_error.NewNotFound(
+			"USER_NOT_FOUND",
+			"Utilisateur introuvable (Storage L2).",
+			errors.New("user was not found in Warm Storage (L2)"),
+		)
 	}
 
 	// Conversion Map -> Struct
 	if err := pkg.ToStruct(docs[0], &u); err != nil {
-		return u, err
+		return u, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de charger l'utilisateur.",
+			err,
+		)
 	}
 
 	return u, nil

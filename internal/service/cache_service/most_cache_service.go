@@ -3,6 +3,7 @@ package cache_service
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
@@ -18,6 +19,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 	"github.com/vmihailenco/msgpack/v5"
+	"go.mongodb.org/mongo-driver/bson"
 )
 
 // ############################################################################
@@ -73,19 +75,19 @@ func EvaluatePostAfterView(ctx context.Context, postPayload post_models.PostPayl
 func GetRankedPosts(ctx context.Context, rankType string, offset int64, limit int64) ([]post_models.PostPayload, error) {
 
 	// Si on dépasse la capacité RAM (MaxStrictElements), on interroge les bases de données froides.
-	if offset >= variables.MaxStrictElements {
+	if offset >= int64(variables.MaxStrictElements) {
 		mongoFilter := map[string]any{}
-		var mongoSort map[string]any
+		var mongoSort bson.D
 
 		switch rankType {
 		case "strict:likes":
-			mongoSort = map[string]any{"like_count": -1, "created_at": -1}
+			mongoSort = bson.D{{Key: "like_count", Value: -1}, {Key: "created_at", Value: -1}}
 		case "strict:views":
-			mongoSort = map[string]any{"view_count": -1, "created_at": -1}
+			mongoSort = bson.D{{Key: "view_count", Value: -1}, {Key: "created_at", Value: -1}}
 		case "strict:recent":
-			mongoSort = map[string]any{"created_at": -1}
+			mongoSort = bson.D{{Key: "created_at", Value: -1}}
 		default:
-			mongoSort = map[string]any{"created_at": -1} // Fallback sécurisé
+			mongoSort = bson.D{{Key: "created_at", Value: -1}} // Fallback sécurisé
 		}
 
 		// TENTATIVE L2 (MongoDB)
@@ -113,14 +115,13 @@ func GetRankedPosts(ctx context.Context, rankType string, offset int64, limit in
 func GetTagPosts(ctx context.Context, slug string, offset int64, limit int64) ([]post_models.PostPayload, error) {
 
 	// Si on dépasse la capacité RAM
-	if offset >= variables.MaxTagElements {
+	if offset >= int64(variables.MaxTagElements) {
 		postsFromMongo, errMongo := getPostsFromMongoPaginated("hashtags", slug, offset, limit)
 		if errMongo != nil {
 			// FALLBACK L3 (PostgreSQL) - Pur DDD
 			pgIDs, errPg := postgres.FuncLoadPostIDsByTagPaginated(ctx, slug, offset, limit)
 			if errPg != nil {
-				numan_log.Error(ctx).Err(errPg).Str("slug", slug).Msg("Erreur L3 lors de la pagination des tags")
-				return []post_models.PostPayload{}, numan_error.NewInternal()
+				return []post_models.PostPayload{}, errPg
 			}
 			return object_cache_service.GetPostsView(ctx, pgIDs)
 		}
@@ -135,13 +136,21 @@ func updateTrendZSETs(ctx context.Context, postID int64, score float64, directTa
 
 	// 1. Buckets Globaux
 	if err := redis.TrendGlobalHourly.ZAddWithCap(ctx, currentHour, score, postID, variables.TDDMaxZSET); err != nil {
-		numan_log.Error(ctx).Err(err).Msg("Impossible de mettre à jour la tendance horaire")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de mettre à jour la tendance horaire dans le cache.",
+			err,
+		)
 	}
 
 	if err := redis.TrendGlobalDaily.ZAddWithCap(ctx, currentDate, score, postID, variables.TDDMaxZSET); err != nil {
-		numan_log.Error(ctx).Err(err).Msg("Impossible de mettre à jour la tendance journalière")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de mettre à jour la tendance journalière dans le cache.",
+			err,
+		)
 	}
 
 	// 2. Buckets par Tags (Sérialisation Msgpack pour le flag IsIndirect)

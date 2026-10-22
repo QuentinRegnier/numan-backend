@@ -2,14 +2,24 @@ package mongo
 
 import (
 	"context"
+	"errors"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 )
 
 // MongoGetPostLikes interroge le stockage L2 pour la liste des likes.
 func MongoGetPostLikes(ctx context.Context, postID int64, limit int64, offset int64) ([]int64, error) {
-	// ⚠️ CORRECTION POLYMORPHE : On cible explicitement les Posts (0) et l'ID
+	if Likes == nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("MongoDB collection 'Likes' is not initialized"),
+		)
+	}
+
+	// Cible explicitement les Posts (0) et l'ID
 	filter := map[string]any{
 		"target_type": 0,
 		"target_id":   postID,
@@ -18,13 +28,17 @@ func MongoGetPostLikes(ctx context.Context, postID int64, limit int64, offset in
 	// On trie par date de création décroissante (les plus récents en premier)
 	sort := map[string]any{"created_at": -1}
 
-	docs, err := Likes.GetPaginated(filter, sort, int64(offset), int64(limit))
+	docs, err := Likes.GetPaginated(filter, sort, offset, limit)
 	if err != nil {
-		numan_log.Error(ctx).Err(err).Msg("Erreur interne lors de l'exécution de l'opération")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de récupérer les informations des likes.",
+			err,
+		)
 	}
 
-	var userIDs []int64
+	userIDs := []int64{}
 	for _, doc := range docs {
 		if uidFloat, ok := doc["user_id"].(float64); ok {
 			userIDs = append(userIDs, int64(uidFloat))

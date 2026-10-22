@@ -2,6 +2,7 @@ package cache_service
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/sync_models"
@@ -22,15 +23,23 @@ func MarkUserOnline(ctx context.Context, userID int64) error {
 	// 1. On stocke une simple string "1" pour minimiser l'empreinte RAM (O(1))
 	errRedis := redis.Presence.SetPrimitive(ctx, userID, "1")
 	if errRedis != nil {
-		numan_log.Warn(ctx).Err(errRedis).Int64("user_id", userID).Msg("Impossible de marquer l'utilisateur comme en ligne dans le cache")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de marquer l'utilisateur comme en ligne dans le cache.",
+			errRedis,
+		)
 	}
 
 	// 2. Application stricte du TTL de 90 secondes (Lissage de déconnexion)
 	errExpire := redis.Expire(ctx, redis.Presence.Key(userID), 90*time.Second)
 	if errExpire != nil {
-		numan_log.Warn(ctx).Err(errExpire).Int64("user_id", userID).Msg("Impossible de prolonger le TTL de présence")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de prolonger la présence de l'utilisateur dans le cache.",
+			errExpire,
+		)
 	}
 
 	return nil
@@ -67,8 +76,12 @@ func AreUsersOnline(ctx context.Context, input sync_models.SyncPresenceInput) (m
 	// Appel pur au repository/redis via la méthode abstraite MGet
 	redisValues, errRedis := redis.Presence.MGet(ctx, userIDsAsAny...)
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Msg("Échec du MGet sur la collection de Présence")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de récupérer les états de présence depuis le cache.",
+			errRedis,
+		)
 	}
 
 	for index, cachedValue := range redisValues {

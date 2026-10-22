@@ -2,6 +2,7 @@ package cache_service
 
 import (
 	"context"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -37,8 +38,12 @@ func AddNotificationToZSET(ctx context.Context, userID int64, notificationID int
 func GetNotificationIDsFromZSET(ctx context.Context, userID int64, offset int64, limit int64) ([]int64, error) {
 	idStringsList, errRedis := redis.NotificationsZSet.ZRevRange(ctx, userID, offset, offset+limit-1)
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Int64("user_id", userID).Msg("Erreur de récupération des IDs de notification dans le ZSET")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de lire les identifiants de notifications depuis le cache.",
+			errRedis,
+		)
 	}
 
 	parsedNotificationIDs := pkg.ParseInt64List(idStringsList)
@@ -59,8 +64,12 @@ func GetNotificationIDsFromZSET(ctx context.Context, userID int64, offset int64,
 func PurgeNotificationsZSET(ctx context.Context, userID int64) error {
 	errRedis := redis.NotificationsZSet.DeleteObject(ctx, userID)
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Msg("Erreur lors de la purge du ZSET des notifications")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de purger les notifications du cache.",
+			errRedis,
+		)
 	}
 	return nil
 }

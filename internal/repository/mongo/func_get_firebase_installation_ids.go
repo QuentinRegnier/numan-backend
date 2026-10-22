@@ -2,26 +2,36 @@ package mongo
 
 import (
 	"context"
+	"errors"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"go.mongodb.org/mongo-driver/bson"
 )
 
-// MongoGetfirebaseInstallationIDs récupère tous les tokens de notification d'un utilisateur dans le stockage à froid
+// MongoGetFirebaseInstallationIDs récupère tous les tokens de notification d'un utilisateur dans le stockage à froid
 func MongoGetFirebaseInstallationIDs(ctx context.Context, userID int64) ([]string, error) {
 	if Sessions == nil {
-		return nil, nil
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("MongoDB collection 'Sessions' is not initialized"),
+		)
 	}
 
 	filter := bson.M{"user_id": userID}
 	docs, err := Sessions.Get(filter, nil)
 	if err != nil {
-		numan_log.Error(ctx).Err(err).Msg("Erreur interne lors de l'exécution de l'opération")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de récupérer les informations de session.",
+			err,
+		)
 	}
 
-	var tokens []string
+	tokens := []string{}
 	for _, doc := range docs {
 		if token, ok := doc["firebase_installation_id"].(string); ok && token != "" {
 			tokens = append(tokens, token)

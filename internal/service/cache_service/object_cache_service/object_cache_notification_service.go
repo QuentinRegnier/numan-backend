@@ -2,6 +2,7 @@ package object_cache_service
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/notification_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
@@ -19,8 +20,12 @@ import (
 func SetNotificationInObjectCache(ctx context.Context, notificationPayload notification_models.NotificationPayload) error {
 	errRedis := redis.NotificationsObj.SetObject(ctx, notificationPayload.ID, notificationPayload)
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Int64("notif_id", notificationPayload.ID).Msg("Impossible de sauvegarder la notification dans l'Object Cache")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de sauvegarder la notification dans l'Object Cache.",
+			errRedis,
+		)
 	}
 	return nil
 }

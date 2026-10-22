@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
@@ -72,8 +71,7 @@ func GetMessageIDsFromSpeedCache(ctx context.Context, conversationID int64, offs
 		// FALLBACK ABSOLU L3 (Cold Storage)
 		postgresIDsList, errPg := postgres.FuncLoadMessageIDsPaginated(ctx, conversationID, offsetMessageID, paginationLimit, scrollDirection, frozenMessageID)
 		if errPg != nil {
-			numan_log.Error(ctx).Err(errPg).Int64("conv_id", conversationID).Msg("Erreur L3 lors de la récupération paginée des messages")
-			return nil, numan_error.NewInternal()
+			return nil, errPg
 		}
 
 		// RÉHYDRATATION DE L'INDEX L1 (Auto-guérison massive et asynchrone)

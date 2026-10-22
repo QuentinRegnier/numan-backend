@@ -285,7 +285,7 @@ func (c *Collection) Exists(ctx context.Context, id any) (bool, error) {
 func (c *Collection) SetObject(ctx context.Context, id any, data any) error {
 	msgpackBytes, err := msgpack.Marshal(data)
 	if err != nil {
-		return numan_error.NewInternal()
+		return err
 	}
 	return c.Client.Set(ctx, c.Key(id), msgpackBytes, c.DefaultTTL).Err()
 }

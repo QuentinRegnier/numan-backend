@@ -5,12 +5,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/auth_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/lib/pq"
 )
@@ -18,8 +18,20 @@ import (
 func FuncLoadSession(ctx context.Context, ID int64, UserId int64, FirebaseInstallationID string, MasterToken string) (auth_models.SessionsPayload, error) {
 	// 1. Vérification que les champs sont non nuls
 	if ID == -1 && UserId == -1 && FirebaseInstallationID == "" && MasterToken == "" {
-		numan_log.Error(ctx).Msg("FuncLoadSession : Champs requis manquants pour charger la session depuis Postgres")
-		return auth_models.SessionsPayload{}, numan_error.NewInternal()
+		return auth_models.SessionsPayload{}, numan_error.NewBadRequest(
+			numan_error.CodeInvalidPayload,
+			"Champs requis manquants pour charger la session.",
+			errors.New("all session lookup identifiers are empty or invalid"),
+		)
+	}
+
+	if postgres.PostgresDB == nil {
+		return auth_models.SessionsPayload{}, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("PostgreSQL connection 'PostgresDB' is not initialized"),
+		)
 	}
 
 	// 2. Préparation des arguments (gestion des types spéciaux)
@@ -59,7 +71,7 @@ func FuncLoadSession(ctx context.Context, ID int64, UserId int64, FirebaseInstal
 	res.LastJWT = ""
 	res.ToleranceTime = domain.TimeToMillis(time.Time{})
 
-	err := postgres.PostgresDB.QueryRow(sqlStatement, args...).Scan(
+	err := postgres.PostgresDB.QueryRowContext(ctx, sqlStatement, args...).Scan(
 		&res.ID,
 		&res.UserID,
 		&res.MasterToken,
@@ -74,8 +86,12 @@ func FuncLoadSession(ctx context.Context, ID int64, UserId int64, FirebaseInstal
 		if errors.Is(err, sql.ErrNoRows) {
 			return auth_models.SessionsPayload{}, nil
 		}
-		numan_log.Error(ctx).Err(err).Msg("Erreur SQL inattendue lors de la vérification de l'enregistrement")
-		return auth_models.SessionsPayload{}, numan_error.NewInternal()
+		return auth_models.SessionsPayload{}, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de charger la session.",
+			err,
+		)
 	}
 
 	// Traitement des données
@@ -84,10 +100,13 @@ func FuncLoadSession(ctx context.Context, ID int64, UserId int64, FirebaseInstal
 	}
 
 	if len(deviceInfoBytes) > 0 {
-		err = json.Unmarshal(deviceInfoBytes, &res.DeviceInfo)
-		if err != nil {
-			numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des informations du dispositif")
-			return auth_models.SessionsPayload{}, numan_error.NewInternal()
+		if err := json.Unmarshal(deviceInfoBytes, &res.DeviceInfo); err != nil {
+			return auth_models.SessionsPayload{}, numan_error.NewAppError(
+				http.StatusInternalServerError,
+				numan_error.CodeDatabaseError,
+				"Impossible de désérialiser les informations de l'appareil.",
+				err,
+			)
 		}
 	}
 

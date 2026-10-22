@@ -2,41 +2,66 @@ package mongo
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 )
 
 // redis2Mongo fait le pont entre le domaine (Redis EntityType) et les collections MongoDB.
 func redis2Mongo(ctx context.Context, entity redis.EntityType) (*Collection, error) {
+	var coll *Collection
+
 	switch entity {
 	case redis.EntityUser:
-		return Users, nil
+		coll = Users
 	case redis.EntityUserSettings:
-		return UserSettings, nil
+		coll = UserSettings
 	case redis.EntitySession:
-		return Sessions, nil
+		coll = Sessions
 	case redis.EntityRelation:
-		return Relations, nil
+		coll = Relations
 	case redis.EntityPost:
-		return Posts, nil
+		coll = Posts
 	case redis.EntityComment:
-		return Comments, nil
+		coll = Comments
 	case redis.EntityLike:
-		return Likes, nil
+		coll = Likes
 	case redis.EntityMedia:
-		return Media, nil
+		coll = Media
 	case redis.EntityConversation:
-		return Conversations, nil
+		coll = Conversations
 	case redis.EntityMembers:
-		return Members, nil
+		coll = Members
 	case redis.EntityMessage:
-		return Messages, nil
+		coll = Messages
+	case redis.EntityMessageReaction:
+		coll = MessageReactions
+	case redis.EntitySaved:
+		coll = Saved
 	case redis.EntityPasskey:
-		return Passkeys, nil
+		coll = Passkeys
+	case redis.EntityNotification:
+		coll = Notifications
 	default:
-		numan_log.Error(ctx).Str("entity", string(entity)).Msg("Entité non supportée pour la résolution de la collection MongoDB")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Entité non supportée.",
+			fmt.Errorf("unsupported entity type for MongoDB resolution: %s", entity),
+		)
 	}
+
+	if coll == nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("MongoDB collection is not initialized"),
+		)
+	}
+
+	return coll, nil
 }

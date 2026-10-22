@@ -3,6 +3,7 @@ package cache_service
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strconv"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
@@ -73,8 +74,12 @@ func UpdateRelationState(ctx context.Context, targetID int64, callerID int64, ne
 
 	errHSet := redis.SpeedRelations.HSet(ctx, targetID, callerIDString, newRelationState)
 	if errHSet != nil {
-		numan_log.Error(ctx).Err(errHSet).Msg("Impossible de mettre à jour le HSET RelationValue")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de mettre à jour la relation dans le cache.",
+			errHSet,
+		)
 	}
 
 	timestampScore := float64(timestampMs)
@@ -103,8 +108,12 @@ func GetSpeedRelationsIndex(ctx context.Context, userID int64) ([]int64, error) 
 
 	followerStringIDs, errRedis := redis.SpeedRelationsIndex.ZRevRange(ctx, zsetKey, 0, -1)
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Msg("Impossible de lire l'index SpeedRelations des followers")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de lire l'index des abonnés depuis le cache.",
+			errRedis,
+		)
 	}
 
 	followersIDsList := pkg.ParseInt64List(followerStringIDs)
@@ -118,8 +127,12 @@ func GetSpeedFriends(ctx context.Context, userID int64) ([]int64, error) {
 
 	friendStringIDs, errRedis := redis.SpeedRelationsIndex.ZRevRange(ctx, zsetKey, 0, -1)
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Msg("Impossible de lire l'index SpeedRelations des amis")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de lire l'index des amis depuis le cache.",
+			errRedis,
+		)
 	}
 
 	friendsIDsList := pkg.ParseInt64List(friendStringIDs)
@@ -147,8 +160,12 @@ func GetRelationsByDirectionPaginatedFromCache(ctx context.Context, primaryID in
 
 	targetStringsIDs, errRedis := redis.SpeedRelationsIndex.ZRevRange(ctx, targetZsetKey, int64(fetchOffset), int64(fetchOffset+fetchLimit-1))
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Msg("Erreur lors de la récupération paginée du SpeedRelationsIndex")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de lire les relations par direction depuis le cache.",
+			errRedis,
+		)
 	}
 
 	matchedIDsList := pkg.ParseInt64List(targetStringsIDs)

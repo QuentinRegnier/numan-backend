@@ -3,6 +3,7 @@ package cache_service
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/auth_models"
@@ -37,8 +38,12 @@ func storeUserLiteInSpeedCache(ctx context.Context, userLitePayload lite_models.
 	// 2. Sauvegarde dans l'Object Cache Rapide L1
 	errSet := redis.UsersLite.SetObject(ctx, userLitePayload.ID, userLitePayload)
 	if errSet != nil {
-		numan_log.Error(ctx).Err(errSet).Msg("Échec de la sauvegarde du UserLiteRequest dans le Speed Cache")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de sauvegarder l'utilisateur dans le cache.",
+			errSet,
+		)
 	}
 
 	return nil
@@ -75,7 +80,12 @@ func AddUserToSpeedCache(ctx context.Context, userPayload auth_models.UserPayloa
 
 	errSet := redis.UsersLite.SetObject(ctx, userPayload.ID, constructedUserLite)
 	if errSet != nil {
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible d'ajouter l'utilisateur au cache.",
+			errSet,
+		)
 	}
 
 	return nil
@@ -94,7 +104,12 @@ func UpdateUserSpeedCachePrivacy(ctx context.Context, userID int64, conversation
 
 		errSet := redis.UsersLite.SetObject(ctx, userID, userLitePayload)
 		if errSet != nil {
-			return numan_error.NewInternal()
+			return numan_error.NewAppError(
+				http.StatusInternalServerError,
+				numan_error.CodeCacheError,
+				"Impossible de mettre à jour la confidentialité de l'utilisateur dans le cache.",
+				errSet,
+			)
 		}
 	}
 	return nil
@@ -106,8 +121,12 @@ func SearchUserByPrefix(ctx context.Context, searchPrefix string, searchOffset, 
 	// 1. Recherche ultra-rapide dans l'index lexicographique
 	lexicographicResultsList, errLex := redis.UsersLex.ZRangeByLex(ctx, variables.LexicographicGlobalKey, strings.ToLower(searchPrefix), searchOffset, searchLimit)
 	if errLex != nil {
-		numan_log.Error(ctx).Err(errLex).Msg("Erreur L1 lors du ZRangeByLex utilisateurs")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de rechercher les utilisateurs dans le cache.",
+			errLex,
+		)
 	}
 
 	if len(lexicographicResultsList) == 0 {
@@ -129,8 +148,12 @@ func SearchUserByPrefix(ctx context.Context, searchPrefix string, searchOffset, 
 	// 3. Hydratation massive via MGET sur la collection UsersLite
 	multiGetResult, errMGet := redis.UsersLite.GetMany(ctx, extractedIDsList)
 	if errMGet != nil {
-		numan_log.Error(ctx).Err(errMGet).Msg("Échec L1 lors de l'hydratation massive des SpeedUsers")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible d'hydrater les utilisateurs depuis le cache.",
+			errMGet,
+		)
 	}
 
 	var hydratedUsersList []lite_models.UserLiteRequest

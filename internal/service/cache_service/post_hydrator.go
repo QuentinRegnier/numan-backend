@@ -3,7 +3,9 @@ package cache_service
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/post_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
@@ -24,8 +26,12 @@ import (
 func fetchAndHydrateFromCollection(ctx context.Context, redisCollection *redis.Collection, targetKey any, offset int64, limit int64) ([]post_models.PostPayload, error) {
 	idStringsList, errRedis := redisCollection.ZRevRange(ctx, targetKey, offset, offset+limit-1)
 	if errRedis != nil {
-		numan_log.Error(context.Background()).Err(errRedis).Msg("Échec de lecture ZSET dans fetchAndHydrateFromCollection")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de lire la collection ordonnée dans le cache.",
+			errRedis,
+		)
 	}
 
 	if len(idStringsList) == 0 {
@@ -54,8 +60,7 @@ func getPostsFromMongoPaginated(fieldName string, expectedValue any, offset int6
 
 	mongoDocuments, errMongo := mongo.Posts.GetPaginated(mongoFilter, mongoSort, offset, limit)
 	if errMongo != nil {
-		numan_log.Error(context.Background()).Err(errMongo).Msg("Erreur L2 lors de la récupération paginée Mongo")
-		return []post_models.PostPayload{}, numan_error.NewInternal()
+		return []post_models.PostPayload{}, errMongo
 	}
 
 	var hydratedPosts []post_models.PostPayload
@@ -91,10 +96,23 @@ func getPostsFromPostgresPaginated(ctx context.Context, rankType string, offset 
 		sqlQuery = `SELECT id FROM content.posts WHERE visibility != 2 ORDER BY created_at DESC OFFSET $1 LIMIT $2`
 	}
 
+	if postgres.PostgresDB == nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("PostgreSQL connection 'PostgresDB' is not initialized"),
+		)
+	}
+
 	sqlRows, errPg := postgres.PostgresDB.QueryContext(ctx, sqlQuery, offset, limit)
 	if errPg != nil {
-		numan_log.Error(context.Background()).Err(errPg).Str("rank_type", rankType).Msg("Échec L3 lors de la requête de classement paginée")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de récupérer les classements de publications depuis PostgreSQL (L3).",
+			errPg,
+		)
 	}
 
 	defer func(rowsToClose *sql.Rows) {

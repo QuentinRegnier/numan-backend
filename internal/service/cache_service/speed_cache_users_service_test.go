@@ -132,6 +132,7 @@ func TestSpeedCacheUsersOperations(t *testing.T) {
 					"password_hash", "first_name", "last_name", "birthdate", "sex", "bio",
 					"profile_picture_id", "grade", "location", "school", "work", "badges",
 					"desactivated", "banned", "ban_reason", "ban_expires_at", "created_at", "updated_at",
+					"two_factor_enabled", "two_factor_method", "totp_secret",
 				},
 				rows: [][]driver.Value{
 					{
@@ -139,6 +140,7 @@ func TestSpeedCacheUsersOperations(t *testing.T) {
 						"hash", "Paul", "Martin", "2000-01-01T00:00:00Z", int64(1), "Bio text",
 						int64(99), int64(3), "Paris", "42", "Dev", nil,
 						false, false, nil, nil, now, now,
+						false, int64(0), nil,
 					},
 				},
 			}

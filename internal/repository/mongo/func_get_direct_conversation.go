@@ -2,11 +2,13 @@ package mongo
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/conversation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -15,9 +17,14 @@ import (
 // MongoGetDirectConversation interroge L2 via un pipeline d'agrégation performant.
 func MongoGetDirectConversation(ctx context.Context, user1, user2 int64) (conversation_models.ConversationPayload, error) {
 	if Members == nil || Conversations == nil {
-		numan_log.Error(ctx).Int64("user1", user1).Int64("user2", user2).Msg("Les collections MongoDB requises (Members ou Conversations) ne sont pas initialisées")
-		return conversation_models.ConversationPayload{}, numan_error.NewInternal()
+		return conversation_models.ConversationPayload{}, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("MongoDB collections 'Members' or 'Conversations' are not initialized"),
+		)
 	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -38,31 +45,51 @@ func MongoGetDirectConversation(ctx context.Context, user1, user2 int64) (conver
 
 	cursor, err := Members.DB.Collection(Members.Name).Aggregate(ctx, pipeline)
 	if err != nil {
-		return conversation_models.ConversationPayload{}, err
+		return conversation_models.ConversationPayload{}, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de charger la conversation.",
+			err,
+		)
 	}
-	defer func(cursor *mongo.Cursor, ctx context.Context) {
-		err := cursor.Close(ctx)
-		if err != nil {
-			numan_log.Error(ctx).Err(err).Msg("Erreur lors de la fermeture du curseur Mongo")
-		}
-	}(cursor, ctx)
+	defer cursor.Close(ctx)
 
 	var results []bson.M
-	if err = cursor.All(ctx, &results); err != nil || len(results) == 0 {
-		return conversation_models.ConversationPayload{}, numan_error.NewNotFound("CONV_NOT_FOUND", "Conversation privée introuvable.", err)
+	if err := cursor.All(ctx, &results); err != nil {
+		return conversation_models.ConversationPayload{}, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible d'extraire les résultats de la requête (Storage L2).",
+			err,
+		)
 	}
 
-	// CORRECTION : Assertion de type pour forcer l'interface{} en bson.M (map[string]any)
+	if len(results) == 0 {
+		return conversation_models.ConversationPayload{}, numan_error.NewNotFound(
+			"CONV_NOT_FOUND",
+			"Conversation privée introuvable.",
+			fmt.Errorf("direct conversation between users %d and %d was not found in Warm Storage (L2)", user1, user2),
+		)
+	}
+
 	convMap, ok := results[0]["conv"].(bson.M)
 	if !ok {
-		numan_log.Error(ctx).Int64("user1", user1).Int64("user2", user2).Msg("Impossible de formater le résultat MongoDB (clé 'conv') en bson.M")
-		return conversation_models.ConversationPayload{}, numan_error.NewInternal()
+		return conversation_models.ConversationPayload{}, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de formater les données de la conversation.",
+			errors.New("failed to cast 'conv' field to bson.M"),
+		)
 	}
 
 	var conv conversation_models.ConversationPayload
 	if err := pkg.ToStruct(convMap, &conv); err != nil {
-		numan_log.Error(ctx).Err(err).Int64("user1", user1).Int64("user2", user2).Msg("Échec de la conversion de la map conversation en structure (ToStruct)")
-		return conversation_models.ConversationPayload{}, numan_error.NewInternal()
+		return conversation_models.ConversationPayload{}, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de charger les données de la conversation.",
+			err,
+		)
 	}
 
 	return conv, nil

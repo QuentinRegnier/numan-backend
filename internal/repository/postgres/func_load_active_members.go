@@ -4,12 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/member_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 )
 
@@ -20,19 +21,28 @@ type activeMemberResult struct {
 
 // FuncLoadActiveMembers récupère les membres pour le Seeding de l'Inbox
 func FuncLoadActiveMembers(ctx context.Context) ([]activeMemberResult, error) {
+	if postgres.PostgresDB == nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("PostgreSQL connection 'PostgresDB' is not initialized"),
+		)
+	}
+
 	query := `SELECT conversation_id, user_id, role, settings, unread_count, frozen_message_id, last_read_message_id, last_message_id, joined_at FROM messaging.func_load_active_members()`
 	rows, err := postgres.PostgresDB.QueryContext(ctx, query)
 	if err != nil {
-		return nil, numan_error.NewInternal(err)
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de charger les membres actifs.",
+			err,
+		)
 	}
-	defer func(rows *sql.Rows) {
-		err := rows.Close()
-		if err != nil {
-			numan_log.Error(ctx).Err(err).Msg("Erreur lors de la fermeture des lignes (Postgres)")
-		}
-	}(rows)
+	defer func() { _ = rows.Close() }()
 
-	var results []activeMemberResult
+	results := make([]activeMemberResult, 0)
 	for rows.Next() {
 		var cid, uid int64
 		var role, unreadCount int
@@ -47,10 +57,13 @@ func FuncLoadActiveMembers(ctx context.Context) ([]activeMemberResult, error) {
 			// PARSING DU JSONB VERS LA STRUCT GO
 			var parsedSettings member_models.MemberSettings
 			if settingsRaw.Valid && settingsRaw.String != "" && settingsRaw.String != "{}" {
-				err = json.Unmarshal([]byte(settingsRaw.String), &parsedSettings)
-				if err != nil {
-					numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des paramètres du membre")
-					return nil, numan_error.NewInternal()
+				if err := json.Unmarshal([]byte(settingsRaw.String), &parsedSettings); err != nil {
+					return nil, numan_error.NewAppError(
+						http.StatusInternalServerError,
+						numan_error.CodeDatabaseError,
+						"Impossible de désérialiser les paramètres du membre.",
+						err,
+					)
 				}
 			}
 
@@ -78,5 +91,15 @@ func FuncLoadActiveMembers(ctx context.Context) ([]activeMemberResult, error) {
 			results = append(results, activeMemberResult{Member: mem, LastMessageID: lastMsgID})
 		}
 	}
+
+	if err := rows.Err(); err != nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible d'itérer sur les membres actifs.",
+			err,
+		)
+	}
+
 	return results, nil
 }

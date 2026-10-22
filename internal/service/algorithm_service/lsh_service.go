@@ -5,7 +5,6 @@ import (
 	"math/rand"
 	"strconv"
 
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
@@ -101,7 +100,7 @@ func storeLSHBucket(ctx context.Context, postID int64, hashValue uint32) error {
 	memberIDString := strconv.FormatInt(postID, 10)
 
 	if err := redis.LSHBuckets.SAdd(ctx, hashValue, memberIDString); err != nil {
-		return numan_error.NewInternal()
+		return err
 	}
 
 	err := redis.LSHBuckets.RefreshTTL(ctx, hashValue)

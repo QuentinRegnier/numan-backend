@@ -3,26 +3,38 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"log"
+	"errors"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/member_models"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 )
 
 // FuncLoadMembersByRolePaginated charge les membres d'une conversation par rôle (ex: -3 pour les requêtes)
 func FuncLoadMembersByRolePaginated(ctx context.Context, convID int64, role int, limit int64, offset int64) ([]member_models.MemberPayload, error) {
+	if postgres.PostgresDB == nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("PostgreSQL connection 'PostgresDB' is not initialized"),
+		)
+	}
+
 	query := `SELECT * FROM messaging.func_load_members_by_role_paginated($1, $2, $3, $4)`
 	rows, err := postgres.PostgresDB.QueryContext(ctx, query, convID, role, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de charger les membres par rôle.",
+			err,
+		)
 	}
-	defer func(rows *sql.Rows) {
-		if err := rows.Close(); err != nil {
-			log.Printf("Erreur fermeture rows func_load_members_by_role_paginated: %v", err)
-		}
-	}(rows)
+	defer func() { _ = rows.Close() }()
 
-	var members []member_models.MemberPayload
+	members := make([]member_models.MemberPayload, 0)
 	for rows.Next() {
 		var mem member_models.MemberPayload
 		var frozenDB sql.NullInt64 // Gestion du potentiel NULL
@@ -42,5 +54,15 @@ func FuncLoadMembersByRolePaginated(ctx context.Context, convID int64, role int,
 			members = append(members, mem)
 		}
 	}
+
+	if err := rows.Err(); err != nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible d'itérer sur les membres par rôle.",
+			err,
+		)
+	}
+
 	return members, nil
 }

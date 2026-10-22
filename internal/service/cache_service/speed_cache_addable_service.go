@@ -3,6 +3,7 @@ package cache_service
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -35,16 +36,19 @@ func GetAddableUsersFromSpeedCache(ctx context.Context, callerID int64, limit in
 
 	isZsetPresent, errExists := redis.Exists(ctx, zsetTargetKey)
 	if errExists != nil {
-		numan_log.Error(ctx).Err(errExists).Msg("Erreur L1 lors de la vérification du ZSET AddableUsers")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de vérifier le cache des utilisateurs ajoutables.",
+			errExists,
+		)
 	}
 
 	// ── ÉTAPE 2 : CACHE MISS (RECONSTRUCTION INTELLIGENTE) ──────────────────
 	if !isZsetPresent {
 		addableRelationsList, errPg := postgres.FuncLoadAddableRelations(ctx, callerID)
 		if errPg != nil {
-			numan_log.Error(ctx).Err(errPg).Int64("caller_id", callerID).Msg("Erreur L3 lors de la reconstruction des AddableUsers")
-			return nil, numan_error.NewInternal()
+			return nil, errPg
 		}
 
 		if len(addableRelationsList) > 0 {
@@ -110,8 +114,12 @@ func GetAddableUsersFromSpeedCache(ctx context.Context, callerID int64, limit in
 	// ── ÉTAPE 3 : LECTURE PAGINÉE (O(log(N))) ───────────────────────────────
 	memberStringsList, errZRange := redis.ZRange(ctx, zsetTargetKey, offset, offset+limit-1)
 	if errZRange != nil {
-		numan_log.Error(ctx).Err(errZRange).Msg("Erreur L1 lors de la lecture paginée du ZSET AddableUsers")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de lire les utilisateurs ajoutables depuis le cache.",
+			errZRange,
+		)
 	}
 
 	var parsedFinalIDs []int64
@@ -135,8 +143,12 @@ func GetAddableUsersFromSpeedCache(ctx context.Context, callerID int64, limit in
 	// ── ÉTAPE 4 : HYDRATATION FINALE (MGET O(1)) ────────────────────────────
 	finalGetResult, errFinalMGet := redis.UsersLite.GetMany(ctx, parsedFinalIDs)
 	if errFinalMGet != nil {
-		numan_log.Error(ctx).Err(errFinalMGet).Msg("Erreur L1 lors de l'hydratation finale des AddableUsers")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de charger les détails des utilisateurs ajoutables depuis le cache.",
+			errFinalMGet,
+		)
 	}
 
 	var hydratedUsersList []lite_models.UserLiteRequest

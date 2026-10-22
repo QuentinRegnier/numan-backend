@@ -3,10 +3,10 @@ package cache_service
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/auth_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
@@ -14,8 +14,12 @@ import (
 // SavePreAuthSession stocke une PreAuthSession en RAM (L1) via l'Object Cache.
 func SavePreAuthSession(ctx context.Context, session auth_models.PreAuthSession) error {
 	if err := redis.PreAuth.SetObject(ctx, session.Token, session); err != nil {
-		numan_log.Error(ctx).Err(err).Int64("user_id", session.UserID).Msg("Échec sauvegarde Redis L1 de PreAuthSession")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Échec de sauvegarde de la session de pré-authentification",
+			err,
+		)
 	}
 	return nil
 }
@@ -45,7 +49,12 @@ func IncrementPreAuthAttempts(ctx context.Context, session auth_models.PreAuthSe
 	}
 
 	if err := redis.PreAuth.SetObject(ctx, session.Token, session); err != nil {
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Échec de mise à jour de la session de pré-authentification",
+			err,
+		)
 	}
 	return nil
 }
@@ -60,7 +69,12 @@ func ConsumeTOTPCode(ctx context.Context, userID int64, code string) (bool, erro
 	replayID := fmt.Sprintf("totp_replay:%d:%s", userID, code)
 	ok, err := redis.PreAuth.SetNX(ctx, replayID, 1, variables.WebAuthnTimeoutMs)
 	if err != nil {
-		return false, numan_error.NewInternal()
+		return false, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Échec de la vérification anti-rejeu du code TOTP",
+			err,
+		)
 	}
 	return ok, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strconv"
 	"time"
@@ -42,8 +43,12 @@ func GetInboxView(ctx context.Context, userID int64, paginationLimit int64, pagi
 	// ── ÉTAPE 1 : LECTURE DU ZSET INBOX (L1) ────────────────────────────────
 	conversationIDStringsList, errRedisInbox := redis.UserInbox.ZRevRange(ctx, userID, paginationOffset, paginationOffset+paginationLimit-1)
 	if errRedisInbox != nil {
-		numan_log.Error(ctx).Err(errRedisInbox).Int64("user_id", userID).Msg("Erreur L1 lors de la lecture du UserInbox ZSET")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de lire l'inbox depuis le cache.",
+			errRedisInbox,
+		)
 	}
 
 	if len(conversationIDStringsList) == 0 {
@@ -400,12 +405,22 @@ func ResetMemberUnreadCountInSpeedCache(ctx context.Context, conversationID int6
 
 		errSet := redis.ConvMembers.SetObject(ctx, compositeMemberKey, memberLitePayload)
 		if errSet != nil {
-			return numan_error.NewInternal()
+			return numan_error.NewAppError(
+				http.StatusInternalServerError,
+				numan_error.CodeCacheError,
+				"Impossible de mettre à jour le membre dans le cache.",
+				errSet,
+			)
 		}
 
 		err := redis.InboxActivity.SetPrimitive(ctx, userID, time.Now().UnixMilli())
 		if err != nil {
-			return numan_error.NewInternal()
+			return numan_error.NewAppError(
+				http.StatusInternalServerError,
+				numan_error.CodeCacheError,
+				"Impossible de mettre à jour l'activité de l'inbox dans le cache.",
+				err,
+			)
 		}
 	}
 
@@ -420,7 +435,12 @@ func ResetMemberUnreadCountInSpeedCache(ctx context.Context, conversationID int6
 func PurgeUserConversations(ctx context.Context, userID int64) error {
 	errDel := redis.UserInbox.DeleteObject(ctx, userID)
 	if errDel != nil {
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de purger l'inbox de l'utilisateur dans le cache.",
+			errDel,
+		)
 	}
 	return nil
 }

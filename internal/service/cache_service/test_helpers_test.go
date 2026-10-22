@@ -254,24 +254,47 @@ func (s *fakeRedisServer) execCommand(args []string) string {
 			return respErr("wrong number of arguments for SET")
 		}
 		key, val := args[1], args[2]
-		s.strings[key] = val
+		var nx bool
+		var exSec, pxMs int64
 		for i := 3; i < len(args); i++ {
 			switch strings.ToUpper(args[i]) {
+			case "NX":
+				nx = true
 			case "EX":
 				if i+1 < len(args) {
-					sec, _ := strconv.ParseInt(args[i+1], 10, 64)
-					s.ttls[key] = time.Duration(sec) * time.Second
+					exSec, _ = strconv.ParseInt(args[i+1], 10, 64)
 					i++
 				}
 			case "PX":
 				if i+1 < len(args) {
-					ms, _ := strconv.ParseInt(args[i+1], 10, 64)
-					s.ttls[key] = time.Duration(ms) * time.Millisecond
+					pxMs, _ = strconv.ParseInt(args[i+1], 10, 64)
 					i++
 				}
 			}
 		}
+		if nx {
+			if _, exists := s.strings[key]; exists {
+				return respNil()
+			}
+		}
+		s.strings[key] = val
+		if exSec > 0 {
+			s.ttls[key] = time.Duration(exSec) * time.Second
+		} else if pxMs > 0 {
+			s.ttls[key] = time.Duration(pxMs) * time.Millisecond
+		}
 		return respSimple("OK")
+
+	case "SETNX":
+		if len(args) < 3 {
+			return respErr("wrong number of arguments for SETNX")
+		}
+		key, val := args[1], args[2]
+		if _, exists := s.strings[key]; exists {
+			return respInt(0)
+		}
+		s.strings[key] = val
+		return respInt(1)
 
 	case "GET":
 		if len(args) < 2 {

@@ -2,10 +2,10 @@ package cache_service
 
 import (
 	"context"
+	"net/http"
 	"strconv"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
@@ -23,20 +23,34 @@ func GetTopUserPostIDs(ctx context.Context, userID int64, offset int64, limit in
 
 	isZSetPresent, errExists := redis.UserTimeline.Exists(ctx, userID)
 	if errExists != nil {
-		numan_log.Warn(ctx).Err(errExists).Msg("Erreur lors de la vérification de l'existence de la UserTimeline")
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Erreur lors de la vérification de l'existence de la timeline utilisateur",
+			errExists,
+		)
 	}
 
 	if !isZSetPresent {
 		// Le retour d'une erreur déclenchera le fallback (L2 -> L3) par la couche appelante
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Timeline utilisateur non présente dans le cache",
+			nil,
+		)
 	}
 
 	// ── ÉTAPE 2 : EXTRACTION PAGINÉE DU ZSET (O(log(N)+M)) ──────────────────
 
 	idStringsList, errRedis := redis.UserTimeline.ZRevRange(ctx, userID, offset, offset+limit-1)
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Int64("user_id", userID).Msg("Échec de lecture de la timeline ZSET")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Échec de lecture de la timeline utilisateur",
+			errRedis,
+		)
 	}
 	var validStrings []string
 	for _, idString := range idStringsList {
@@ -54,8 +68,12 @@ func GetTopUserPostIDs(ctx context.Context, userID int64, offset int64, limit in
 func MarkUserTimelineEmpty(ctx context.Context, userID int64) error {
 	errRedis := redis.UserTimeline.ZAdd(ctx, userID, 0, variables.UserTimelineEmptyMarker)
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Msg("Impossible de marquer la timeline comme vide")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de marquer la timeline comme vide",
+			errRedis,
+		)
 	}
 
 	_ = redis.UserTimeline.RefreshTTL(ctx, userID)
@@ -67,8 +85,12 @@ func PurgeUserTimeline(ctx context.Context, userID int64) error {
 	// DeleteObject encapsule le DEL physique de la clé Redis (Pur DDD)
 	errRedis := redis.UserTimeline.DeleteObject(ctx, userID)
 	if errRedis != nil {
-		numan_log.Warn(ctx).Err(errRedis).Msg("Erreur lors de la purge de la UserTimeline")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Erreur lors de la purge de la timeline utilisateur",
+			errRedis,
+		)
 	}
 	return nil
 }
@@ -83,8 +105,12 @@ func AddPostToUserProfile(ctx context.Context, userID int64, postID int64, times
 	postIDString := strconv.FormatInt(postID, 10)
 	errRedis := redis.UserTimeline.ZAdd(ctx, userID, timestampScore, postIDString)
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Msg("Échec de l'ajout du post dans le ZSET utilisateur")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Échec de l'ajout du post dans la timeline utilisateur",
+			errRedis,
+		)
 	}
 
 	return nil
@@ -95,8 +121,12 @@ func RemovePostFromUserProfile(ctx context.Context, userID int64, postID int64) 
 	postIDString := strconv.FormatInt(postID, 10)
 	errRedis := redis.UserTimeline.ZRem(ctx, userID, postIDString)
 	if errRedis != nil {
-		numan_log.Warn(ctx).Err(errRedis).Msg("Échec du retrait du post dans le ZSET utilisateur")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Échec du retrait du post dans la timeline utilisateur",
+			errRedis,
+		)
 	}
 	return nil
 }

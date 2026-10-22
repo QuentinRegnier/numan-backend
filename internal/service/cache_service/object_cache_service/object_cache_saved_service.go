@@ -2,10 +2,10 @@ package object_cache_service
 
 import (
 	"context"
+	"net/http"
 	"strconv"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 )
@@ -20,8 +20,12 @@ func AddSavedToZSET(ctx context.Context, userID int64, postID int64, zsetScore f
 
 	errRedis := redis.Saved.ZAdd(ctx, userID, zsetScore, postIDString)
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Int64("user_id", userID).Int64("post_id", postID).Msg("Impossible d'ajouter le favori dans le ZSET L1")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible d'ajouter le favori dans le cache.",
+			errRedis,
+		)
 	}
 
 	return nil
@@ -33,8 +37,12 @@ func RemoveSavedFromZSET(ctx context.Context, userID int64, postID int64) error 
 
 	errRedis := redis.Saved.ZRem(ctx, userID, postIDString)
 	if errRedis != nil {
-		numan_log.Warn(ctx).Err(errRedis).Int64("user_id", userID).Int64("post_id", postID).Msg("Impossible de supprimer le favori du ZSET L1")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de supprimer le favori du cache.",
+			errRedis,
+		)
 	}
 
 	return nil
@@ -44,8 +52,12 @@ func RemoveSavedFromZSET(ctx context.Context, userID int64, postID int64) error 
 func GetSavedPostIDs(ctx context.Context, userID int64, paginationOffset int64, paginationLimit int64) ([]int64, error) {
 	idStringsList, errRedis := redis.Saved.ZRevRange(ctx, userID, paginationOffset, paginationOffset+paginationLimit-1)
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Int64("user_id", userID).Msg("Erreur L1 lors de la lecture des IDs de posts sauvegardés")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de lire les identifiants de favoris depuis le cache.",
+			errRedis,
+		)
 	}
 
 	parsedPostIDsList := pkg.ParseInt64List(idStringsList)

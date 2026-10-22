@@ -2,6 +2,7 @@ package cache_service
 
 import (
 	"context"
+	"net/http"
 	"strconv"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
@@ -29,8 +30,12 @@ func GetUserReaction(ctx context.Context, messageID int64, userID int64) (string
 func SetUserReaction(ctx context.Context, messageID int64, userID int64, emojiString string) error {
 	errRedis := redis.MessageUserReactions.HSet(ctx, messageID, strconv.FormatInt(userID, 10), emojiString)
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Int64("message_id", messageID).Msg("Impossible de sauvegarder la réaction utilisateur dans le cache L1")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible d'enregistrer la réaction dans le cache.",
+			errRedis,
+		)
 	}
 	return nil
 }
@@ -39,8 +44,12 @@ func SetUserReaction(ctx context.Context, messageID int64, userID int64, emojiSt
 func DeleteUserReaction(ctx context.Context, messageID int64, userID int64) error {
 	errRedis := redis.MessageUserReactions.HDel(ctx, messageID, strconv.FormatInt(userID, 10))
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Int64("message_id", messageID).Msg("Impossible de supprimer la réaction utilisateur du cache L1")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de supprimer la réaction du cache.",
+			errRedis,
+		)
 	}
 	return nil
 }
@@ -51,8 +60,12 @@ func IncrementReactionCount(ctx context.Context, messageID int64, emojiString st
 
 	newCounterValue, errRedis := redis.MessageReactionCounts.Client.HIncrBy(ctx, redisKey, emojiString, delta).Result()
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Int64("message_id", messageID).Msg("Échec de l'incrémentation du compteur de réaction dans Redis")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de modifier le compteur de réactions dans le cache.",
+			errRedis,
+		)
 	}
 
 	// Nettoyage automatique RAM si le compteur tombe à zéro ou en négatif pour ne pas polluer le Payload JSON.
@@ -71,8 +84,12 @@ func GetMessageReactionCounts(ctx context.Context, messageID int64) (map[string]
 	rawReactionMap, errRedis := redis.MessageReactionCounts.HGetAll(ctx, messageID).Result()
 
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Int64("message_id", messageID).Msg("Échec de la récupération des compteurs de réactions")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de récupérer les compteurs de réactions depuis le cache.",
+			errRedis,
+		)
 	}
 
 	reactionCounts := make(map[string]int)

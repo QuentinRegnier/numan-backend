@@ -5,15 +5,25 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/member_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 )
 
 // FuncGetMember récupère l'intégralité d'un membre depuis L3
 func FuncGetMember(ctx context.Context, convID int64, userID int64) (member_models.MemberPayload, error) {
+	if postgres.PostgresDB == nil {
+		return member_models.MemberPayload{}, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("PostgreSQL connection 'PostgresDB' is not initialized"),
+		)
+	}
+
 	query := `SELECT id, conversation_id, user_id, role, settings, joined_at, unread_count, frozen_message_id, last_read_message_id, created_at, updated_at FROM messaging.func_get_member($1, $2)`
 
 	var m member_models.MemberPayload
@@ -27,10 +37,18 @@ func FuncGetMember(ctx context.Context, convID int64, userID int64) (member_mode
 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return m, numan_error.NewNotFound("MEMBER_NOT_FOUND", "Membre introuvable.", err)
+			return member_models.MemberPayload{}, numan_error.NewNotFound(
+				"MEMBER_NOT_FOUND",
+				"Membre introuvable.",
+				fmt.Errorf("member (%d, %d) was not found in PostgreSQL (L3)", convID, userID),
+			)
 		}
-		numan_log.Error(ctx).Err(err).Msg("Erreur SQL inattendue lors de la vérification de l'enregistrement")
-		return m, numan_error.NewInternal()
+		return member_models.MemberPayload{}, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de récupérer les informations du membre.",
+			err,
+		)
 	}
 
 	if frozenID.Valid {
@@ -42,10 +60,13 @@ func FuncGetMember(ctx context.Context, convID int64, userID int64) (member_mode
 
 	// PARSING DU JSONB
 	if settingsRaw.Valid && settingsRaw.String != "" && settingsRaw.String != "{}" {
-		err = json.Unmarshal([]byte(settingsRaw.String), &m.Settings)
-		if err != nil {
-			numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des paramètres du membre")
-			return m, numan_error.NewInternal()
+		if err := json.Unmarshal([]byte(settingsRaw.String), &m.Settings); err != nil {
+			return member_models.MemberPayload{}, numan_error.NewAppError(
+				http.StatusInternalServerError,
+				numan_error.CodeDatabaseError,
+				"Impossible de désérialiser les paramètres du membre.",
+				err,
+			)
 		}
 	}
 

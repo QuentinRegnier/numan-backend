@@ -2,10 +2,10 @@ package object_cache_service
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/conversation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 )
 
@@ -29,8 +29,12 @@ func GetConversationFromObjectCache(ctx context.Context, conversationID int64) (
 func SetConversationInObjectCache(ctx context.Context, conversationPayload conversation_models.ConversationPayload) error {
 	errRedis := redis.Conversations.SetObject(ctx, conversationPayload.ID, conversationPayload)
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Int64("conv_id", conversationPayload.ID).Msg("Échec de l'écriture de la conversation dans l'Object Cache")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de sauvegarder la conversation dans l'Object Cache.",
+			errRedis,
+		)
 	}
 	return nil
 }

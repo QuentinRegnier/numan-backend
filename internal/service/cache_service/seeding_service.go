@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
@@ -52,8 +51,7 @@ func SeedMostCache(ctx context.Context) error {
 	for {
 		postsBatchFromPg, errPgPosts := postgres.FuncLoadPostsPaginated(ctx, paginationLimit, paginationOffset)
 		if errPgPosts != nil {
-			numan_log.Error(ctx).Err(errPgPosts).Msg("Échec L3 lors du seeding paginé des posts")
-			return numan_error.NewInternal()
+			return errPgPosts
 		}
 
 		if len(postsBatchFromPg) == 0 {
@@ -172,7 +170,7 @@ func seedCommunitySpeedCache(ctx context.Context) error {
 
 	activeCommunitiesFromPg, errPg := postgres.FuncLoadActiveCommunities(ctx)
 	if errPg != nil {
-		return numan_error.NewInternal()
+		return errPg
 	}
 
 	totalLoaded := 0

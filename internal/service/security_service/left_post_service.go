@@ -49,7 +49,7 @@ func LeftPost(ctx context.Context, postID int64, userID int64) (post_models.Post
 			pgPostsList, errPg := postgres.FuncLoadPosts(ctx, []int64{postID}, 1, 0)
 			if errPg != nil {
 				numan_log.Error(ctx).Err(errPg).Int64("post_id", postID).Msg("Erreur L3 lors de la vérification de sécurité d'un post")
-				return post_models.PostPayload{}, numan_error.NewInternal()
+				return post_models.PostPayload{}, errPg
 			}
 
 			if len(pgPostsList) > 0 {

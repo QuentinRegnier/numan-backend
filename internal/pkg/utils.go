@@ -1,9 +1,10 @@
 package pkg
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"html"
+	"net/http"
 	"os"
 	"reflect"
 	"regexp"
@@ -13,7 +14,6 @@ import (
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
 	"github.com/go-playground/validator/v10"
@@ -29,8 +29,14 @@ func ValidateStruct(obj any) error {
 	if v, ok := binding.Validator.Engine().(*validator.Validate); ok {
 		return v.Struct(obj)
 	}
-	numan_log.Error(context.Background()).Msg("Impossible de charger le validateur Gin (binding.Validator.Engine)")
-	return numan_error.NewInternal()
+
+	// On encapsule la véritable erreur système sans la faire fuiter côté client.
+	return numan_error.NewAppError(
+		http.StatusInternalServerError,
+		numan_error.CodeInternalError,
+		"Le moteur de validation est momentanément indisponible.",
+		errors.New("binding.Validator.Engine is not a *validator.Validate"),
+	)
 }
 
 // CleanStr : Nettoyage anti-XSS et suppression des espaces superflus.
@@ -40,7 +46,7 @@ func CleanStr(input string) string {
 	return html.EscapeString(cleaned)
 }
 
-// generateToken : Création JWT
+// GenerateToken : Création JWT
 func GenerateToken(userID int64, firebaseInstallationID string, expirationSeconds int) (string, error) {
 	claims := jwt.MapClaims{
 		"sub": fmt.Sprintf("%d", userID),
@@ -53,8 +59,12 @@ func GenerateToken(userID int64, firebaseInstallationID string, expirationSecond
 
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
-		numan_log.Error(context.Background()).Msg("Variable d'environnement JWT_SECRET manquante")
-		return "", numan_error.NewInternal()
+		return "", numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeInternalError,
+			"Impossible de générer le jeton de sécurité.",
+			errors.New("variable d'environnement JWT_SECRET manquante lors de la génération"),
+		)
 	}
 	return token.SignedString([]byte(secret))
 }
@@ -69,8 +79,12 @@ func ToMap(in any) (map[string]any, error) {
 		v = v.Elem()
 	}
 	if v.Kind() != reflect.Struct {
-		numan_log.Error(context.Background()).Str("kind", v.Kind().String()).Msg("ToMap attend une struct en paramètre")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeInternalError,
+			"Erreur de traitement des données internes.",
+			fmt.Errorf("ToMap attend une struct en paramètre, type reçu : %s", v.Kind().String()),
+		)
 	}
 
 	t := v.Type()
@@ -96,13 +110,13 @@ func ToMap(in any) (map[string]any, error) {
 	return out, nil
 }
 
-// toStruct convertit une map[string]any en structure (comme User)
+// ToStruct convertit une map[string]any en structure (comme User)
 // en respectant les tags `bson:"..."` pour que la validation du schéma fonctionne.
 func ToStruct(m map[string]any, out any) error {
 	// 1. On convertit la map en bytes BSON
 	data, err := bson.Marshal(m)
 	if err != nil {
-		return err
+		return err // L'erreur standard sera interceptée et wrappée plus haut si nécessaire
 	}
 
 	// 2. On reconvertit les bytes en struct cible
@@ -114,7 +128,7 @@ func ToStruct(m map[string]any, out any) error {
 	return nil
 }
 
-// exists vérifie si une valeur existe dans une slice
+// Exists vérifie si une valeur existe dans une slice
 func Exists[T comparable](slice []T, value T) bool {
 	return slices.Contains(slice, value)
 }
@@ -148,7 +162,12 @@ func SliceUniqueStr(slice []string) []string {
 func GetUserIDFromContext(c *gin.Context) (int64, error) {
 	val, exists := c.Get("userID")
 	if !exists {
-		return 0, numan_error.NewForbidden("UNAUTHORIZED", "Utilisateur non identifié dans le contexte.", nil)
+		// Remplacement d'une erreur 403 mal castée par une vraie erreur 401 logique
+		return 0, numan_error.NewUnauthorized(
+			numan_error.CodeUserIsNotIdentified,
+			"Utilisateur non identifié dans le contexte.",
+			errors.New("clé 'userID' introuvable dans le contexte Gin"),
+		)
 	}
 
 	switch v := val.(type) {
@@ -157,7 +176,11 @@ func GetUserIDFromContext(c *gin.Context) (int64, error) {
 	case string:
 		id, err := ParseInt64Strict(v)
 		if err != nil {
-			return 0, numan_error.NewBadRequest("INVALID_USER_ID", "Le format de l'ID utilisateur est invalide.", err)
+			return 0, numan_error.NewBadRequest(
+				numan_error.CodeInvalidPayload,
+				"Le format de l'ID utilisateur est invalide.",
+				err,
+			)
 		}
 		return id, nil
 	case float64:
@@ -165,8 +188,11 @@ func GetUserIDFromContext(c *gin.Context) (int64, error) {
 	case int:
 		return int64(v), nil
 	default:
-		numan_log.Error(c).Interface("val", val).Msg("Type inattendu pour le userID extrait du contexte")
-		return 0, numan_error.NewInternal()
+		return 0, numan_error.NewUnauthorized(
+			numan_error.CodeUnauthorized,
+			"Session invalide ou corrompue.",
+			fmt.Errorf("type inattendu pour le userID extrait du contexte : %T", val),
+		)
 	}
 }
 
@@ -221,7 +247,7 @@ func ParseInt64List(stringList []string) []int64 {
 func ParseInt64(str string) int64 {
 	parsed, err := strconv.ParseInt(str, 10, 64)
 	if err != nil {
-		numan_log.Warn(context.Background()).Err(err).Str("input", str).Msg("ParseInt64: Impossible de parser l'input en int64, retour par défaut 0")
+		// Log interne supprimé pour respecter la pureté de la fonction utilitaire
 		return 0
 	}
 	return parsed
@@ -231,9 +257,4 @@ func ParseInt64(str string) int64 {
 // It acts as a unified wrapper for strconv.ParseInt(str, 10, 64).
 func ParseInt64Strict(str string) (int64, error) {
 	return strconv.ParseInt(str, 10, 64)
-}
-
-// genericMessageResponse is a generic JSON response containing a single message.
-type genericMessageResponse struct {
-	Message string `json:"message"`
 }

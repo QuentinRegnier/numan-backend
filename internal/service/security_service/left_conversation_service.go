@@ -61,7 +61,7 @@ func LeftConversation(ctx context.Context, conversationID int64, userID int64) (
 		pgConversation, errPg := postgres.FuncGetConversation(ctx, conversationID)
 		if errPg != nil {
 			numan_log.Error(ctx).Err(errPg).Int64("conv_id", conversationID).Msg("Erreur L3 lors de la récupération de la conversation")
-			return conversation_models.ConversationPayload{}, numan_error.NewInternal()
+			return conversation_models.ConversationPayload{}, errPg
 		}
 
 		if pgConversation.ID != 0 {
@@ -83,7 +83,7 @@ func LeftConversation(ctx context.Context, conversationID int64, userID int64) (
 		pgMember, errPg := postgres.FuncGetMember(ctx, conversationID, userID)
 		if errPg != nil {
 			numan_log.Error(ctx).Err(errPg).Int64("user_id", userID).Msg("Erreur L3 lors de la récupération du membre")
-			return conversation_models.ConversationPayload{}, numan_error.NewInternal()
+			return conversation_models.ConversationPayload{}, errPg
 		}
 
 		if pgMember.ID != 0 {

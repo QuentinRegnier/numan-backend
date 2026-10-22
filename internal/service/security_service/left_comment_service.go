@@ -47,7 +47,7 @@ func LeftComment(ctx context.Context, commentID int64, userID int64) (comment_mo
 			pgComment, errPg := postgres.FuncGetComment(ctx, commentID)
 			if errPg != nil {
 				numan_log.Error(ctx).Err(errPg).Int64("comment_id", commentID).Msg("Erreur L3 lors de la vérification de sécurité d'un commentaire")
-				return comment_models.CommentPayload{}, numan_error.NewInternal()
+				return comment_models.CommentPayload{}, errPg
 			}
 
 			if pgComment.ID != 0 {

@@ -6,7 +6,6 @@ import (
 	"math"
 	"time"
 
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
@@ -31,7 +30,7 @@ func collectCandidates(ctx context.Context, userID int64, seeds [3]int64, quotas
 	err := baskets.loadSocialMailbox(ctx, userID)
 	if err != nil {
 		numan_log.Error(ctx).Err(err).Msg("collectCandidates: Échec du chargement de la boîte aux lettres")
-		return nil, numan_error.NewInternal()
+		return nil, err
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────────
@@ -62,7 +61,7 @@ func collectSingleBasket(ctx context.Context, userID int64, activeSeed int64, qu
 	err := baskets.loadSocialMailbox(ctx, userID)
 	if err != nil {
 		numan_log.Error(ctx).Err(err).Msg("collectSingleBasket: Échec du chargement de la boîte aux lettres")
-		return nil, numan_error.NewInternal()
+		return nil, err
 	}
 
 	singleBasket := baskets.FeedA

@@ -3,6 +3,7 @@ package cache_service
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strconv"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
@@ -27,8 +28,12 @@ func RecordConversationMutation(ctx context.Context, conversationID int64, parti
 	// DÉLÉGATION DDD ABSOLUE : Le Cache Service ne parle qu'à l'abstraction Collection
 	errRedis := redis.UserSyncLedger.ZAddMultiple(ctx, participantIDsList, currentTimestampMs, conversationIDString)
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Int64("conv_id", conversationID).Msg("Échec de la mutation du Ledger Conversation")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Échec de la mutation du Ledger Conversation",
+			errRedis,
+		)
 	}
 
 	return nil
@@ -68,8 +73,12 @@ func GetModifiedConversationIDs(ctx context.Context, userID int64, sinceTimestam
 	idStringsList, errRedis := redis.UserSyncLedger.ZRangeByScore(ctx, userID, minScoreThreshold, maxScoreThreshold, 1000)
 
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Int64("user_id", userID).Msg("Erreur lors de la lecture du UserSyncLedger")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Erreur lors de la lecture du UserSyncLedger",
+			errRedis,
+		)
 	}
 
 	parsedConversationIDs := pkg.ParseInt64List(idStringsList)
@@ -87,8 +96,12 @@ func GetModifiedMessageIDs(ctx context.Context, conversationID int64, sinceTimes
 	idStringsList, errRedis := redis.ConvMessageLedger.ZRangeByScore(ctx, conversationID, minScoreThreshold, maxScoreThreshold, 1000)
 
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Int64("conv_id", conversationID).Msg("Erreur lors de la lecture du ConvMessageLedger")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Erreur lors de la lecture du ConvMessageLedger",
+			errRedis,
+		)
 	}
 
 	parsedMessageIDs := pkg.ParseInt64List(idStringsList)

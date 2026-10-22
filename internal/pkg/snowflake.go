@@ -1,12 +1,12 @@
 package pkg
 
 import (
-	"context"
+	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
 
@@ -36,8 +36,13 @@ type node struct {
 // nodeID : Un identifiant unique pour ce serveur (entre 0 et 1023).
 func newNode(nodeID int64) (*node, error) {
 	if nodeID < 0 || nodeID > variables.NodeMax {
-		numan_log.Error(context.Background()).Int64("node_id", nodeID).Msg("Node ID invalide pour l'initialisation de Snowflake")
-		return nil, numan_error.NewInternal()
+		// Encapsulation de l'erreur d'initialisation système sans exposer les variables internes au client
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeInternalError,
+			"Impossible d'initialiser le générateur d'identifiants.",
+			fmt.Errorf("nodeID %d invalide (doit être compris entre 0 et %d)", nodeID, variables.NodeMax),
+		)
 	}
 
 	return &node{

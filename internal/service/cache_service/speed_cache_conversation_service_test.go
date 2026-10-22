@@ -401,14 +401,14 @@ func TestSeedMessagingSpeedCache(t *testing.T) {
 			return fakeSQLResponse{
 				cols: []string{"id", "type", "title", "description", "avatar_id", "last_message_id", "settings", "external_link"},
 				rows: [][]driver.Value{
-					{int64(301), int64(1), "General", "Desc", int64(5), int64(1001), `{"allow_reactions":true}`, `["https://example.com"]`},
+					{int64(301), int64(1), "General", "Desc", int64(5), int64(1001), `{"allow_reactions":true}`, `{"title":"Website","url":"https://example.com"}`},
 				},
 			}
 		}
 		return fakeSQLResponse{
 			cols: []string{"conversation_id", "user_id", "role", "settings", "unread_count", "frozen_message_id", "last_read_message_id", "last_message_id", "joined_at"},
 			rows: [][]driver.Value{
-				{int64(301), int64(44), int64(2), `{"pinned":0,"is_muted":true}`, int64(3), int64(0), int64(1000), int64(1001), joinedTime},
+				{int64(301), int64(44), int64(2), `{"pinned":0,"is_muted":1}`, int64(3), int64(0), int64(1000), int64(1001), joinedTime},
 			},
 		}
 	})
@@ -429,5 +429,7 @@ func TestSeedMessagingSpeedCache(t *testing.T) {
 	if err := redis.ConvMembers.GetObject(ctx, "301:44", &mem); err != nil {
 		t.Fatalf("expected member 301:44 in Redis, got err: %v", err)
 	}
-	t.Errorf("unexpected seeded membter: %+v", mem)
+	if mem.Role != 2 || mem.UnreadCount != 3 {
+		t.Errorf("unexpected seeded member: %+v", mem)
+	}
 }

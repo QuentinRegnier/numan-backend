@@ -2,15 +2,24 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
+	"errors"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 )
 
 // FuncLoadMessageIDsPaginated récupère uniquement l'Index depuis le B-Tree Postgres (0.1ms) en appliquant le gel de l'historique.
 func FuncLoadMessageIDsPaginated(ctx context.Context, convID int64, offsetID int64, limit int64, direction string, frozenID int64) ([]int64, error) {
+	if postgres.PostgresDB == nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("PostgreSQL connection 'PostgresDB' is not initialized"),
+		)
+	}
+
 	var pFrozenID any = frozenID
 	if frozenID == 0 {
 		pFrozenID = nil
@@ -20,22 +29,31 @@ func FuncLoadMessageIDsPaginated(ctx context.Context, convID int64, offsetID int
 
 	rows, err := postgres.PostgresDB.QueryContext(ctx, query, convID, offsetID, limit, direction, pFrozenID)
 	if err != nil {
-		numan_log.Error(ctx).Err(err).Msg("Erreur lors de l'itération sur les résultats SQL (rows.Err)")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de charger les identifiants des messages.",
+			err,
+		)
 	}
-	defer func(rows *sql.Rows) {
-		err := rows.Close()
-		if err != nil {
-			numan_log.Error(ctx).Err(err).Msg("Erreur lors de la fermeture des lignes Postgres")
-		}
-	}(rows)
+	defer func() { _ = rows.Close() }()
 
-	var ids []int64
+	ids := make([]int64, 0)
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err == nil {
 			ids = append(ids, id)
 		}
 	}
+
+	if err := rows.Err(); err != nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible d'itérer sur les identifiants des messages.",
+			err,
+		)
+	}
+
 	return ids, nil
 }

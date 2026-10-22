@@ -2,12 +2,12 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
+	"errors"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/auth_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/lib/pq"
 )
@@ -15,22 +15,31 @@ import (
 // FuncLoadAllUserSessions récupère les données persistantes des sessions actives d'un utilisateur.
 // Les données volatiles (Ratchet Secrets, Last JWT) ne sont volontairement pas extraites du L3.
 func FuncLoadAllUserSessions(ctx context.Context, userID int64) ([]auth_models.SessionsPayload, error) {
+	if postgres.PostgresDB == nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("PostgreSQL connection 'PostgresDB' is not initialized"),
+		)
+	}
+
 	// On appelle la fonction SQL existante. On utilise NULL pour les filtres ignorés.
 	query := `SELECT id, user_id, master_token, firebase_installation_id, device_info, ip_history, created_at, expires_at 
 	          FROM auth.func_load_sessions(NULL, $1, NULL, NULL)`
 
 	rows, err := postgres.PostgresDB.QueryContext(ctx, query, userID)
 	if err != nil {
-		return nil, err
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de charger les sessions de l'utilisateur.",
+			err,
+		)
 	}
-	defer func(rows *sql.Rows) {
-		err := rows.Close()
-		if err != nil {
-			numan_log.Error(ctx).Err(err).Msg("Erreur fermeture rows FuncLoadAllUserSessionsPayload")
-		}
-	}(rows)
+	defer func() { _ = rows.Close() }()
 
-	var sessions []auth_models.SessionsPayload
+	sessions := make([]auth_models.SessionsPayload, 0)
 
 	for rows.Next() {
 		var s auth_models.SessionsPayload
@@ -45,10 +54,13 @@ func FuncLoadAllUserSessions(ctx context.Context, userID int64) ([]auth_models.S
 
 		if err == nil {
 			if len(devInfoBytes) > 0 {
-				err = json.Unmarshal(devInfoBytes, &s.DeviceInfo)
-				if err != nil {
-					numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des informations sur le dispositif")
-					return nil, numan_error.NewInternal()
+				if err := json.Unmarshal(devInfoBytes, &s.DeviceInfo); err != nil {
+					return nil, numan_error.NewAppError(
+						http.StatusInternalServerError,
+						numan_error.CodeDatabaseError,
+						"Impossible de désérialiser les informations de l'appareil.",
+						err,
+					)
 				}
 			}
 			s.IPHistory = ipHistory
@@ -59,6 +71,15 @@ func FuncLoadAllUserSessions(ctx context.Context, userID int64) ([]auth_models.S
 
 			sessions = append(sessions, s)
 		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible d'itérer sur les sessions de l'utilisateur.",
+			err,
+		)
 	}
 
 	return sessions, nil

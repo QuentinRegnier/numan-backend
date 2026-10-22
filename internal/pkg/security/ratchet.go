@@ -4,12 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
@@ -29,11 +30,19 @@ func RotateRatchet(ctx context.Context, userID int64, firebaseInstallationID str
 	idxKey := fmt.Sprintf("%d:%s", userID, firebaseInstallationID)
 	isRevoked, err := redis.SessionBlacklist.Exists(ctx, idxKey)
 	if err != nil {
-		numan_log.Warn(ctx).Err(err).Int64("user_id", userID).Str("firebase_installation_id", firebaseInstallationID).Msg("Échec de la vérification de révocation de session")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de vérifier l'état de la session.",
+			fmt.Errorf("échec de la vérification de révocation de session (Redis) pour l'utilisateur %d: %w", userID, err),
+		)
 	}
 	if isRevoked {
-		return numan_error.NewForbidden("SESSION_REVOKED", "Session révoquée (déconnexion en cours).", nil)
+		return numan_error.NewForbidden(
+			"SESSION_REVOKED",
+			"Session révoquée (déconnexion en cours).",
+			errors.New("la session est blacklistée dans le cache L1 (tombstone)"),
+		)
 	}
 
 	// 1. CASCADE L1 -> L2 -> L3 (Recherche sécurisée)
@@ -43,14 +52,26 @@ func RotateRatchet(ctx context.Context, userID int64, firebaseInstallationID str
 		if err != nil || sessionRaw.ID == 0 {
 			sessionRaw, err = postgres.FuncLoadSession(ctx, -1, userID, firebaseInstallationID, "")
 			if err != nil || sessionRaw.ID == 0 {
-				return numan_error.NewNotFound("SESSION_NOT_FOUND", "Session introuvable.", err)
+				// Garantir qu'une erreur originelle est toujours transmise au routeur central
+				if err == nil {
+					err = errors.New("session introuvable dans aucune des couches (L1/L2/L3)")
+				}
+				return numan_error.NewNotFound(
+					"SESSION_NOT_FOUND",
+					"Session introuvable.",
+					err,
+				)
 			}
 		}
 	}
 
 	// 2. VÉRIFICATION DE SYNCHRONISATION
 	if sessionRaw.CurrentSecret != clientCurrentSecret {
-		return numan_error.NewForbidden("INVALID_SECRET", "Désynchronisation de sécurité détectée.", nil)
+		return numan_error.NewForbidden(
+			"INVALID_SECRET",
+			"Désynchronisation de sécurité détectée.",
+			fmt.Errorf("le secret fourni par le client ne correspond pas au secret actuel (session_id: %d)", sessionRaw.ID),
+		)
 	}
 
 	// 3. ROTATION CRYPTOGRAPHIQUE
@@ -71,12 +92,26 @@ func RotateRatchet(ctx context.Context, userID int64, firebaseInstallationID str
 	// 4. SAUVEGARDE EN RAM (L1)
 	err = cache_service.SetSessionInCache(ctx, sessionRaw)
 	if err != nil {
-		numan_log.Warn(ctx).Err(err).Int64("user_id", userID).Str("firebase_installation_id", firebaseInstallationID).Msg("Échec de la sauvegarde de session en cache")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de mettre à jour la session sécurisée.",
+			fmt.Errorf("échec SetSessionInCache L1 pour la session %d: %w", sessionRaw.ID, err),
+		)
 	}
 
 	// 5. PERSISTANCE ASYNCHRONE (L2 & L3)
-	return redis.EnqueueDB(ctx, sessionRaw.ID, userID, redis.EntitySession, redis.ActionUpdate, sessionRaw, redis.TargetAll)
+	err = redis.EnqueueDB(ctx, sessionRaw.ID, userID, redis.EntitySession, redis.ActionUpdate, sessionRaw, redis.TargetAll)
+	if err != nil {
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de planifier la persistance de la session.",
+			fmt.Errorf("échec EnqueueDB (L2/L3) pour la session %d: %w", sessionRaw.ID, err),
+		)
+	}
+
+	return nil
 }
 
 // ResetRatchet génère le premier secret dérivé suite à un Hard Reset (Rotation du MasterToken)

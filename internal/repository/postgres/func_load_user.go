@@ -3,16 +3,26 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"net/http"
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/auth_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 )
 
 func FuncLoadUser(ctx context.Context, ID int64, Username string, Email string, Phone string) (auth_models.UserPayload, error) {
+	if postgres.PostgresDB == nil {
+		return auth_models.UserPayload{}, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("PostgreSQL connection 'PostgresDB' is not initialized"),
+		)
+	}
+
 	args := make([]any, 4)
 	if ID != -1 {
 		args[0] = ID
@@ -30,12 +40,24 @@ func FuncLoadUser(ctx context.Context, ID int64, Username string, Email string, 
 	sqlStatement := `SELECT * FROM auth.func_load_user($1, $2, $3, $4)`
 	rows, err := postgres.PostgresDB.QueryContext(ctx, sqlStatement, args...)
 	if err != nil {
-		numan_log.Error(ctx).Err(err).Msg("Erreur SQL inattendue lors du chargement de l'utilisateur")
-		return auth_models.UserPayload{}, numan_error.NewInternal()
+		return auth_models.UserPayload{}, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de charger les données de l'utilisateur.",
+			err,
+		)
 	}
 	defer func() { _ = rows.Close() }()
 
 	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return auth_models.UserPayload{}, numan_error.NewAppError(
+				http.StatusInternalServerError,
+				numan_error.CodeDatabaseError,
+				"Impossible de lire les données de l'utilisateur.",
+				err,
+			)
+		}
 		return auth_models.UserPayload{}, nil
 	}
 
@@ -56,8 +78,12 @@ func FuncLoadUser(ctx context.Context, ID int64, Username string, Email string, 
 	}
 
 	if err := rows.Scan(dest...); err != nil {
-		numan_log.Error(ctx).Err(err).Msg("Erreur lors du Scan de auth.func_load_user")
-		return auth_models.UserPayload{}, numan_error.NewInternal()
+		return auth_models.UserPayload{}, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de lire les données de l'utilisateur.",
+			err,
+		)
 	}
 
 	if birthdateRaw.Valid {

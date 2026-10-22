@@ -3,6 +3,7 @@ package cache_service
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/auth_models"
@@ -33,8 +34,12 @@ func SetSessionInCache(ctx context.Context, sessionPayload auth_models.SessionsP
 
 	errRedisSet := redis.Sessions.SetObject(timeoutCtx, sessionPayload.ID, sessionPayload)
 	if errRedisSet != nil {
-		numan_log.Error(ctx).Err(errRedisSet).Int64("session_id", sessionPayload.ID).Msg("Impossible de sauvegarder l'objet Session en RAM L1")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de sauvegarder l'objet Session dans le cache.",
+			errRedisSet,
+		)
 	}
 
 	if sessionPayload.UserID != 0 && sessionPayload.FirebaseInstallationID != "" {
@@ -73,8 +78,12 @@ func LoadSessionFromCache(ctx context.Context, userID int64, firebaseInstallatio
 	var sessionPayload auth_models.SessionsPayload
 	errRedisGet := redis.Sessions.GetObject(timeoutCtx, resolvedSessionID, &sessionPayload)
 	if errRedisGet != nil {
-		numan_log.Error(ctx).Err(errRedisGet).Int64("session_id", resolvedSessionID).Msg("Erreur d'infrastructure lors du chargement de l'objet Session")
-		return auth_models.SessionsPayload{}, numan_error.NewInternal()
+		return auth_models.SessionsPayload{}, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de charger la session depuis le cache.",
+			errRedisGet,
+		)
 	}
 
 	if masterTokenString != "" && sessionPayload.MasterToken != masterTokenString {
@@ -111,8 +120,12 @@ func DeleteSessionFromCache(ctx context.Context, sessionID int64, userID int64, 
 	// 3. Destruction physique de l'objet JSON contenant les tokens
 	errRedisDel := redis.Sessions.DeleteObject(timeoutCtx, sessionID)
 	if errRedisDel != nil {
-		numan_log.Error(ctx).Err(errRedisDel).Int64("session_id", sessionID).Msg("Impossible de supprimer physiquement l'objet Session du cache L1")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de supprimer l'objet Session du cache.",
+			errRedisDel,
+		)
 	}
 
 	return nil
@@ -144,8 +157,7 @@ func GetFirebaseInstallationIDsCascade(ctx context.Context, userID int64) ([]str
 
 	sessionsListFromPg, errPg := postgres.FuncLoadAllUserSessions(ctx, userID)
 	if errPg != nil {
-		numan_log.Error(ctx).Err(errPg).Int64("user_id", userID).Msg("Erreur L3 lors de la récupération des sessions de l'utilisateur")
-		return nil, numan_error.NewInternal()
+		return nil, errPg
 	}
 
 	if len(sessionsListFromPg) > 0 {

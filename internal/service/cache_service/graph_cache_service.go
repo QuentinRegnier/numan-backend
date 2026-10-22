@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
@@ -155,8 +154,7 @@ func SeedGraphCache(ctx context.Context) error {
 	// 1. Récupération de l'historique complet (Filtré : > 1 tag, trié par date croissante)
 	historicalPosts, errPg := postgres.FuncLoadPostsForGraphSeeding(ctx)
 	if errPg != nil {
-		numan_log.Error(ctx).Err(errPg).Msg("Échec critique L3 lors du SeedGraphCache")
-		return numan_error.NewInternal()
+		return errPg
 	}
 
 	numan_log.Info(ctx).Int("count", len(historicalPosts)).Msg("Publications trouvées pour le rejeu temporel sémantique.")

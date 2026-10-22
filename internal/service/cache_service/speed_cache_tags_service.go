@@ -2,10 +2,10 @@ package cache_service
 
 import (
 	"context"
+	"net/http"
 	"strings"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
@@ -21,8 +21,12 @@ func SearchTagsByPrefix(ctx context.Context, searchPrefix string, searchOffset, 
 	// On passe désormais searchOffset au wrapper du repository Redis
 	lexicographicResults, errRedis := redis.TagsLex.ZRangeByLex(ctx, variables.LexicographicGlobalKey, strings.ToLower(searchPrefix), searchOffset, searchLimit)
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Str("prefix", searchPrefix).Msg("Échec L1 lors de la recherche des tags par préfixe")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de rechercher les hashtags dans le cache.",
+			errRedis,
+		)
 	}
 
 	if len(lexicographicResults) == 0 {
@@ -44,8 +48,12 @@ func SearchTagsByPrefix(ctx context.Context, searchPrefix string, searchOffset, 
 func StoreTagInSpeedCache(ctx context.Context, newTag string) error {
 	errRedis := redis.TagsLex.ZAdd(ctx, variables.LexicographicGlobalKey, 0, strings.ToLower(newTag))
 	if errRedis != nil {
-		numan_log.Warn(ctx).Err(errRedis).Str("tag", newTag).Msg("Impossible d'insérer le tag dans l'index Lexicographique")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible d'insérer le tag dans l'index du cache.",
+			errRedis,
+		)
 	}
 	return nil
 }

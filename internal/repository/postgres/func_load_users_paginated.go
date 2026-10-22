@@ -3,29 +3,38 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 )
 
 // FuncLoadUsersPaginated appelle la fonction SQL auth.func_load_users_paginated pour le Seeding L1
 func FuncLoadUsersPaginated(ctx context.Context, limit, offset int) ([]lite_models.UserLiteRequest, error) {
-	query := `SELECT id, username, first_name, last_name, profile_picture_id, bio, grade, conversation_permission, add_group_permission FROM auth.func_load_users_paginated($1, $2)`
-	rows, err := postgres.PostgresDB.Query(query, limit, offset)
-	if err != nil {
-		numan_log.Error(ctx).Err(err).Msg("Échec de l'exécution de la requête SQL (Query)")
-		return nil, numan_error.NewInternal()
+	if postgres.PostgresDB == nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("PostgreSQL connection 'PostgresDB' is not initialized"),
+		)
 	}
-	defer func(rows *sql.Rows) {
-		err := rows.Close()
-		if err != nil {
-			numan_log.Error(ctx).Err(err).Msg("Erreur lors de la fermeture des lignes Postgres")
-		}
-	}(rows)
 
-	var users []lite_models.UserLiteRequest
+	query := `SELECT id, username, first_name, last_name, profile_picture_id, bio, grade, conversation_permission, add_group_permission FROM auth.func_load_users_paginated($1, $2)`
+	rows, err := postgres.PostgresDB.QueryContext(ctx, query, limit, offset)
+	if err != nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de charger les utilisateurs paginés.",
+			err,
+		)
+	}
+	defer func() { _ = rows.Close() }()
+
+	users := make([]lite_models.UserLiteRequest, 0)
 	for rows.Next() {
 		var u lite_models.UserLiteRequest
 		var pp sql.NullInt64
@@ -40,5 +49,15 @@ func FuncLoadUsersPaginated(ctx context.Context, limit, offset int) ([]lite_mode
 			users = append(users, u)
 		}
 	}
+
+	if err := rows.Err(); err != nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible d'itérer sur les utilisateurs paginés.",
+			err,
+		)
+	}
+
 	return users, nil
 }

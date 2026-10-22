@@ -250,7 +250,7 @@ func (feedBaskets *feedBaskets) loadSocialMailbox(ctx context.Context, userID in
 	idStrings, err := redis.ZRevRange(ctx, mailboxKey, 0, -1)
 	if err != nil {
 		// On masque l'erreur Redis brute sous une AppError standardisée
-		return numan_error.NewInternal()
+		return err
 	}
 	parsedPostIDs := pkg.ParseInt64List(idStrings)
 	for _, postID := range parsedPostIDs {

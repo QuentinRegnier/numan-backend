@@ -2,10 +2,10 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
+	"errors"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 )
 
@@ -16,24 +16,43 @@ type userIdentifiers struct {
 }
 
 func FuncLoadAllUserIdentifiers(ctx context.Context) ([]userIdentifiers, error) {
+	if postgres.PostgresDB == nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("PostgreSQL connection 'PostgresDB' is not initialized"),
+		)
+	}
+
 	query := `SELECT username, email, phone FROM auth.func_load_all_user_identifiers()`
 	rows, err := postgres.PostgresDB.QueryContext(ctx, query)
 	if err != nil {
-		return nil, numan_error.NewInternal(err)
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de charger les identifiants utilisateurs.",
+			err,
+		)
 	}
-	defer func(rows *sql.Rows) {
-		err := rows.Close()
-		if err != nil {
-			numan_log.Error(ctx).Err(err).Msg("Erreur lors de la fermeture des lignes (Postgres)")
-		}
-	}(rows)
+	defer func() { _ = rows.Close() }()
 
-	var results []userIdentifiers
+	results := make([]userIdentifiers, 0)
 	for rows.Next() {
 		var idents userIdentifiers
 		if err := rows.Scan(&idents.Username, &idents.Email, &idents.Phone); err == nil {
 			results = append(results, idents)
 		}
 	}
+
+	if err := rows.Err(); err != nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible d'itérer sur les identifiants utilisateurs.",
+			err,
+		)
+	}
+
 	return results, nil
 }

@@ -4,11 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/conversation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/member_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 )
 
@@ -18,20 +19,28 @@ type fullInboxResult struct {
 }
 
 func FuncLoadConversationPaginated(ctx context.Context, userID int64, limit int64, offset int64) ([]fullInboxResult, error) {
+	if postgres.PostgresDB == nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Le service de base de données est momentanément indisponible.",
+			errors.New("PostgreSQL connection 'PostgresDB' is not initialized"),
+		)
+	}
+
 	query := `SELECT conv_id, conv_type, conv_title, conv_description, conv_avatar_id, conv_last_msg_id, conv_state, conv_settings, external_link, conv_created, conv_updated, mem_id, mem_conv_id, mem_user_id, mem_role, mem_settings, mem_joined, mem_unread, mem_frozen_id, mem_last_read_message_id, mem_created, mem_updated FROM messaging.func_load_conversation_paginated($1, $2, $3)`
 	rows, err := postgres.PostgresDB.QueryContext(ctx, query, userID, limit, offset)
 	if err != nil {
-		numan_log.Error(ctx).Err(err).Msg("Échec de l'exécution de la requête SQL (QueryContext)")
-		return nil, numan_error.NewInternal()
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de charger les conversations.",
+			err,
+		)
 	}
-	defer func(rows *sql.Rows) {
-		err := rows.Close()
-		if err != nil {
-			numan_log.Error(ctx).Err(err).Msg("Erreur lors de la fermeture des lignes Postgres")
-		}
-	}(rows)
+	defer func() { _ = rows.Close() }()
 
-	var results []fullInboxResult
+	results := make([]fullInboxResult, 0)
 	for rows.Next() {
 		var c conversation_models.ConversationPayload
 		var m member_models.MemberPayload
@@ -66,31 +75,48 @@ func FuncLoadConversationPaginated(ctx context.Context, userID int64, limit int6
 			}
 
 			if convSettingsRaw.Valid && convSettingsRaw.String != "" && convSettingsRaw.String != "{}" {
-				err = json.Unmarshal([]byte(convSettingsRaw.String), &c.Settings)
-				if err != nil {
-					numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des paramètres de conversation")
-					return nil, numan_error.NewInternal()
+				if err := json.Unmarshal([]byte(convSettingsRaw.String), &c.Settings); err != nil {
+					return nil, numan_error.NewAppError(
+						http.StatusInternalServerError,
+						numan_error.CodeDatabaseError,
+						"Impossible de désérialiser les paramètres de la conversation.",
+						err,
+					)
 				}
 			}
 			if externalLink.Valid && externalLink.String != "" && externalLink.String != "{}" {
-				err = json.Unmarshal([]byte(externalLink.String), &c.ExternalLink)
-				if err != nil {
-					numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des liens externes")
-					return nil, numan_error.NewInternal()
+				if err := json.Unmarshal([]byte(externalLink.String), &c.ExternalLink); err != nil {
+					return nil, numan_error.NewAppError(
+						http.StatusInternalServerError,
+						numan_error.CodeDatabaseError,
+						"Impossible de désérialiser les liens externes de la conversation.",
+						err,
+					)
 				}
 			}
 			if memSettingsRaw.Valid && memSettingsRaw.String != "" && memSettingsRaw.String != "{}" {
-				err = json.Unmarshal([]byte(memSettingsRaw.String), &m.Settings)
-				if err != nil {
-					numan_log.Warn(ctx).Err(err).Msg("Erreur lors de la désérialisation des paramètres du membre")
-					return nil, numan_error.NewInternal()
+				if err := json.Unmarshal([]byte(memSettingsRaw.String), &m.Settings); err != nil {
+					return nil, numan_error.NewAppError(
+						http.StatusInternalServerError,
+						numan_error.CodeDatabaseError,
+						"Impossible de désérialiser les paramètres du membre.",
+						err,
+					)
 				}
 			}
 
 			results = append(results, fullInboxResult{Conversation: c, Member: m})
-		} else {
-			numan_log.Error(ctx).Err(err).Msg("Erreur de scan des lignes Postgres")
 		}
 	}
+
+	if err := rows.Err(); err != nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible d'itérer sur les conversations.",
+			err,
+		)
+	}
+
 	return results, nil
 }

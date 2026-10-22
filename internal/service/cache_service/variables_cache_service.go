@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
@@ -74,7 +75,12 @@ func SubscribeDynamicVariablesSync(ctx context.Context) (<-chan []byte, context.
 // puis diffuse immédiatement l'événement de synchronisation inter-serveurs (PublishDynamicVariablesSync).
 func ApplyAndBroadcastDynamicVariablesPatch(ctx context.Context, preparedPatch *variables.PreparedPatch) (int64, error) {
 	if !IsVariablesCacheReady() {
-		return 0, numan_error.NewInternal(errors.New("connexion Redis indisponible pour la mise à jour des variables"))
+		return 0, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Connexion Redis indisponible pour la mise à jour des variables",
+			errors.New("connexion Redis indisponible"),
+		)
 	}
 
 	newVersion, errSave := SaveDynamicVariablesPatchInCache(ctx, preparedPatch.ToSet, preparedPatch.ToDelete)

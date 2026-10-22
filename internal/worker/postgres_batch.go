@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -228,14 +229,12 @@ func bulkInsertPostgres(ctx context.Context, entity redis.EntityType, events []r
 	mapper := getMapper(entity)
 	if mapper == nil {
 		err := errors.New("Aucun mapper Postgres défini pour l'entité")
-		numan_log.Error(ctx).Err(err).Interface("entity", entity).Msg("Échec BulkInsert")
-		return numan_error.NewInternal()
+		return numan_error.NewNotFound(numan_error.CodeNotFound, "Échec BulkInsert : mapper introuvable", err)
 	}
 
 	tx, errTx := postgres.PostgresDB.BeginTx(ctx, nil)
 	if errTx != nil {
-		numan_log.Error(ctx).Err(errTx).Msg("Échec démarrage transaction BulkInsert")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction BulkInsert", errTx)
 	}
 
 	committed := false
@@ -249,8 +248,7 @@ func bulkInsertPostgres(ctx context.Context, entity redis.EntityType, events []r
 
 	stmt, errStmt := tx.Prepare(copyQuery)
 	if errStmt != nil {
-		numan_log.Error(ctx).Err(errStmt).Msg("Échec préparation statement COPY IN")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec préparation statement COPY IN", errStmt)
 	}
 	defer func(stmt *sql.Stmt) {
 		if errClose := stmt.Close(); errClose != nil {
@@ -261,23 +259,19 @@ func bulkInsertPostgres(ctx context.Context, entity redis.EntityType, events []r
 	for _, e := range events {
 		row, errRow := mapper.ToRow(e.Payload)
 		if errRow != nil {
-			numan_log.Error(ctx).Err(errRow).Int64("id", e.ID).Msg("Échec mapping ligne SQL")
-			return numan_error.NewInternal()
+			return errRow
 		}
 		if _, errExec := stmt.Exec(row...); errExec != nil {
-			numan_log.Error(ctx).Err(errExec).Msg("Échec exécution COPY IN")
-			return numan_error.NewInternal()
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec exécution COPY IN", errExec)
 		}
 	}
 
 	if _, errFlush := stmt.Exec(); errFlush != nil {
-		numan_log.Error(ctx).Err(errFlush).Msg("Échec Flush COPY IN")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Flush COPY IN", errFlush)
 	}
 
 	if errCommit := tx.Commit(); errCommit != nil {
-		numan_log.Error(ctx).Err(errCommit).Msg("Échec Commit COPY IN")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Commit COPY IN", errCommit)
 	}
 
 	committed = true
@@ -288,8 +282,7 @@ func bulkInsertPostgres(ctx context.Context, entity redis.EntityType, events []r
 func handleMessageReactionUpsert(ctx context.Context, events []redis.AsyncEvent) error {
 	tx, errTx := postgres.PostgresDB.BeginTx(ctx, nil)
 	if errTx != nil {
-		numan_log.Error(ctx).Err(errTx).Msg("Échec démarrage transaction Upsert")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction Upsert", errTx)
 	}
 
 	stmt, errStmt := tx.Prepare(`
@@ -300,8 +293,7 @@ func handleMessageReactionUpsert(ctx context.Context, events []redis.AsyncEvent)
 	`)
 	if errStmt != nil {
 		_ = tx.Rollback()
-		numan_log.Error(ctx).Err(errStmt).Msg("Échec préparation statement Upsert")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec préparation statement Upsert", errStmt)
 	}
 
 	defer func(stmt *sql.Stmt) {
@@ -317,14 +309,12 @@ func handleMessageReactionUpsert(ctx context.Context, events []redis.AsyncEvent)
 
 		if _, errExec := stmt.Exec(r.ID, r.MessageID, r.UserID, r.Reaction, r.CreatedAt); errExec != nil {
 			_ = tx.Rollback()
-			numan_log.Error(ctx).Err(errExec).Msg("Échec exécution de la ligne Upsert")
-			return numan_error.NewInternal()
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec exécution de la ligne Upsert", errExec)
 		}
 	}
 
 	if errCommit := tx.Commit(); errCommit != nil {
-		numan_log.Error(ctx).Err(errCommit).Msg("Échec Commit Upsert")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Commit Upsert", errCommit)
 	}
 	return nil
 }
@@ -337,8 +327,7 @@ func bulkUpdatePostgres(ctx context.Context, entity redis.EntityType, events []r
 	mapper := getMapper(entity)
 	if mapper == nil {
 		err := errors.New("Aucun mapper Postgres défini")
-		numan_log.Error(ctx).Err(err).Interface("entity", entity).Msg("Échec BulkUpdate")
-		return numan_error.NewInternal()
+		return numan_error.NewNotFound(numan_error.CodeNotFound, "Échec BulkUpdate : mapper introuvable", err)
 	}
 
 	// ── DÉDUPLICATION RAM (LAST-WRITE-WINS) ─────────────────────────────────
@@ -357,8 +346,7 @@ func bulkUpdatePostgres(ctx context.Context, entity redis.EntityType, events []r
 
 	tx, errTx := postgres.PostgresDB.BeginTx(ctx, nil)
 	if errTx != nil {
-		numan_log.Error(ctx).Err(errTx).Msg("Échec démarrage transaction BulkUpdate")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction BulkUpdate", errTx)
 	}
 
 	committed := false
@@ -374,15 +362,13 @@ func bulkUpdatePostgres(ctx context.Context, entity redis.EntityType, events []r
 
 	queryCreateTable := fmt.Sprintf("CREATE TEMP TABLE %s (LIKE %s INCLUDING DEFAULTS) ON COMMIT DROP", tempTable, mapper.TableName())
 	if _, errExec := tx.ExecContext(ctx, queryCreateTable); errExec != nil {
-		numan_log.Error(ctx).Err(errExec).Msg("Échec création table temporaire BulkUpdate")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec création table temporaire BulkUpdate", errExec)
 	}
 
 	// Remplissage de la table temporaire
 	stmt, errStmt := tx.Prepare(pq.CopyIn(tempTable, mapper.Columns()...))
 	if errStmt != nil {
-		numan_log.Error(ctx).Err(errStmt).Msg("Échec préparation CopyIn Temp Table")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec préparation CopyIn Temp Table", errStmt)
 	}
 	defer func(stmt *sql.Stmt) {
 		if errClose := stmt.Close(); errClose != nil {
@@ -393,30 +379,25 @@ func bulkUpdatePostgres(ctx context.Context, entity redis.EntityType, events []r
 	for _, e := range dedupEvents {
 		row, errRow := mapper.ToRow(e.Payload)
 		if errRow != nil {
-			numan_log.Error(ctx).Err(errRow).Int64("id", e.ID).Msg("Échec mapping de la ligne Temp Table")
-			return numan_error.NewInternal()
+			return errRow
 		}
 		if _, errExec := stmt.Exec(row...); errExec != nil {
-			numan_log.Error(ctx).Err(errExec).Msg("Échec exécution ligne CopyIn Temp Table")
-			return numan_error.NewInternal()
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec exécution ligne CopyIn Temp Table", errExec)
 		}
 	}
 
 	if _, errFlush := stmt.Exec(); errFlush != nil {
-		numan_log.Error(ctx).Err(errFlush).Msg("Échec Flush Temp Table")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Flush Temp Table", errFlush)
 	}
 
 	// Application des changements (Merge) de la table temporaire vers la table réelle
 	queryUpdate := mapper.BuildUpdateQuery(tempTable)
 	if _, errMerge := tx.ExecContext(ctx, queryUpdate); errMerge != nil {
-		numan_log.Error(ctx).Err(errMerge).Msg("Échec requête MERGE UPDATE")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec requête MERGE UPDATE", errMerge)
 	}
 
 	if errCommit := tx.Commit(); errCommit != nil {
-		numan_log.Error(ctx).Err(errCommit).Msg("Échec Commit BulkUpdate")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Commit BulkUpdate", errCommit)
 	}
 
 	committed = true
@@ -431,23 +412,20 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 	mapper := getMapper(entity)
 	if mapper == nil {
 		err := errors.New("Aucun mapper Postgres défini")
-		numan_log.Error(ctx).Err(err).Interface("entity", entity).Msg("Échec BulkDelete")
-		return numan_error.NewInternal()
+		return numan_error.NewNotFound(numan_error.CodeNotFound, "Échec BulkDelete : mapper introuvable", err)
 	}
 
 	// ── CAS SPÉCIAL : LES LIKES (Clé Composite) ─────────────────────────────
 	if entity == redis.EntityLike {
 		tx, errTx := postgres.PostgresDB.BeginTx(ctx, nil)
 		if errTx != nil {
-			numan_log.Error(ctx).Err(errTx).Msg("Échec démarrage transaction Like Delete")
-			return numan_error.NewInternal()
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction Like Delete", errTx)
 		}
 
 		stmt, errStmt := tx.Prepare("DELETE FROM content.likes WHERE target_type = $1 AND target_id = $2 AND user_id = $3")
 		if errStmt != nil {
 			_ = tx.Rollback()
-			numan_log.Error(ctx).Err(errStmt).Msg("Échec préparation statement Like Delete")
-			return numan_error.NewInternal()
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec préparation statement Like Delete", errStmt)
 		}
 		defer func(stmt *sql.Stmt) {
 			if errClose := stmt.Close(); errClose != nil {
@@ -466,14 +444,12 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 
 			if _, errExec := stmt.Exec(targetType, targetID, userID); errExec != nil {
 				_ = tx.Rollback()
-				numan_log.Error(ctx).Err(errExec).Msg("Échec exécution Like Delete")
-				return numan_error.NewInternal()
+				return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec exécution Like Delete", errExec)
 			}
 		}
 
 		if errCommit := tx.Commit(); errCommit != nil {
-			numan_log.Error(ctx).Err(errCommit).Msg("Échec Commit Like Delete")
-			return numan_error.NewInternal()
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Commit Like Delete", errCommit)
 		}
 		return nil
 	}
@@ -482,15 +458,13 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 	if entity == redis.EntityRelation {
 		tx, errTx := postgres.PostgresDB.BeginTx(ctx, nil)
 		if errTx != nil {
-			numan_log.Error(ctx).Err(errTx).Msg("Échec démarrage transaction Relation Delete")
-			return numan_error.NewInternal()
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction Relation Delete", errTx)
 		}
 
 		stmt, errStmt := tx.Prepare("DELETE FROM auth.relations WHERE primary_id = $1 AND secondary_id = $2")
 		if errStmt != nil {
 			_ = tx.Rollback()
-			numan_log.Error(ctx).Err(errStmt).Msg("Échec préparation statement Relation Delete")
-			return numan_error.NewInternal()
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec préparation statement Relation Delete", errStmt)
 		}
 		defer func(stmt *sql.Stmt) {
 			if errClose := stmt.Close(); errClose != nil {
@@ -507,14 +481,12 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 			secondaryID := int64(r["secondary_id"].(float64))
 			if _, errExec := stmt.Exec(primaryID, secondaryID); errExec != nil {
 				_ = tx.Rollback()
-				numan_log.Error(ctx).Err(errExec).Msg("Échec exécution Relation Delete")
-				return numan_error.NewInternal()
+				return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec exécution Relation Delete", errExec)
 			}
 		}
 
 		if errCommit := tx.Commit(); errCommit != nil {
-			numan_log.Error(ctx).Err(errCommit).Msg("Échec Commit Relation Delete")
-			return numan_error.NewInternal()
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Commit Relation Delete", errCommit)
 		}
 		return nil
 	}
@@ -523,15 +495,13 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 	if entity == redis.EntityMessageReaction {
 		tx, errTx := postgres.PostgresDB.BeginTx(ctx, nil)
 		if errTx != nil {
-			numan_log.Error(ctx).Err(errTx).Msg("Échec démarrage transaction Msg Reaction Delete")
-			return numan_error.NewInternal()
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction Msg Reaction Delete", errTx)
 		}
 
 		stmt, errStmt := tx.Prepare("DELETE FROM messaging.message_reactions WHERE message_id = $1 AND user_id = $2")
 		if errStmt != nil {
 			_ = tx.Rollback()
-			numan_log.Error(ctx).Err(errStmt).Msg("Échec préparation statement Msg Reaction Delete")
-			return numan_error.NewInternal()
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec préparation statement Msg Reaction Delete", errStmt)
 		}
 		defer func(stmt *sql.Stmt) {
 			if errClose := stmt.Close(); errClose != nil {
@@ -546,14 +516,12 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 
 			if _, errExec := stmt.Exec(r.MessageID, r.UserID); errExec != nil {
 				_ = tx.Rollback()
-				numan_log.Error(ctx).Err(errExec).Msg("Échec exécution Msg Reaction Delete")
-				return numan_error.NewInternal()
+				return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec exécution Msg Reaction Delete", errExec)
 			}
 		}
 
 		if errCommit := tx.Commit(); errCommit != nil {
-			numan_log.Error(ctx).Err(errCommit).Msg("Échec Commit Msg Reaction Delete")
-			return numan_error.NewInternal()
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Commit Msg Reaction Delete", errCommit)
 		}
 		return nil
 	}
@@ -562,15 +530,13 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 	if entity == redis.EntitySaved {
 		tx, errTx := postgres.PostgresDB.BeginTx(ctx, nil)
 		if errTx != nil {
-			numan_log.Error(ctx).Err(errTx).Msg("Échec démarrage transaction Saved Delete")
-			return numan_error.NewInternal()
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction Saved Delete", errTx)
 		}
 
 		stmt, errStmt := tx.Prepare("DELETE FROM content.saved WHERE user_id = $1 AND post_id = $2")
 		if errStmt != nil {
 			_ = tx.Rollback()
-			numan_log.Error(ctx).Err(errStmt).Msg("Échec préparation statement Saved Delete")
-			return numan_error.NewInternal()
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec préparation statement Saved Delete", errStmt)
 		}
 		defer func(stmt *sql.Stmt) {
 			if errClose := stmt.Close(); errClose != nil {
@@ -587,14 +553,12 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 			postID := int64(s["post_id"].(float64))
 			if _, errExec := stmt.Exec(userID, postID); errExec != nil {
 				_ = tx.Rollback()
-				numan_log.Error(ctx).Err(errExec).Msg("Échec exécution Saved Delete")
-				return numan_error.NewInternal()
+				return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec exécution Saved Delete", errExec)
 			}
 		}
 
 		if errCommit := tx.Commit(); errCommit != nil {
-			numan_log.Error(ctx).Err(errCommit).Msg("Échec Commit Saved Delete")
-			return numan_error.NewInternal()
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Commit Saved Delete", errCommit)
 		}
 		return nil
 	}
@@ -611,8 +575,7 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 		// A. Soft Delete des posts (visibility = -1)
 		query = fmt.Sprintf("UPDATE %s SET visibility = -1 WHERE id = ANY($1)", mapper.TableName())
 		if _, errExec := postgres.PostgresDB.ExecContext(ctx, query, pq.Array(ids)); errExec != nil {
-			numan_log.Error(ctx).Err(errExec).Msg("Échec Soft Delete Posts")
-			return numan_error.NewInternal()
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Soft Delete Posts", errExec)
 		}
 
 		// B. Cascade Logicielle (Soft & Hard Delete)
@@ -626,8 +589,7 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 		// Soft Delete du Message (visibility = false)
 		query = fmt.Sprintf("UPDATE %s SET visibility = false, updated_at = util.now_ms() WHERE id = ANY($1)", mapper.TableName())
 		if _, errExec := postgres.PostgresDB.ExecContext(ctx, query, pq.Array(ids)); errExec != nil {
-			numan_log.Error(ctx).Err(errExec).Msg("Échec Soft Delete Message")
-			return numan_error.NewInternal()
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Soft Delete Message", errExec)
 		}
 
 		// Cascade : Purge des réactions associées pour soulager la base
@@ -644,8 +606,7 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 	}
 
 	if _, errExec := postgres.PostgresDB.ExecContext(ctx, query, pq.Array(ids)); errExec != nil {
-		numan_log.Error(ctx).Err(errExec).Msg("Échec de la requête de Suppression/Mise à jour Finale")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec de la requête de Suppression/Mise à jour Finale", errExec)
 	}
 
 	return nil

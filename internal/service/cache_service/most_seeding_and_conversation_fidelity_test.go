@@ -388,7 +388,7 @@ func TestMostCacheService_VerifiedAPIsAndInt64Offsets(t *testing.T) {
 		vecVal, _ := pq.Array([]float32{0.5, 0.5}).Value()
 
 		setupTestPostgres(t, func(query string, args []driver.NamedValue) fakeSQLResponse {
-			if strings.Contains(query, "func_load_post_ids_by_tag_paginated") || strings.Contains(query, "FROM content.") {
+			if strings.Contains(query, "func_load_post_ids_by_tag_paginated") {
 				return fakeSQLResponse{
 					cols: []string{"id"},
 					rows: [][]driver.Value{{int64(503)}},
@@ -517,7 +517,7 @@ func TestSeedingService_VerifiedPrimitivesAndRelationIndexes(t *testing.T) {
 				return fakeSQLResponse{
 					cols: []string{"id", "type", "title", "description", "avatar_id", "last_message_id", "settings", "external_link"},
 					rows: [][]driver.Value{
-						{int64(600), int64(0), "DM", "", int64(0), int64(888), `{}`, `[]`},
+						{int64(600), int64(0), "DM", "", int64(0), int64(888), `{}`, `{}`},
 					},
 				}
 			default:
@@ -586,7 +586,7 @@ func TestConversationSpeedCache_IntegerIsMutedAndMemberSettingsFidelity(t *testi
 				return fakeSQLResponse{
 					cols: []string{"id", "type", "title", "description", "avatar_id", "last_message_id", "settings", "external_link"},
 					rows: [][]driver.Value{
-						{int64(301), int64(1), "General", "Desc", int64(5), int64(1001), `{"write_permission":0,"send_media_permission":true}`, `["https://example.com"]`},
+						{int64(301), int64(1), "General", "Desc", int64(5), int64(1001), `{"write_permission":0,"send_media_permission":true}`, `{"title":"Website","url":"https://example.com"}`},
 					},
 				}
 			}

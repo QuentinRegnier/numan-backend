@@ -46,7 +46,7 @@ func LeftMessage(ctx context.Context, messageID int64, userID int64) (message_mo
 			pgMessagesList, errPg := postgres.FuncLoadMessagesByIDs(ctx, []int64{messageID})
 			if errPg != nil {
 				numan_log.Error(ctx).Err(errPg).Int64("message_id", messageID).Msg("Erreur L3 lors de la vérification de sécurité d'un message")
-				return message_models.MessagePayload{}, numan_error.NewInternal()
+				return message_models.MessagePayload{}, errPg
 			}
 
 			if len(pgMessagesList) > 0 {

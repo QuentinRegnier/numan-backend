@@ -2,10 +2,10 @@ package object_cache_service
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/user_settings_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
@@ -41,8 +41,12 @@ func getUserSettings(ctx context.Context, userID int64) (user_settings_models.Us
 func SetUserSettings(ctx context.Context, userSettingsPayload user_settings_models.UserSettingsPayload) error {
 	errRedis := redis.UserSettings.SetObject(ctx, userSettingsPayload.UserID, userSettingsPayload)
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Int64("user_id", userSettingsPayload.UserID).Msg("Impossible de sauvegarder les UserSettings en RAM L1")
-		return numan_error.NewInternal()
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de sauvegarder les paramètres utilisateur dans l'Object Cache.",
+			errRedis,
+		)
 	}
 	return nil
 }
@@ -72,8 +76,7 @@ func GetUserSettingsCascade(ctx context.Context, userID int64) (user_settings_mo
 	// ── ÉTAPE 3 : TENTATIVE L3 (POSTGRESQL COLD STORAGE) ────────────────────
 	postgresSettings, errPg := postgres.FuncLoadUserSettings(ctx, userID)
 	if errPg != nil {
-		numan_log.Error(ctx).Err(errPg).Int64("user_id", userID).Msg("Erreur critique L3 lors du chargement des UserSettings")
-		return user_settings_models.UserSettingsPayload{}, numan_error.NewInternal()
+		return user_settings_models.UserSettingsPayload{}, errPg
 	}
 
 	if postgresSettings.ID != 0 {
