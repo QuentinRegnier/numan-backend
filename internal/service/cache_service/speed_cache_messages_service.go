@@ -71,6 +71,7 @@ func GetMessageIDsFromSpeedCache(ctx context.Context, conversationID int64, offs
 		// FALLBACK ABSOLU L3 (Cold Storage)
 		postgresIDsList, errPg := postgres.FuncLoadMessageIDsPaginated(ctx, conversationID, offsetMessageID, paginationLimit, scrollDirection, frozenMessageID)
 		if errPg != nil {
+			// Error already wrapped by FuncLoadMessageIDsPaginated; propagate it without wrapping again.
 			return nil, errPg
 		}
 
@@ -79,9 +80,13 @@ func GetMessageIDsFromSpeedCache(ctx context.Context, conversationID int64, offs
 			go func(repairedIDs []int64) {
 				backgroundCtx := context.Background()
 				for _, repairedID := range repairedIDs {
-					_ = redis.MessagesIndex.ZAdd(backgroundCtx, conversationID, float64(repairedID), strconv.FormatInt(repairedID, 10))
+					if err := redis.MessagesIndex.ZAdd(backgroundCtx, conversationID, float64(repairedID), strconv.FormatInt(repairedID, 10)); err != nil {
+						numan_log.Warn(backgroundCtx).Err(err).Entity("conversation", conversationID).Action(numan_log.ActionHydrate).Msg("Échec de la réhydratation ZAdd de l'index des messages")
+					}
 				}
-				_ = redis.MessagesIndex.RefreshTTL(backgroundCtx, conversationID)
+				if err := redis.MessagesIndex.RefreshTTL(backgroundCtx, conversationID); err != nil {
+					numan_log.Warn(backgroundCtx).Err(err).Entity("conversation", conversationID).Msg("Échec du rafraîchissement du TTL de l'index des messages")
+				}
 			}(postgresIDsList)
 		}
 

@@ -2,6 +2,7 @@ package cache_service
 
 import (
 	"context"
+	"errors"
 	"math"
 	"strings"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
+	goredis "github.com/go-redis/redis/v8"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -69,6 +71,9 @@ func updateEdge(ctx context.Context, sourceTag, targetTag string, currentTimesta
 			numan_log.Error(ctx).Err(err).Msg("Échec de la désérialisation MessagePack pour une arête de graphe")
 			return
 		}
+	} else if !errors.Is(errRedis, goredis.Nil) {
+		numan_log.Warn(ctx).Err(errRedis).Str("source_tag", sourceTag).Str("target_tag", targetTag).Msg("Échec de la lecture Redis pour une arête du graphe de Markov")
+		return
 	}
 
 	// 2. Calcul du Δt en jours
@@ -105,7 +110,11 @@ func GetRelatedTagsLazy(ctx context.Context, sourceTag string) map[string]float6
 	sanitizedSourceTag := strings.ToLower(strings.TrimSpace(sourceTag))
 
 	edgesMapJSON, errRedis := redis.GraphEdges.HGetAll(ctx, sanitizedSourceTag).Result()
-	if errRedis != nil || len(edgesMapJSON) == 0 {
+	if errRedis != nil {
+		numan_log.Warn(ctx).Err(errRedis).Str("tag", sanitizedSourceTag).Msg("Échec de la lecture HGetAll du Graph Cache")
+		return nil
+	}
+	if len(edgesMapJSON) == 0 {
 		return nil
 	}
 
@@ -117,6 +126,7 @@ func GetRelatedTagsLazy(ctx context.Context, sourceTag string) map[string]float6
 	for targetTag, binaryData := range edgesMapJSON {
 		var currentEdge tagEdge
 		if errUnmarshal := msgpack.Unmarshal([]byte(binaryData), &currentEdge); errUnmarshal != nil {
+			numan_log.Warn(ctx).Err(errUnmarshal).Str("target_tag", targetTag).Msg("Échec de désérialisation MessagePack d'une arête dans GetRelatedTagsLazy")
 			continue
 		}
 
@@ -138,7 +148,7 @@ func GetRelatedTagsLazy(ctx context.Context, sourceTag string) map[string]float6
 			backgroundCtx := context.Background()
 			errPrune := redis.GraphEdges.HDel(backgroundCtx, sanitizedSourceTag, targetsToPrune...)
 			if errPrune != nil {
-				numan_log.Warn(ctx).Err(errPrune).Msg("Échec de l'élagage paresseux (Lazy Pruning) dans le Graph Cache")
+				numan_log.Warn(backgroundCtx).Err(errPrune).Msg("Échec de l'élagage paresseux (Lazy Pruning) dans le Graph Cache")
 			}
 		}(edgesToDeleteList)
 	}
@@ -154,6 +164,7 @@ func SeedGraphCache(ctx context.Context) error {
 	// 1. Récupération de l'historique complet (Filtré : > 1 tag, trié par date croissante)
 	historicalPosts, errPg := postgres.FuncLoadPostsForGraphSeeding(ctx)
 	if errPg != nil {
+		// Error already wrapped by FuncLoadPostsForGraphSeeding; propagate it without wrapping again.
 		return errPg
 	}
 

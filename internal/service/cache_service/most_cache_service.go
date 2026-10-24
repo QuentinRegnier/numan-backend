@@ -93,7 +93,9 @@ func GetRankedPosts(ctx context.Context, rankType string, offset int64, limit in
 		// TENTATIVE L2 (MongoDB)
 		mongoDocuments, errMongo := mongo.Posts.GetPaginated(mongoFilter, mongoSort, offset, limit)
 		if errMongo != nil {
+			numan_log.Warn(ctx).Err(errMongo).Str("rank_type", rankType).Msg("Échec L2 lors de la récupération paginée des publications classées")
 			// FALLBACK L3 (PostgreSQL)
+			// Error already wrapped by getPostsFromPostgresPaginated; propagate it without wrapping again.
 			return getPostsFromPostgresPaginated(ctx, rankType, offset, limit)
 		}
 
@@ -102,12 +104,15 @@ func GetRankedPosts(ctx context.Context, rankType string, offset int64, limit in
 			var postPayload post_models.PostPayload
 			if errStruct := pkg.ToStruct(document, &postPayload); errStruct == nil {
 				hydratedPosts = append(hydratedPosts, postPayload)
+			} else {
+				numan_log.Warn(ctx).Err(errStruct).Msg("Échec de conversion BSON vers PostPayload dans GetRankedPosts")
 			}
 		}
 		return hydratedPosts, nil
 	}
 
 	// TENTATIVE L1 (RAM)
+	// Error already wrapped by fetchAndHydrateFromCollection; propagate it without wrapping again.
 	return fetchAndHydrateFromCollection(ctx, redis.RankedPosts, rankType, offset, limit)
 }
 
@@ -118,16 +123,20 @@ func GetTagPosts(ctx context.Context, slug string, offset int64, limit int64) ([
 	if offset >= int64(variables.MaxTagElements) {
 		postsFromMongo, errMongo := getPostsFromMongoPaginated("hashtags", slug, offset, limit)
 		if errMongo != nil {
+			numan_log.Warn(ctx).Err(errMongo).Str("slug", slug).Msg("Échec L2 lors de la récupération paginée des publications par tag")
 			// FALLBACK L3 (PostgreSQL) - Pur DDD
 			pgIDs, errPg := postgres.FuncLoadPostIDsByTagPaginated(ctx, slug, offset, limit)
 			if errPg != nil {
+				// Error already wrapped by FuncLoadPostIDsByTagPaginated; propagate it without wrapping again.
 				return []post_models.PostPayload{}, errPg
 			}
+			// Error already wrapped by GetPostsView; propagate it without wrapping again.
 			return object_cache_service.GetPostsView(ctx, pgIDs)
 		}
 		return postsFromMongo, nil
 	}
 
+	// Error already wrapped by fetchAndHydrateFromCollection; propagate it without wrapping again.
 	return fetchAndHydrateFromCollection(ctx, redis.TagPosts, slug, offset, limit)
 }
 
@@ -154,41 +163,67 @@ func updateTrendZSETs(ctx context.Context, postID int64, score float64, directTa
 	}
 
 	// 2. Buckets par Tags (Sérialisation Msgpack pour le flag IsIndirect)
-	processTags := func(tagsList []string, isIndirect bool) {
+	processTags := func(tagsList []string, isIndirect bool) error {
 		for _, hashtag := range tagsList {
 			if cleanSlug, isFound := service.GetTagFromKeyword(ctx, hashtag); isFound {
 
 				tagItem := lite_models.TagPostItem{PostID: postID, IsIndirect: isIndirect}
 				binaryData, err := msgpack.Marshal(tagItem)
 				if err != nil {
-					numan_log.Error(ctx).Err(err).Msg("Échec de la sérialisation MessagePack pour un item de tag")
-					return
+					appErr := numan_error.NewInternal(err)
+					numan_log.Error(ctx).Err(appErr).Msg("Échec de la sérialisation MessagePack pour un item de tag")
+					return appErr
 				}
 				memberBinaryString := string(binaryData)
 
 				err = redis.TrendTagDaily.ZAddWithCap(ctx, fmt.Sprintf("%s:%s", cleanSlug, currentDate), score, memberBinaryString, variables.TDDMaxZSET)
 				if err != nil {
-					numan_log.Error(ctx).Err(err).Msg("Échec de l'ajout à la tendance quotidienne")
-					return
+					appErr := numan_error.NewAppError(
+						http.StatusInternalServerError,
+						numan_error.CodeCacheError,
+						"Impossible de mettre à jour la tendance quotidienne du tag dans le cache.",
+						err,
+					)
+					numan_log.Error(ctx).Err(appErr).Msg("Échec de l'ajout à la tendance quotidienne")
+					return appErr
 				}
 				err = redis.TrendTagWeekly.ZAddWithCap(ctx, fmt.Sprintf("%s:%s", cleanSlug, currentWeek), score, memberBinaryString, variables.TDDMaxZSET)
 				if err != nil {
-					numan_log.Error(ctx).Err(err).Msg("Échec de l'ajout à la tendance hebdomadaire")
-					return
+					appErr := numan_error.NewAppError(
+						http.StatusInternalServerError,
+						numan_error.CodeCacheError,
+						"Impossible de mettre à jour la tendance hebdomadaire du tag dans le cache.",
+						err,
+					)
+					numan_log.Error(ctx).Err(appErr).Msg("Échec de l'ajout à la tendance hebdomadaire")
+					return appErr
 				}
 
 				// Leaderboard ne stocke que le slug (chaîne de caractères)
 				err = redis.HashtagLeaderboard.ZAddWithCap(ctx, "global", score, cleanSlug, variables.TDDMaxZSET)
 				if err != nil {
-					numan_log.Error(ctx).Err(err).Msg("Échec de l'ajout au leaderboard des hashtags")
-					return
+					appErr := numan_error.NewAppError(
+						http.StatusInternalServerError,
+						numan_error.CodeCacheError,
+						"Impossible de mettre à jour le classement des hashtags dans le cache.",
+						err,
+					)
+					numan_log.Error(ctx).Err(appErr).Msg("Échec de l'ajout au leaderboard des hashtags")
+					return appErr
 				}
 			}
 		}
+		return nil
 	}
 
-	processTags(directTags, false)
-	processTags(indirectTags, true)
+	if err := processTags(directTags, false); err != nil {
+		// Error already wrapped by processTags; propagate it without wrapping again.
+		return err
+	}
+	if err := processTags(indirectTags, true); err != nil {
+		// Error already wrapped by processTags; propagate it without wrapping again.
+		return err
+	}
 
 	return nil
 }
@@ -226,7 +261,13 @@ func UpdateScoreWithMetrics(ctx context.Context, postID int64, likesCount int, c
 	scoreStrictRecent := float64(createdAt.UnixMilli())
 	err := redis.ZAddWithCap(ctx, variables.RedisKeyStrictRecent, scoreStrictRecent, postID, variables.MaxStrictElements)
 	if err != nil {
-		numan_log.Error(ctx).Err(err).Msg("Échec de l'ajout à la liste des éléments récents")
+		appErr := numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible d'ajouter la publication à la liste des éléments récents.",
+			err,
+		)
+		numan_log.Error(ctx).Err(appErr).Msg("Échec de l'ajout à la liste des éléments récents")
 		return
 	}
 

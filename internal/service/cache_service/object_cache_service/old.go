@@ -22,11 +22,15 @@ func GetPostsView(ctx context.Context, targetPostIDs []int64) ([]post_models.Pos
 	}
 
 	backgroundCtx := context.Background()
+	redisCtx := ctx
+	if redisCtx == nil {
+		redisCtx = backgroundCtx
+	}
 	finalHydratedPostsList := make([]post_models.PostPayload, 0, len(targetPostIDs))
 	temporaryPostsMap := make(map[int64]post_models.PostPayload)
 
 	// ── ÉTAPE 1 : NIVEAU 1 (REDIS MGET ULTRA-RAPIDE) ────────────────────────
-	mgetResult, errMGet := redis.Posts.GetMany(backgroundCtx, targetPostIDs)
+	mgetResult, errMGet := redis.Posts.GetMany(redisCtx, targetPostIDs)
 	if errMGet != nil {
 		numan_log.Warn(ctx).Err(errMGet).Msg("Erreur Redis MGET (fallback vers L2 Mongo déclenché)")
 		mgetResult = &redis.GetManyResult{MissingIDs: targetPostIDs}
@@ -34,9 +38,10 @@ func GetPostsView(ctx context.Context, targetPostIDs []int64) ([]post_models.Pos
 		for postID, binaryData := range mgetResult.Found {
 			var postPayload post_models.PostPayload
 			// Décodage du binaire MsgPack
-			if msgpack.Unmarshal(binaryData, &postPayload) == nil {
+			if errDecode := msgpack.Unmarshal(binaryData, &postPayload); errDecode == nil {
 				temporaryPostsMap[postID] = postPayload
 			} else {
+				numan_log.Warn(ctx).Err(errDecode).Entity("post", postID).Msg("Échec du décodage MessagePack d'un post en L1")
 				mgetResult.MissingIDs = append(mgetResult.MissingIDs, postID)
 			}
 		}
@@ -58,7 +63,9 @@ func GetPostsView(ctx context.Context, targetPostIDs []int64) ([]post_models.Pos
 				// PROMOTION L2 -> L1 (Réparation asynchrone du Cache RAM)
 				go func(postToPromote post_models.PostPayload) {
 					bgRoutineCtx := context.Background()
-					_ = SetPostInObjectCache(bgRoutineCtx, postToPromote)
+					if err := SetPostInObjectCache(bgRoutineCtx, postToPromote); err != nil {
+						numan_log.Warn(bgRoutineCtx).Err(err).Entity("post", postToPromote.ID).Action(numan_log.ActionHydrate).Msg("Échec de la promotion L2->L1 du post")
+					}
 				}(mongoPost)
 			}
 
@@ -91,10 +98,14 @@ func GetPostsView(ctx context.Context, targetPostIDs []int64) ([]post_models.Pos
 					bgRoutineCtx := context.Background()
 
 					// 1. Réparer Redis L1 (Immédiat)
-					_ = SetPostInObjectCache(bgRoutineCtx, postToHeal)
+					if err := SetPostInObjectCache(bgRoutineCtx, postToHeal); err != nil {
+						numan_log.Warn(bgRoutineCtx).Err(err).Entity("post", postToHeal.ID).Action(numan_log.ActionHydrate).Msg("Échec de la promotion L3->L1 du post")
+					}
 
 					// 2. Réparer Mongo L2 (Asynchrone via Worker BulkWrite)
-					_ = redis.EnqueueDB(bgRoutineCtx, postToHeal.ID, postToHeal.UserID, redis.EntityPost, redis.ActionUpdate, postToHeal, redis.TargetMongo)
+					if err := redis.EnqueueDB(bgRoutineCtx, postToHeal.ID, postToHeal.UserID, redis.EntityPost, redis.ActionUpdate, postToHeal, redis.TargetMongo); err != nil {
+						numan_log.Warn(bgRoutineCtx).Err(err).Entity("post", postToHeal.ID).Action(numan_log.ActionSync).Msg("Échec de la mise en file d'attente L3->L2 du post")
+					}
 				}(postgresPost)
 			}
 		}

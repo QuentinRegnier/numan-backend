@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 )
@@ -30,7 +31,9 @@ func SetWatermarkInSpeedCache(ctx context.Context, conversationID int64, userID 
 	}
 
 	// On prolonge la durée de vie de cette structure en RAM à chaque activité
-	_ = redis.ConvWatermarks.RefreshTTL(ctx, conversationID)
+	if errTTL := redis.ConvWatermarks.RefreshTTL(ctx, conversationID); errTTL != nil {
+		numan_log.Warn(ctx).Err(errTTL).Entity("conversation", conversationID).Msg("Impossible de rafraîchir le TTL des watermarks de conversation")
+	}
 
 	return nil
 }
@@ -60,7 +63,9 @@ func GetWatermarksFromSpeedCache(ctx context.Context, conversationID int64) (map
 
 	// Si des données sont présentes, on maintient le cache en vie (LFU/LRU behavior)
 	if len(parsedWatermarksMap) > 0 {
-		_ = redis.ConvWatermarks.RefreshTTL(ctx, conversationID)
+		if errTTL := redis.ConvWatermarks.RefreshTTL(ctx, conversationID); errTTL != nil {
+			numan_log.Warn(ctx).Err(errTTL).Entity("conversation", conversationID).Msg("Impossible de rafraîchir le TTL des watermarks de conversation")
+		}
 	}
 
 	return parsedWatermarksMap, nil

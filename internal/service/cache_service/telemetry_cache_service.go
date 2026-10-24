@@ -7,6 +7,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/user_settings_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
@@ -31,7 +32,9 @@ func GetTelemetryProfile(ctx context.Context, userID int64) (lite_models.Telemet
 	// ── L2 : MONGODB ────────────────────────────────
 	var mongoSettings user_settings_models.UserSettingsPayload
 	mongoDocs, errMongo := mongo.UserSettings.Get(map[string]any{"user_id": userID}, nil)
-	if errMongo == nil && len(mongoDocs) > 0 {
+	if errMongo != nil {
+		numan_log.Warn(ctx).Err(errMongo).Int64("user_id", userID).Msg("Échec L2 lors de la récupération du profil de télémétrie")
+	} else if len(mongoDocs) > 0 {
 		if errStruct := pkg.ToStruct(mongoDocs[0], &mongoSettings); errStruct == nil {
 			profile = lite_models.TelemetryProfileLite{
 				Vector:          mongoSettings.TelemetryVector,
@@ -40,15 +43,22 @@ func GetTelemetryProfile(ctx context.Context, userID int64) (lite_models.Telemet
 				TimestampMs:     mongoSettings.TelemetryTimestamp,
 			}
 			go func(p lite_models.TelemetryProfileLite, uID int64) {
-				_ = SetTelemetryProfile(context.Background(), uID, p)
+				bgCtx := context.Background()
+				if err := SetTelemetryProfile(bgCtx, uID, p); err != nil {
+					numan_log.Warn(bgCtx).Err(err).Int64("user_id", uID).Action(numan_log.ActionHydrate).Msg("Échec de la promotion L2->L1 du profil de télémétrie")
+				}
 			}(profile, userID)
 			return profile, nil
+		} else {
+			numan_log.Warn(ctx).Err(errStruct).Int64("user_id", userID).Msg("Échec de conversion du profil de télémétrie L2")
 		}
 	}
 
 	// ── L3 : POSTGRESQL ─────────────────────────────
 	postgresSettings, errPg := postgres.FuncLoadUserSettings(ctx, userID)
-	if errPg == nil && postgresSettings.ID != 0 {
+	if errPg != nil {
+		numan_log.Warn(ctx).Err(errPg).Int64("user_id", userID).Msg("Échec L3 lors de la récupération du profil de télémétrie")
+	} else if postgresSettings.ID != 0 {
 		profile = lite_models.TelemetryProfileLite{
 			Vector:          postgresSettings.TelemetryVector,
 			TopTags:         postgresSettings.TelemetryTags,
@@ -56,14 +66,17 @@ func GetTelemetryProfile(ctx context.Context, userID int64) (lite_models.Telemet
 			TimestampMs:     postgresSettings.TelemetryTimestamp,
 		}
 		go func(p lite_models.TelemetryProfileLite, uID int64) {
-			_ = SetTelemetryProfile(context.Background(), uID, p)
+			bgCtx := context.Background()
+			if err := SetTelemetryProfile(bgCtx, uID, p); err != nil {
+				numan_log.Warn(bgCtx).Err(err).Int64("user_id", uID).Action(numan_log.ActionHydrate).Msg("Échec de la promotion L3->L1 du profil de télémétrie")
+			}
 		}(profile, userID)
 		return profile, nil
 	}
 
 	// ── COMPLETE MISS ───────────────────────────────
 	return lite_models.TelemetryProfileLite{}, numan_error.NewNotFound(
-		"TELEMETRY_SYNC_REQUIRED",
+		numan_error.CodeTelemetrySyncRequired,
 		"No trusted telemetry data available. Please synchronize the profile.",
 		nil,
 	)

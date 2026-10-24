@@ -2,11 +2,13 @@ package object_cache_service
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/conversation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
+	goredis "github.com/go-redis/redis/v8"
 )
 
 // ############################################################################
@@ -19,7 +21,10 @@ func GetConversationFromObjectCache(ctx context.Context, conversationID int64) (
 
 	errRedis := redis.Conversations.GetObject(ctx, conversationID, &conversationPayload)
 	if errRedis != nil {
-		return conversation_models.ConversationPayload{}, errRedis // Laisse remonter si c'est un Cache Miss (géré par la cascade)
+		if errors.Is(errRedis, goredis.Nil) {
+			return conversation_models.ConversationPayload{}, numan_error.NewNotFound(numan_error.CodeNotFound, "Conversation introuvable dans le cache.", errRedis)
+		}
+		return conversation_models.ConversationPayload{}, numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeCacheError, "Impossible de récupérer la conversation depuis l'Object Cache.", errRedis)
 	}
 
 	return conversationPayload, nil

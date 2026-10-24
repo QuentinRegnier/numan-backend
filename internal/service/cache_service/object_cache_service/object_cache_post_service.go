@@ -2,11 +2,14 @@ package object_cache_service
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/post_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
+	goredis "github.com/go-redis/redis/v8"
 )
 
 // ############################################################################
@@ -19,7 +22,10 @@ func GetPostFromObjectCache(ctx context.Context, postID int64) (post_models.Post
 
 	errRedis := redis.Posts.GetObject(ctx, postID, &postPayload)
 	if errRedis != nil {
-		return post_models.PostPayload{}, errRedis
+		if errors.Is(errRedis, goredis.Nil) {
+			return post_models.PostPayload{}, numan_error.NewNotFound(numan_error.CodeNotFound, "Publication introuvable dans le cache.", errRedis)
+		}
+		return post_models.PostPayload{}, numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeCacheError, "Impossible de récupérer le post depuis l'Object Cache.", errRedis)
 	}
 
 	return postPayload, nil
@@ -57,6 +63,7 @@ func DeletePostFromObjectCache(ctx context.Context, postID int64) error {
 func IsPostInObjectCache(ctx context.Context, postID int64) bool {
 	isExists, errRedis := redis.Posts.Exists(ctx, postID)
 	if errRedis != nil {
+		numan_log.Warn(ctx).Err(errRedis).Entity("post", postID).Msg("Erreur Redis EXISTS lors de la vérification du post en L1")
 		return false
 	}
 	return isExists

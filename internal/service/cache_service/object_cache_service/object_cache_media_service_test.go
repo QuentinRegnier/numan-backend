@@ -8,11 +8,16 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/media_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 )
 
 func TestMediaObjectCache_LifecycleAndSoftDeleteCheck(t *testing.T) {
-	srv := setupTestRedis(t)
+	srv := test.SetupTestRedis(t)
 	ctx := context.Background()
+
+	// Cache miss returns 404 CodeNotFound AppError
+	_, errMiss := GetMediaFromObjectCache(ctx, 999)
+	assertAppError(t, errMiss, http.StatusNotFound, numan_error.CodeNotFound)
 
 	// 1. Visible media is stored and retrieved with all fields preserved
 	visibleMedia := media_models.MediaPayload{
@@ -54,31 +59,25 @@ func TestMediaObjectCache_LifecycleAndSoftDeleteCheck(t *testing.T) {
 	}
 
 	_, err = GetMediaFromObjectCache(ctx, 102)
-	if err == nil {
-		t.Fatalf("expected error for soft-deleted media, got nil")
-	}
-	var appErr *numan_error.AppError
-	if !errors.As(err, &appErr) || appErr.HTTPStatus != http.StatusNotFound {
-		t.Errorf("expected 404 NotFound AppError for soft-deleted media, got %v", err)
-	}
+	assertAppError(t, err, http.StatusNotFound, numan_error.CodeNotFound)
 
 	// 3. DeleteMediaFromObjectCache removes entry
 	if err := DeleteMediaFromObjectCache(ctx, 101); err != nil {
 		t.Fatalf("DeleteMediaFromObjectCache failed: %v", err)
 	}
-	if _, err := GetMediaFromObjectCache(ctx, 101); err == nil {
-		t.Errorf("expected cache miss after DeleteMediaFromObjectCache, got nil")
-	}
+	_, errAfterDel := GetMediaFromObjectCache(ctx, 101)
+	assertAppError(t, errAfterDel, http.StatusNotFound, numan_error.CodeNotFound)
 
 	// 4. Error branches
-	srv.setFailCmd("SET", errors.New("set err"))
-	if err := SetMediaInObjectCache(ctx, visibleMedia); err == nil {
-		t.Errorf("expected error when SET fails, got nil")
-	}
-	srv.setFailCmd("SET", nil)
+	srv.SetFailCmd("GET", errors.New("get err"))
+	_, errGet := GetMediaFromObjectCache(ctx, 101)
+	assertAppError(t, errGet, http.StatusInternalServerError, numan_error.CodeCacheError)
+	srv.SetFailCmd("GET", nil)
 
-	srv.setFailCmd("DEL", errors.New("del err"))
-	if err := DeleteMediaFromObjectCache(ctx, 101); err == nil {
-		t.Errorf("expected error when DEL fails, got nil")
-	}
+	srv.SetFailCmd("SET", errors.New("set err"))
+	assertAppError(t, SetMediaInObjectCache(ctx, visibleMedia), http.StatusInternalServerError, numan_error.CodeCacheError)
+	srv.SetFailCmd("SET", nil)
+
+	srv.SetFailCmd("DEL", errors.New("del err"))
+	assertAppError(t, DeleteMediaFromObjectCache(ctx, 101), http.StatusInternalServerError, numan_error.CodeCacheError)
 }

@@ -3,12 +3,16 @@ package object_cache_service
 import (
 	"context"
 	"errors"
+	"net/http"
 	"reflect"
 	"testing"
+
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 )
 
 func TestSavedPostsZSET_AddRemoveAndGet(t *testing.T) {
-	srv := setupTestRedis(t)
+	srv := test.SetupTestRedis(t)
 	ctx := context.Background()
 
 	userID := int64(77)
@@ -53,20 +57,15 @@ func TestSavedPostsZSET_AddRemoveAndGet(t *testing.T) {
 	}
 
 	// Error branches
-	srv.setFailCmd("ZADD", errors.New("zadd err"))
-	if err := AddSavedToZSET(ctx, userID, 1004, 400.0); err == nil {
-		t.Errorf("expected error when ZADD fails")
-	}
-	srv.setFailCmd("ZADD", nil)
+	srv.SetFailCmd("ZADD", errors.New("zadd err"))
+	assertAppError(t, AddSavedToZSET(ctx, userID, 1004, 400.0), http.StatusInternalServerError, numan_error.CodeCacheError)
+	srv.SetFailCmd("ZADD", nil)
 
-	srv.setFailCmd("ZREM", errors.New("zrem err"))
-	if err := RemoveSavedFromZSET(ctx, userID, 1001); err == nil {
-		t.Errorf("expected error when ZREM fails")
-	}
-	srv.setFailCmd("ZREM", nil)
+	srv.SetFailCmd("ZREM", errors.New("zrem err"))
+	assertAppError(t, RemoveSavedFromZSET(ctx, userID, 1001), http.StatusInternalServerError, numan_error.CodeCacheError)
+	srv.SetFailCmd("ZREM", nil)
 
-	srv.setFailCmd("ZREVRANGE", errors.New("zrevrange err"))
-	if _, err := GetSavedPostIDs(ctx, userID, 0, 10); err == nil {
-		t.Errorf("expected error when ZREVRANGE fails")
-	}
+	srv.SetFailCmd("ZREVRANGE", errors.New("zrevrange err"))
+	_, errGet := GetSavedPostIDs(ctx, userID, 0, 10)
+	assertAppError(t, errGet, http.StatusInternalServerError, numan_error.CodeCacheError)
 }

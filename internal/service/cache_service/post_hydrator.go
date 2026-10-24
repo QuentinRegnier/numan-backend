@@ -15,6 +15,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
 
 // ############################################################################
@@ -50,6 +51,7 @@ func fetchAndHydrateFromCollection(ctx context.Context, redisCollection *redis.C
 	}
 
 	// Déclenchement de la cascade complète
+	// Error already wrapped by GetPostsView; propagate it without wrapping again.
 	return object_cache_service.GetPostsView(ctx, parsedIDsList)
 }
 
@@ -60,7 +62,12 @@ func getPostsFromMongoPaginated(fieldName string, expectedValue any, offset int6
 
 	mongoDocuments, errMongo := mongo.Posts.GetPaginated(mongoFilter, mongoSort, offset, limit)
 	if errMongo != nil {
-		return []post_models.PostPayload{}, errMongo
+		return []post_models.PostPayload{}, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Impossible de récupérer les publications paginées depuis MongoDB (L2).",
+			errMongo,
+		)
 	}
 
 	var hydratedPosts []post_models.PostPayload
@@ -68,6 +75,8 @@ func getPostsFromMongoPaginated(fieldName string, expectedValue any, offset int6
 		var postPayload post_models.PostPayload
 		if errStruct := pkg.ToStruct(document, &postPayload); errStruct == nil {
 			hydratedPosts = append(hydratedPosts, postPayload)
+		} else {
+			numan_log.Warn(context.Background()).Err(errStruct).Msg("Échec de conversion BSON vers PostPayload dans getPostsFromMongoPaginated")
 		}
 	}
 
@@ -80,13 +89,13 @@ func getPostsFromPostgresPaginated(ctx context.Context, rankType string, offset 
 
 	// TODO: Optimiser ces requêtes avec des vues matérialisées si la BDD dépasse 1M de lignes
 	switch rankType {
-	case "likes:strict":
+	case variables.RedisKeyStrictLikes, "likes:strict":
 		sqlQuery = `
 			SELECT p.id FROM content.posts p 
 			WHERE p.visibility != 2 
 			ORDER BY (SELECT COUNT(*) FROM content.likes l WHERE l.target_id = p.id AND l.target_type = 0) DESC, p.created_at DESC 
 			OFFSET $1 LIMIT $2`
-	case "views:strict":
+	case variables.RedisKeyStrictViews, "views:strict":
 		sqlQuery = `
 			SELECT p.id FROM content.posts p 
 			WHERE p.visibility != 2 
@@ -126,8 +135,20 @@ func getPostsFromPostgresPaginated(ctx context.Context, rankType string, offset 
 		var extractedID int64
 		if errScan := sqlRows.Scan(&extractedID); errScan == nil {
 			extractedIDs = append(extractedIDs, extractedID)
+		} else {
+			numan_log.Warn(ctx).Err(errScan).Msg("Erreur de scan d'un ID de publication lors du fallback L3 Postgres")
 		}
 	}
 
+	if errRows := sqlRows.Err(); errRows != nil {
+		return nil, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeDatabaseError,
+			"Erreur lors de l'itération des publications depuis PostgreSQL (L3).",
+			errRows,
+		)
+	}
+
+	// Error already wrapped by GetPostsView; propagate it without wrapping again.
 	return object_cache_service.GetPostsView(ctx, extractedIDs)
 }

@@ -22,14 +22,26 @@ func AddNotificationToZSET(ctx context.Context, userID int64, notificationID int
 	errRedis := redis.NotificationsZSet.ZAddWithCap(ctx, userID, float64(timestampMs), notificationIDStr, 100)
 
 	if errRedis != nil {
-		numan_log.Error(ctx).Err(errRedis).Int64("user_id", userID).Msg("Impossible d'ajouter la notification au ZSET")
-		return errRedis
+		appErr := numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible d'ajouter la notification au ZSET dans le cache.",
+			errRedis,
+		)
+		numan_log.Error(ctx).Err(appErr).Int64("user_id", userID).Msg("Impossible d'ajouter la notification au ZSET")
+		return appErr
 	}
 
 	err := redis.NotificationsZSet.RefreshTTL(ctx, userID)
 	if err != nil {
-		numan_log.Warn(ctx).Err(err).Int64("user_id", userID).Msg("Impossible de prolonger le TTL du ZSET des notifications")
-		return err
+		appErr := numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de prolonger le TTL du ZSET des notifications.",
+			err,
+		)
+		numan_log.Warn(ctx).Err(appErr).Int64("user_id", userID).Msg("Impossible de prolonger le TTL du ZSET des notifications")
+		return appErr
 	}
 	return nil
 }
@@ -53,7 +65,6 @@ func GetNotificationIDsFromZSET(ctx context.Context, userID int64, offset int64,
 		err := redis.NotificationsZSet.RefreshTTL(ctx, userID)
 		if err != nil {
 			numan_log.Warn(ctx).Err(err).Int64("user_id", userID).Msg("Impossible de prolonger le TTL du ZSET des notifications")
-			return nil, err
 		}
 	}
 

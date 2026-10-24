@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
@@ -76,7 +77,9 @@ func MarkUserTimelineEmpty(ctx context.Context, userID int64) error {
 		)
 	}
 
-	_ = redis.UserTimeline.RefreshTTL(ctx, userID)
+	if errTTL := redis.UserTimeline.RefreshTTL(ctx, userID); errTTL != nil {
+		numan_log.Warn(ctx).Err(errTTL).Int64("user_id", userID).Msg("Impossible de rafraîchir le TTL de la timeline utilisateur")
+	}
 	return nil
 }
 
@@ -100,7 +103,9 @@ func PurgeUserTimeline(ctx context.Context, userID int64) error {
 func AddPostToUserProfile(ctx context.Context, userID int64, postID int64, timestampScore float64) error {
 
 	// Nettoyage préventif
-	_ = redis.UserTimeline.ZRem(ctx, userID, variables.UserTimelineEmptyMarker)
+	if errRem := redis.UserTimeline.ZRem(ctx, userID, variables.UserTimelineEmptyMarker); errRem != nil {
+		numan_log.Warn(ctx).Err(errRem).Int64("user_id", userID).Msg("Impossible de retirer le marqueur de timeline vide")
+	}
 
 	postIDString := strconv.FormatInt(postID, 10)
 	errRedis := redis.UserTimeline.ZAdd(ctx, userID, timestampScore, postIDString)

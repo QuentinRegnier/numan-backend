@@ -3,15 +3,22 @@ package object_cache_service
 import (
 	"context"
 	"errors"
+	"net/http"
 	"reflect"
 	"testing"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/comment_models"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 )
 
 func TestCommentObjectCacheAndZSET(t *testing.T) {
-	srv := setupTestRedis(t)
+	srv := test.SetupTestRedis(t)
 	ctx := context.Background()
+
+	// Cache miss returns 404 CodeNotFound
+	_, errMiss := GetCommentFromObjectCache(ctx, 9999)
+	assertAppError(t, errMiss, http.StatusNotFound, numan_error.CodeNotFound)
 
 	postID := int64(500)
 	c1 := comment_models.CommentPayload{
@@ -57,19 +64,20 @@ func TestCommentObjectCacheAndZSET(t *testing.T) {
 		t.Fatalf("AddCommentToZSET(102) failed: %v", err)
 	}
 
+	// Best-effort EXPIRE failure in AddCommentToZSET & IncrementCommentScoreInZSET still returns nil
+	srv.SetFailCmd("EXPIRE", errors.New("expire err"))
+	if err := AddCommentToZSET(ctx, postID, 101, 10.0); err != nil {
+		t.Fatalf("AddCommentToZSET with EXPIRE failure should still succeed, got: %v", err)
+	}
+	if err := IncrementCommentScoreInZSET(ctx, postID, 101, 25.0); err != nil {
+		t.Fatalf("IncrementCommentScoreInZSET with EXPIRE failure should still succeed, got: %v", err)
+	}
+	srv.SetFailCmd("EXPIRE", nil)
+
 	topIDs, err := GetTopCommentIDs(ctx, postID, 0, 10)
 	if err != nil {
 		t.Fatalf("GetTopCommentIDs failed: %v", err)
 	}
-	if !reflect.DeepEqual(topIDs, []int64{102, 101}) {
-		t.Errorf("GetTopCommentIDs = %v, want [102 101]", topIDs)
-	}
-
-	// IncrementCommentScoreInZSET boosts 101 above 102
-	if err := IncrementCommentScoreInZSET(ctx, postID, 101, 25.0); err != nil {
-		t.Fatalf("IncrementCommentScoreInZSET failed: %v", err)
-	}
-	topIDs, _ = GetTopCommentIDs(ctx, postID, 0, 10)
 	if !reflect.DeepEqual(topIDs, []int64{101, 102}) {
 		t.Errorf("GetTopCommentIDs after increment = %v, want [101 102]", topIDs)
 	}
@@ -85,42 +93,39 @@ func TestCommentObjectCacheAndZSET(t *testing.T) {
 
 	// PurgePostCommentsFromL1 deletes both comment objects and the ZSET
 	PurgePostCommentsFromL1(ctx, postID)
-	if _, err := GetCommentFromObjectCache(ctx, 101); err == nil {
-		t.Errorf("expected comment 101 purged from Object Cache, got nil error")
-	}
+	_, errAfterPurge := GetCommentFromObjectCache(ctx, 101)
+	assertAppError(t, errAfterPurge, http.StatusNotFound, numan_error.CodeNotFound)
+
 	topIDsAfterPurge, _ := GetTopCommentIDs(ctx, postID, 0, 10)
 	if len(topIDsAfterPurge) != 0 {
 		t.Errorf("expected empty ZSET after PurgePostCommentsFromL1, got %v", topIDsAfterPurge)
 	}
 
 	// Error branches
-	srv.setFailCmd("SET", errors.New("set err"))
-	if err := SetCommentInObjectCache(ctx, c1); err == nil {
-		t.Errorf("expected error when SET fails")
-	}
-	srv.setFailCmd("SET", nil)
+	srv.SetFailCmd("GET", errors.New("get err"))
+	_, errGet := GetCommentFromObjectCache(ctx, 101)
+	assertAppError(t, errGet, http.StatusInternalServerError, numan_error.CodeCacheError)
+	srv.SetFailCmd("GET", nil)
 
-	srv.setFailCmd("DEL", errors.New("del err"))
-	if err := DeleteCommentFromObjectCache(ctx, 101); err == nil {
-		t.Errorf("expected error when DEL fails")
-	}
-	srv.setFailCmd("DEL", nil)
+	srv.SetFailCmd("SET", errors.New("set err"))
+	assertAppError(t, SetCommentInObjectCache(ctx, c1), http.StatusInternalServerError, numan_error.CodeCacheError)
+	srv.SetFailCmd("SET", nil)
 
-	srv.setFailCmd("ZREVRANGE", errors.New("zrevrange err"))
-	if _, err := GetTopCommentIDs(ctx, postID, 0, 10); err == nil {
-		t.Errorf("expected error when ZREVRANGE fails")
-	}
-	srv.setFailCmd("ZREVRANGE", nil)
+	srv.SetFailCmd("DEL", errors.New("del err"))
+	assertAppError(t, DeleteCommentFromObjectCache(ctx, 101), http.StatusInternalServerError, numan_error.CodeCacheError)
+	srv.SetFailCmd("DEL", nil)
 
-	srv.setFailCmd("ZREM", errors.New("zrem err"))
-	if err := RemoveCommentFromZSET(ctx, postID, 101); err == nil {
-		t.Errorf("expected error when ZREM fails")
-	}
-	srv.setFailCmd("ZREM", nil)
+	srv.SetFailCmd("ZREVRANGE", errors.New("zrevrange err"))
+	_, errTop := GetTopCommentIDs(ctx, postID, 0, 10)
+	assertAppError(t, errTop, http.StatusInternalServerError, numan_error.CodeCacheError)
+	PurgePostCommentsFromL1(ctx, postID) // exercises ZREVRANGE warn branch
+	srv.SetFailCmd("ZREVRANGE", nil)
 
-	srv.setFailCmd("ZINCRBY", errors.New("zincrby err"))
-	if err := IncrementCommentScoreInZSET(ctx, postID, 101, 1.0); err == nil {
-		t.Errorf("expected error when ZINCRBY fails")
-	}
-	srv.setFailCmd("ZINCRBY", nil)
+	srv.SetFailCmd("ZREM", errors.New("zrem err"))
+	assertAppError(t, RemoveCommentFromZSET(ctx, postID, 101), http.StatusInternalServerError, numan_error.CodeCacheError)
+	srv.SetFailCmd("ZREM", nil)
+
+	srv.SetFailCmd("ZINCRBY", errors.New("zincrby err"))
+	assertAppError(t, IncrementCommentScoreInZSET(ctx, postID, 101, 1.0), http.StatusInternalServerError, numan_error.CodeCacheError)
+	srv.SetFailCmd("ZINCRBY", nil)
 }

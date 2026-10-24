@@ -20,6 +20,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
+	goredis "github.com/go-redis/redis/v8"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -62,6 +63,7 @@ func GetInboxView(ctx context.Context, userID int64, paginationLimit int64, pagi
 	var missingConversationIDs []int64
 
 	if errMetaGet != nil {
+		numan_log.Warn(ctx).Err(errMetaGet).Msg("Échec MGET ConvMeta lors de la lecture de l'Inbox")
 		missingConversationIDs = extractedConversationIDs // Tout est manquant
 		metaGetResult = &redis.GetManyResult{Found: make(map[int64][]byte)}
 	} else {
@@ -93,6 +95,7 @@ func GetInboxView(ctx context.Context, userID int64, paginationLimit int64, pagi
 		if errUnmarshal := msgpack.Unmarshal(binaryData, &metaPayload); errUnmarshal == nil {
 			foundMetasMap[conversationID] = metaPayload
 		} else {
+			numan_log.Warn(ctx).Err(errUnmarshal).Int64("conversation_id", conversationID).Msg("Échec de désérialisation MessagePack des métadonnées de conversation")
 			missingConversationIDs = append(missingConversationIDs, conversationID)
 		}
 	}
@@ -107,6 +110,8 @@ func GetInboxView(ctx context.Context, userID int64, paginationLimit int64, pagi
 				if errUnmarshal := msgpack.Unmarshal([]byte(stringValue), &memberPayload); errUnmarshal == nil {
 					foundMembersMap[currentConvID] = memberPayload
 					continue
+				} else {
+					numan_log.Warn(ctx).Err(errUnmarshal).Int64("conversation_id", currentConvID).Int64("user_id", userID).Msg("Échec de désérialisation MessagePack d'un membre de conversation")
 				}
 			}
 		}
@@ -233,7 +238,9 @@ func ProcessNewMessageInSpeedCache(ctx context.Context, messageID int64, convers
 	if errMeta != nil || convLiteRequest.ID == 0 {
 		// Cache Miss : La conversation a été évincée de la RAM, réhydratation via Mongo (L2)
 		mongoConv, errMongo := mongo.MongoGetConversation(ctx, conversationID)
-		if errMongo == nil && mongoConv.ID != 0 {
+		if errMongo != nil {
+			numan_log.Warn(ctx).Err(errMongo).Int64("conversation_id", conversationID).Msg("Échec L2 lors de la récupération de la conversation pour ProcessNewMessageInSpeedCache")
+		} else if mongoConv.ID != 0 {
 			convLiteRequest = lite_models.ConvLiteRequest{
 				ID:            mongoConv.ID,
 				Type:          mongoConv.Type,
@@ -247,7 +254,12 @@ func ProcessNewMessageInSpeedCache(ctx context.Context, messageID int64, convers
 			err := redis.ConvMeta.SetObject(ctx, conversationID, convLiteRequest)
 			if err != nil {
 				numan_log.Warn(ctx).Err(err).Msg("Échec SetObject lors de la reconstruction SpeedConversation")
-				return nil, err
+				return nil, numan_error.NewAppError(
+					http.StatusInternalServerError,
+					numan_error.CodeCacheError,
+					"Impossible de mettre à jour les métadonnées de la conversation dans le cache.",
+					err,
+				)
 			}
 		}
 	} else {
@@ -255,7 +267,12 @@ func ProcessNewMessageInSpeedCache(ctx context.Context, messageID int64, convers
 		err := redis.ConvMeta.SetObject(ctx, conversationID, convLiteRequest)
 		if err != nil {
 			numan_log.Warn(ctx).Err(err).Msg("Échec SetObject lors de la reconstruction SpeedConversation")
-			return nil, err
+			return nil, numan_error.NewAppError(
+				http.StatusInternalServerError,
+				numan_error.CodeCacheError,
+				"Impossible de mettre à jour les métadonnées de la conversation dans le cache.",
+				err,
+			)
 		}
 	}
 
@@ -264,13 +281,20 @@ func ProcessNewMessageInSpeedCache(ctx context.Context, messageID int64, convers
 
 	if errRedisParts != nil || len(participantStringsList) == 0 {
 		postgresParticipantIDs, errPg := postgres.FuncGetConversationParticipantIDs(ctx, conversationID)
-		if errPg == nil {
+		if errPg != nil {
+			numan_log.Warn(ctx).Err(errPg).Int64("conversation_id", conversationID).Msg("Échec L3 lors de la récupération des participants de la conversation")
+		} else {
 			for _, participantID := range postgresParticipantIDs {
 				participantStringsList = append(participantStringsList, strconv.FormatInt(participantID, 10))
 				err := redis.ConvParticipants.SAdd(ctx, conversationID, participantID) // Réhydrate le SET L1
 				if err != nil {
 					numan_log.Warn(ctx).Err(err).Msg("Échec SAdd lors de la reconstruction SpeedConversation")
-					return nil, err
+					return nil, numan_error.NewAppError(
+						http.StatusInternalServerError,
+						numan_error.CodeCacheError,
+						"Impossible d'ajouter le participant dans le cache de la conversation.",
+						err,
+					)
 				}
 			}
 		}
@@ -284,12 +308,22 @@ func ProcessNewMessageInSpeedCache(ctx context.Context, messageID int64, convers
 		err := redis.UserInbox.ZAddWithCap(ctx, currentParticipantID, float64(messageID), conversationID, variables.MaxZsetInbox)
 		if err != nil {
 			numan_log.Warn(ctx).Err(err).Msg("Échec ZAddWithCap lors de la reconstruction SpeedConversation")
-			return nil, err
+			return nil, numan_error.NewAppError(
+				http.StatusInternalServerError,
+				numan_error.CodeCacheError,
+				"Impossible de mettre à jour l'inbox de l'utilisateur dans le cache.",
+				err,
+			)
 		}
 		err = redis.InboxActivity.SetPrimitive(ctx, currentParticipantID, time.Now().UnixMilli())
 		if err != nil {
 			numan_log.Warn(ctx).Err(err).Msg("Échec SetPrimitive lors de la reconstruction SpeedConversation")
-			return nil, err
+			return nil, numan_error.NewAppError(
+				http.StatusInternalServerError,
+				numan_error.CodeCacheError,
+				"Impossible de mettre à jour l'activité de l'inbox dans le cache.",
+				err,
+			)
 		}
 
 		// B. Incrémentation du compteur de non-lus (Unread) pour les destinataires uniquement
@@ -301,7 +335,9 @@ func ProcessNewMessageInSpeedCache(ctx context.Context, messageID int64, convers
 			if errMemberGet != nil || memberLiteRequest.ConversationID == 0 {
 				// Cache Miss Membre : Réhydratation depuis Postgres (L3)
 				pgMemberRecord, errPgMem := postgres.FuncGetMember(ctx, conversationID, currentParticipantID)
-				if errPgMem == nil && pgMemberRecord.ID != 0 {
+				if errPgMem != nil {
+					numan_log.Warn(ctx).Err(errPgMem).Int64("conversation_id", conversationID).Int64("user_id", currentParticipantID).Msg("Échec L3 lors de la récupération du membre pour ProcessNewMessageInSpeedCache")
+				} else if pgMemberRecord.ID != 0 {
 					memberLiteRequest = lite_models.MemberLiteRequest{
 						ConversationID:    pgMemberRecord.ConversationID,
 						UserID:            pgMemberRecord.UserID,
@@ -315,7 +351,12 @@ func ProcessNewMessageInSpeedCache(ctx context.Context, messageID int64, convers
 					err := redis.ConvMembers.SetObject(ctx, compositeMemberKey, memberLiteRequest)
 					if err != nil {
 						numan_log.Warn(ctx).Err(err).Msg("Échec SetObject lors de la reconstruction SpeedConversation")
-						return nil, err
+						return nil, numan_error.NewAppError(
+							http.StatusInternalServerError,
+							numan_error.CodeCacheError,
+							"Impossible de mettre à jour le membre dans le cache.",
+							err,
+						)
 					}
 				}
 			} else {
@@ -323,7 +364,12 @@ func ProcessNewMessageInSpeedCache(ctx context.Context, messageID int64, convers
 				err := redis.ConvMembers.SetObject(ctx, compositeMemberKey, memberLiteRequest)
 				if err != nil {
 					numan_log.Warn(ctx).Err(err).Msg("Échec SetObject lors de la reconstruction SpeedConversation")
-					return nil, err
+					return nil, numan_error.NewAppError(
+						http.StatusInternalServerError,
+						numan_error.CodeCacheError,
+						"Impossible de mettre à jour le membre dans le cache.",
+						err,
+					)
 				}
 			}
 
@@ -339,7 +385,12 @@ func AddMemberToSpeedCache(ctx context.Context, memberPayload lite_models.Member
 	err := redis.ConvParticipants.SAdd(ctx, memberPayload.ConversationID, memberPayload.UserID)
 	if err != nil {
 		numan_log.Warn(ctx).Err(err).Msg("Échec SAdd lors de l'ajout du membre dans le Speed Cache")
-		return err
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible d'ajouter le participant dans le cache de la conversation.",
+			err,
+		)
 	}
 	compositeMemberKey := fmt.Sprintf("%d:%d", memberPayload.ConversationID, memberPayload.UserID)
 
@@ -350,7 +401,12 @@ func AddMemberToSpeedCache(ctx context.Context, memberPayload lite_models.Member
 	errSet := redis.ConvMembers.SetObject(ctx, compositeMemberKey, memberPayload)
 	if errSet != nil {
 		numan_log.Error(ctx).Err(errSet).Msg("Impossible d'ajouter le membre dans le Speed Cache")
-		return errSet
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible d'ajouter le membre dans le cache.",
+			errSet,
+		)
 	}
 
 	return nil
@@ -368,23 +424,43 @@ func RemoveMemberFromSpeedCache(ctx context.Context, conversationID int64, userI
 	errSRem := redis.ConvParticipants.SRem(ctx, conversationID, userID)
 	if errSRem != nil {
 		numan_log.Warn(ctx).Err(errSRem).Msg("Échec SRem lors de la suppression du membre du Speed Cache")
-		return errSRem
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de retirer le participant du cache de la conversation.",
+			errSRem,
+		)
 	}
 	errDelete := redis.ConvMembers.DeleteObject(ctx, compositeMemberKey)
 	if errDelete != nil {
 		numan_log.Warn(ctx).Err(errDelete).Msg("Échec DeleteObject lors de la suppression du membre du Speed Cache")
-		return errDelete
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de supprimer le membre du cache.",
+			errDelete,
+		)
 	}
 
 	errRem := redis.UserInbox.ZRem(ctx, userID, strconv.FormatInt(conversationID, 10))
 	if errRem != nil {
 		numan_log.Warn(ctx).Err(errRem).Msg("Échec ZRem lors de la suppression du membre du Speed Cache")
-		return errRem
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de retirer la conversation de l'inbox dans le cache.",
+			errRem,
+		)
 	}
 	err := redis.InboxActivity.SetPrimitive(ctx, userID, time.Now().UnixMilli())
 	if err != nil {
 		numan_log.Warn(ctx).Err(err).Msg("Échec SetPrimitive lors de la suppression du membre du Speed Cache")
-		return err
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de mettre à jour l'activité de l'inbox dans le cache.",
+			err,
+		)
 	}
 
 	return nil
@@ -396,6 +472,9 @@ func ResetMemberUnreadCountInSpeedCache(ctx context.Context, conversationID int6
 	compositeMemberKey := fmt.Sprintf("%d:%d", conversationID, userID)
 
 	errGet := redis.ConvMembers.GetObject(ctx, compositeMemberKey, &memberLitePayload)
+	if errGet != nil && !errors.Is(errGet, goredis.Nil) {
+		numan_log.Warn(ctx).Err(errGet).Int64("conversation_id", conversationID).Int64("user_id", userID).Msg("Erreur Redis lors de la lecture du membre pour remise à zéro des non-lus")
+	}
 	if errGet == nil && memberLitePayload.ConversationID != 0 {
 		memberLitePayload.UnreadCount = 0
 
@@ -429,7 +508,7 @@ func ResetMemberUnreadCountInSpeedCache(ctx context.Context, conversationID int6
 
 // ############################################################################
 // # GESTION DU CYCLE DE VIE ET RÉHYDRATATION
-// #################################No citations format validation#########
+// ############################################################################
 
 // PurgeUserConversations vide le ZSET inbox utilisateur pour forcer un rechargement L2/L3.
 func PurgeUserConversations(ctx context.Context, userID int64) error {
@@ -511,6 +590,7 @@ func seedMessagingSpeedCache(ctx context.Context) error {
 
 	activeConversationsList, errPgConv := postgres.FuncLoadActiveConversations(ctx)
 	if errPgConv != nil {
+		// Error already wrapped by FuncLoadActiveConversations; propagate it without wrapping again.
 		return errPgConv
 	}
 
@@ -528,12 +608,18 @@ func seedMessagingSpeedCache(ctx context.Context) error {
 		err := redis.ConvMeta.SetObject(ctx, convLiteRequest.ID, convLiteRequest)
 		if err != nil {
 			numan_log.Warn(ctx).Err(err).Msg("Échec SetObject lors de la réhydratation de la conversation")
-			return err
+			return numan_error.NewAppError(
+				http.StatusInternalServerError,
+				numan_error.CodeCacheError,
+				"Impossible d'initialiser les métadonnées de conversation dans le cache.",
+				err,
+			)
 		}
 	}
 
 	activeMembersList, errPgMem := postgres.FuncLoadActiveMembers(ctx)
 	if errPgMem != nil {
+		// Error already wrapped by FuncLoadActiveMembers; propagate it without wrapping again.
 		return errPgMem
 	}
 
@@ -554,19 +640,34 @@ func seedMessagingSpeedCache(ctx context.Context) error {
 		err := redis.ConvMembers.SetObject(ctx, compositeMemberKey, memberLiteRequest)
 		if err != nil {
 			numan_log.Warn(ctx).Err(err).Msg("Échec SetObject lors de la réhydratation du membre")
-			return err
+			return numan_error.NewAppError(
+				http.StatusInternalServerError,
+				numan_error.CodeCacheError,
+				"Impossible d'initialiser le membre dans le cache.",
+				err,
+			)
 		}
 		err = redis.ConvParticipants.SAdd(ctx, activeMemberRecord.Member.ConversationID, activeMemberRecord.Member.UserID)
 		if err != nil {
 			numan_log.Warn(ctx).Err(err).Msg("Échec SAdd lors de la réhydratation des participants")
-			return err
+			return numan_error.NewAppError(
+				http.StatusInternalServerError,
+				numan_error.CodeCacheError,
+				"Impossible d'initialiser les participants dans le cache.",
+				err,
+			)
 		}
 
 		if activeMemberRecord.LastMessageID.Valid && activeMemberRecord.LastMessageID.Int64 > 0 {
 			err = redis.UserInbox.ZAddWithCap(ctx, activeMemberRecord.Member.UserID, float64(activeMemberRecord.LastMessageID.Int64), activeMemberRecord.Member.ConversationID, 100)
 			if err != nil {
 				numan_log.Warn(ctx).Err(err).Msg("Échec ZAddWithCap lors de la réhydratation du message")
-				return err
+				return numan_error.NewAppError(
+					http.StatusInternalServerError,
+					numan_error.CodeCacheError,
+					"Impossible d'initialiser l'inbox de l'utilisateur dans le cache.",
+					err,
+				)
 			}
 		}
 	}
@@ -578,15 +679,28 @@ func seedMessagingSpeedCache(ctx context.Context) error {
 // GetDirectConversationCache cherche l'existence d'une conversation privée en L1.
 func GetDirectConversationCache(ctx context.Context, userOneID int64, userTwoID int64) (int64, error) {
 	conversationIDStringsList, errRedis := redis.UserInbox.ZRevRange(ctx, userOneID, 0, -1)
-	if errRedis != nil || len(conversationIDStringsList) == 0 {
-		return 0, errors.New("cache miss")
+	if errRedis != nil {
+		return 0, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de lire l'inbox depuis le cache.",
+			errRedis,
+		)
+	}
+	if len(conversationIDStringsList) == 0 {
+		return 0, numan_error.NewNotFound(numan_error.CodeNotFound, "Conversation directe introuvable dans le cache.", nil)
 	}
 
 	candidateConversationIDs := pkg.ParseInt64List(conversationIDStringsList)
 
 	metaGetResult, errMetaGet := redis.ConvMeta.GetMany(ctx, candidateConversationIDs)
 	if errMetaGet != nil {
-		return 0, errors.New("cache miss")
+		return 0, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de lire les métadonnées de conversation depuis le cache.",
+			errMetaGet,
+		)
 	}
 
 	userTwoStringID := strconv.FormatInt(userTwoID, 10)
@@ -611,7 +725,7 @@ func GetDirectConversationCache(ctx context.Context, userOneID int64, userTwoID 
 		}
 	}
 
-	return 0, errors.New("not found in speed cache")
+	return 0, numan_error.NewNotFound(numan_error.CodeNotFound, "Conversation directe introuvable dans le cache.", nil)
 }
 
 // UpdateMemberSpeedCache écrase l'état complet du membre en RAM (O(1))
@@ -634,25 +748,45 @@ func UpdateMemberSpeedCache(ctx context.Context, memberPayload lite_models.Membe
 
 	errSet := redis.ConvMembers.SetObject(ctx, compositeMemberKey, memberPayload)
 	if errSet != nil {
-		return errSet
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de mettre à jour le membre dans le cache.",
+			errSet,
+		)
 	}
 
 	if memberPayload.Role < 0 {
 		err := redis.ConvParticipants.SRem(ctx, memberPayload.ConversationID, memberPayload.UserID)
 		if err != nil {
 			numan_log.Warn(ctx).Err(err).Msg("Échec SRem lors de la réhydratation des participants")
-			return err
+			return numan_error.NewAppError(
+				http.StatusInternalServerError,
+				numan_error.CodeCacheError,
+				"Impossible de retirer le participant du cache de la conversation.",
+				err,
+			)
 		}
 	} else {
 		err := redis.ConvParticipants.SAdd(ctx, memberPayload.ConversationID, memberPayload.UserID)
 		if err != nil {
 			numan_log.Warn(ctx).Err(err).Msg("Échec SAdd lors de la réhydratation des participants")
-			return err
+			return numan_error.NewAppError(
+				http.StatusInternalServerError,
+				numan_error.CodeCacheError,
+				"Impossible d'ajouter le participant dans le cache de la conversation.",
+				err,
+			)
 		}
 		err = redis.InboxActivity.SetPrimitive(ctx, memberPayload.UserID, time.Now().UnixMilli())
 		if err != nil {
 			numan_log.Warn(ctx).Err(err).Msg("Échec SetPrimitive lors de la réhydratation de l'activité de la boîte de réception")
-			return err
+			return numan_error.NewAppError(
+				http.StatusInternalServerError,
+				numan_error.CodeCacheError,
+				"Impossible de mettre à jour l'activité de l'inbox dans le cache.",
+				err,
+			)
 		}
 	}
 
@@ -663,7 +797,12 @@ func UpdateMemberSpeedCache(ctx context.Context, memberPayload lite_models.Membe
 func AddConversationToUserInbox(ctx context.Context, userID int64, conversationID int64, lastMessageID int64) error {
 	errZAdd := redis.UserInbox.ZAddWithCap(ctx, userID, float64(lastMessageID), conversationID, 100)
 	if errZAdd != nil {
-		return errZAdd
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible d'ajouter la conversation à l'inbox dans le cache.",
+			errZAdd,
+		)
 	}
 	return nil
 }
@@ -673,6 +812,7 @@ func TouchInboxActivity(ctx context.Context, userID int64) int64 {
 	currentTimestampMs := time.Now().UnixMilli()
 	err := redis.InboxActivity.SetPrimitive(ctx, userID, currentTimestampMs)
 	if err != nil {
+		numan_log.Warn(ctx).Err(err).Int64("user_id", userID).Msg("Échec de la mise à jour du Timestamp d'Activité (Inbox)")
 		return -1
 	}
 

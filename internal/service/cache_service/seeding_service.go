@@ -2,8 +2,10 @@ package cache_service
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
@@ -35,8 +37,14 @@ func SeedMostCache(ctx context.Context) error {
 		}
 		err := redis.Tags.SAdd(backgroundCtx, "active", argsForRedis...)
 		if err != nil {
-			numan_log.Error(ctx).Err(err).Msg("Échec L3 lors de l'ajout des tags au ZSET")
-			return err
+			appErr := numan_error.NewAppError(
+				http.StatusInternalServerError,
+				numan_error.CodeCacheError,
+				"Impossible d'initialiser le Set des tags actifs dans Redis.",
+				err,
+			)
+			numan_log.Error(ctx).Err(appErr).Msg("Échec L1 lors de l'ajout des tags actifs dans Redis")
+			return appErr
 		}
 	}
 
@@ -51,6 +59,7 @@ func SeedMostCache(ctx context.Context) error {
 	for {
 		postsBatchFromPg, errPgPosts := postgres.FuncLoadPostsPaginated(ctx, paginationLimit, paginationOffset)
 		if errPgPosts != nil {
+			// Error already wrapped by FuncLoadPostsPaginated; propagate it without wrapping again.
 			return errPgPosts
 		}
 
@@ -63,13 +72,25 @@ func SeedMostCache(ctx context.Context) error {
 
 			err := redis.ZAddWithCap(backgroundCtx, variables.RedisKeyStrictLikes, float64(postPayload.LikeCount), postPayload.ID, variables.MaxStrictElements)
 			if err != nil {
-				numan_log.Error(ctx).Err(err).Msg("Échec L3 lors de l'ajout du post au ZSET des likes stricts")
-				return err
+				appErr := numan_error.NewAppError(
+					http.StatusInternalServerError,
+					numan_error.CodeCacheError,
+					"Impossible d'ajouter la publication au classement strict des likes dans Redis.",
+					err,
+				)
+				numan_log.Error(ctx).Err(appErr).Msg("Échec L1 lors de l'ajout du post au ZSET des likes stricts")
+				return appErr
 			}
 			err = redis.ZAddWithCap(backgroundCtx, variables.RedisKeyStrictViews, float64(postPayload.ViewCount), postPayload.ID, variables.MaxStrictElements)
 			if err != nil {
-				numan_log.Error(ctx).Err(err).Msg("Échec L3 lors de l'ajout du post au ZSET des vues strictes")
-				return err
+				appErr := numan_error.NewAppError(
+					http.StatusInternalServerError,
+					numan_error.CodeCacheError,
+					"Impossible d'ajouter la publication au classement strict des vues dans Redis.",
+					err,
+				)
+				numan_log.Error(ctx).Err(appErr).Msg("Échec L1 lors de l'ajout du post au ZSET des vues strictes")
+				return appErr
 			}
 		}
 
@@ -85,15 +106,27 @@ func SeedMostCache(ctx context.Context) error {
 	winningPostIDsMap := make(map[int64]bool)
 	trendKeysList, err := redis.Keys(backgroundCtx, "most_cache:trend:*")
 	if err != nil {
-		numan_log.Error(ctx).Err(err).Msg("Échec L3 lors de la récupération des clés de tendance")
-		return err
+		appErr := numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de récupérer les clés de tendance depuis Redis.",
+			err,
+		)
+		numan_log.Error(ctx).Err(appErr).Msg("Échec L1 lors de la récupération des clés de tendance")
+		return appErr
 	}
 
 	for _, trendKey := range trendKeysList {
 		idStringsInTrend, err := redis.ZRange(backgroundCtx, trendKey, 0, -1)
 		if err != nil {
-			numan_log.Error(ctx).Err(err).Msg("Échec L3 lors de la récupération des IDs de tendance")
-			return err
+			appErr := numan_error.NewAppError(
+				http.StatusInternalServerError,
+				numan_error.CodeCacheError,
+				"Impossible de récupérer les IDs de tendance depuis Redis.",
+				err,
+			)
+			numan_log.Error(ctx).Err(appErr).Msg("Échec L1 lors de la récupération des IDs de tendance")
+			return appErr
 		}
 		parsedIDs := pkg.ParseInt64List(idStringsInTrend)
 		for _, parsedID := range parsedIDs {
@@ -108,20 +141,29 @@ func SeedMostCache(ctx context.Context) error {
 		}
 
 		elitePostsList, errPgElite := postgres.FuncLoadPosts(ctx, winningIDsList, len(winningIDsList), 0)
-		if errPgElite == nil {
+		if errPgElite != nil {
+			numan_log.Warn(ctx).Err(errPgElite).Msg("Échec L3 lors du chargement des posts d'élite")
+		} else {
 			for _, elitePost := range elitePostsList {
 				// L1 : Sanctuarisation immédiate en RAM
 				err := object_cache_service.SetPostInObjectCache(backgroundCtx, elitePost)
 				if err != nil {
-					numan_log.Error(ctx).Err(err).Msg("Échec L3 lors de la sanctuarisation du post d'élite")
+					numan_log.Error(ctx).Err(err).Msg("Échec L1 lors de la sanctuarisation du post d'élite")
+					// Error already wrapped by SetPostInObjectCache; propagate it without wrapping again.
 					return err
 				}
 
 				// L2 : Délégation pour l'insertion par les workers (BulkWrite Mongo)
 				err = redis.EnqueueDB(backgroundCtx, elitePost.ID, elitePost.UserID, redis.EntityPost, redis.ActionUpdate, elitePost, redis.TargetMongo)
 				if err != nil {
-					numan_log.Error(ctx).Err(err).Msg("Échec L3 lors de l'insertion du post d'élite")
-					return err
+					appErr := numan_error.NewAppError(
+						http.StatusInternalServerError,
+						numan_error.CodeCacheError,
+						"Impossible de mettre en file d'attente le post d'élite pour MongoDB.",
+						err,
+					)
+					numan_log.Error(ctx).Err(appErr).Msg("Échec L1 lors de la mise en file d'attente du post d'élite")
+					return appErr
 				}
 			}
 			numan_log.Info(ctx).Int("count", len(elitePostsList)).Msg("Posts d'élite sanctuarisés dans l'Object Cache L1 et en cours d'insertion L2.")
@@ -131,7 +173,9 @@ func SeedMostCache(ctx context.Context) error {
 	numan_log.Info(ctx).Msg("Synchronisation MongoDB pour les posts des 30 derniers jours...")
 	recentPostsFromPg, errPgRecent := postgres.FuncLoadRecentPosts(ctx, 30)
 
-	if errPgRecent == nil {
+	if errPgRecent != nil {
+		numan_log.Warn(ctx).Err(errPgRecent).Msg("Échec L3 lors du chargement des posts récents")
+	} else {
 		for _, recentPost := range recentPostsFromPg {
 			documentMap, err := pkg.ToMap(recentPost)
 			if err != nil {
@@ -152,8 +196,14 @@ func SeedMostCache(ctx context.Context) error {
 	// Déverrouillage de l'API
 	err = redis.SystemStatus.SetPrimitive(backgroundCtx, "maintenance", "off")
 	if err != nil {
-		numan_log.Error(ctx).Err(err).Msg("Impossible de désactiver le mode maintenance dans Redis")
-		return err
+		appErr := numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de désactiver le mode maintenance dans Redis.",
+			err,
+		)
+		numan_log.Error(ctx).Err(appErr).Msg("Impossible de désactiver le mode maintenance dans Redis")
+		return appErr
 	}
 	numan_log.Info(ctx).Msg("Mode maintenance désactivé. L'API est opérationnelle.")
 
@@ -170,6 +220,7 @@ func seedCommunitySpeedCache(ctx context.Context) error {
 
 	activeCommunitiesFromPg, errPg := postgres.FuncLoadActiveCommunities(ctx)
 	if errPg != nil {
+		// Error already wrapped by FuncLoadActiveCommunities; propagate it without wrapping again.
 		return errPg
 	}
 

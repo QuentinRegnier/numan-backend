@@ -48,6 +48,7 @@ func GetAddableUsersFromSpeedCache(ctx context.Context, callerID int64, limit in
 	if !isZsetPresent {
 		addableRelationsList, errPg := postgres.FuncLoadAddableRelations(ctx, callerID)
 		if errPg != nil {
+			// Error already wrapped by FuncLoadAddableRelations; propagate it without wrapping again.
 			return nil, errPg
 		}
 
@@ -83,8 +84,15 @@ func GetAddableUsersFromSpeedCache(ctx context.Context, callerID int64, limit in
 						err := redis.ZAdd(ctx, zsetTargetKey, 0, lexicographicMemberString)
 						if err != nil {
 							numan_log.Warn(ctx).Err(err).Msg("Échec ZADD lors de la reconstruction SpeedAddable")
-							return nil, err
+							return nil, numan_error.NewAppError(
+								http.StatusInternalServerError,
+								numan_error.CodeCacheError,
+								"Impossible de reconstruire le cache des utilisateurs ajoutables.",
+								err,
+							)
 						}
+					} else {
+						numan_log.Warn(ctx).Err(errUnmarshal).Msg("Échec de désérialisation MessagePack d'un utilisateur ajoutable")
 					}
 				}
 			}
@@ -93,7 +101,12 @@ func GetAddableUsersFromSpeedCache(ctx context.Context, callerID int64, limit in
 			err := redis.Expire(ctx, zsetTargetKey, 5*time.Minute)
 			if err != nil {
 				numan_log.Warn(ctx).Err(err).Msg("Échec Expire lors de la reconstruction SpeedAddable")
-				return nil, err
+				return nil, numan_error.NewAppError(
+					http.StatusInternalServerError,
+					numan_error.CodeCacheError,
+					"Impossible de reconstruire le cache des utilisateurs ajoutables.",
+					err,
+				)
 			}
 
 		} else {
@@ -101,12 +114,22 @@ func GetAddableUsersFromSpeedCache(ctx context.Context, callerID int64, limit in
 			err := redis.ZAdd(ctx, zsetTargetKey, 0, variables.SpeedCacheEmptyMarker)
 			if err != nil {
 				numan_log.Warn(ctx).Err(err).Msg("Échec ZADD du marqueur vide lors de la reconstruction SpeedAddable")
-				return nil, err
+				return nil, numan_error.NewAppError(
+					http.StatusInternalServerError,
+					numan_error.CodeCacheError,
+					"Impossible de reconstruire le cache des utilisateurs ajoutables.",
+					err,
+				)
 			}
 			err = redis.Expire(ctx, zsetTargetKey, 5*time.Minute)
 			if err != nil {
 				numan_log.Warn(ctx).Err(err).Msg("Échec Expire lors de la reconstruction SpeedAddable")
-				return nil, err
+				return nil, numan_error.NewAppError(
+					http.StatusInternalServerError,
+					numan_error.CodeCacheError,
+					"Impossible de reconstruire le cache des utilisateurs ajoutables.",
+					err,
+				)
 			}
 		}
 	}
@@ -157,6 +180,8 @@ func GetAddableUsersFromSpeedCache(ctx context.Context, callerID int64, limit in
 			var userLitePayload lite_models.UserLiteRequest
 			if errUnmarshal := msgpack.Unmarshal(binaryData, &userLitePayload); errUnmarshal == nil {
 				hydratedUsersList = append(hydratedUsersList, userLitePayload)
+			} else {
+				numan_log.Warn(ctx).Err(errUnmarshal).Msg("Échec de désérialisation MessagePack d'un utilisateur ajoutable")
 			}
 		}
 	}

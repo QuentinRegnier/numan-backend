@@ -2,12 +2,15 @@ package cache_service
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
+	goredis "github.com/go-redis/redis/v8"
 )
 
 // ############################################################################
@@ -64,6 +67,9 @@ func IsTagTrending(ctx context.Context, targetTag string) bool {
 	// Si le ZScore renvoie une valeur (err == nil), c'est que le tag est dans le classement.
 	leaderboardKey := redis.HashtagLeaderboard.Key("global")
 	_, errRedis := redis.HashtagLeaderboard.Client.ZScore(ctx, leaderboardKey, targetTag).Result()
+	if errRedis != nil && !errors.Is(errRedis, goredis.Nil) {
+		numan_log.Warn(ctx).Err(errRedis).Str("tag", targetTag).Msg("Erreur Redis ZScore lors de la vérification de tendance du tag")
+	}
 
 	return errRedis == nil
 }

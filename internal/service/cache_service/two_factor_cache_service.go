@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/auth_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
@@ -33,7 +34,9 @@ func GetPreAuthSession(ctx context.Context, token string) (auth_models.PreAuthSe
 	}
 
 	if session.Attempts >= variables.TwoFactorMaxAttempts {
-		_ = DeletePreAuthSession(ctx, token)
+		if errDel := DeletePreAuthSession(ctx, token); errDel != nil {
+			numan_log.Warn(ctx).Err(errDel).Action(numan_log.ActionEvict).Msg("Échec de suppression de la session de pré-authentification après dépassement des tentatives")
+		}
 		return auth_models.PreAuthSession{}, numan_error.NewForbidden(numan_error.CodeForbidden, "Trop de tentatives échouées. Veuillez recommencer.", nil)
 	}
 
@@ -44,7 +47,9 @@ func GetPreAuthSession(ctx context.Context, token string) (auth_models.PreAuthSe
 func IncrementPreAuthAttempts(ctx context.Context, session auth_models.PreAuthSession) error {
 	session.Attempts++
 	if session.Attempts >= variables.TwoFactorMaxAttempts {
-		_ = DeletePreAuthSession(ctx, session.Token)
+		if errDel := DeletePreAuthSession(ctx, session.Token); errDel != nil {
+			numan_log.Warn(ctx).Err(errDel).Action(numan_log.ActionEvict).Msg("Échec de suppression de la session de pré-authentification révoquée")
+		}
 		return numan_error.NewForbidden(numan_error.CodeForbidden, "Trop de tentatives échouées. Session révoquée.", nil)
 	}
 
@@ -61,7 +66,15 @@ func IncrementPreAuthAttempts(ctx context.Context, session auth_models.PreAuthSe
 
 // DeletePreAuthSession supprime immédiatement la session temporaire 2FA de l'Object Cache L1.
 func DeletePreAuthSession(ctx context.Context, token string) error {
-	return redis.PreAuth.DeleteObject(ctx, token)
+	if err := redis.PreAuth.DeleteObject(ctx, token); err != nil {
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Échec de suppression de la session de pré-authentification",
+			err,
+		)
+	}
+	return nil
 }
 
 // ConsumeTOTPCode empêche le rejeu d'un même code TOTP dans sa fenêtre de validité de 90s.

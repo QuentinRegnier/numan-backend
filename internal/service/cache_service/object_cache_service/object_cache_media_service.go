@@ -2,11 +2,13 @@ package object_cache_service
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/media_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
+	goredis "github.com/go-redis/redis/v8"
 )
 
 // ############################################################################
@@ -18,7 +20,7 @@ func SetMediaInObjectCache(ctx context.Context, mediaPayload media_models.MediaP
 	// Le TTL (ex: 24h) est défini dans le manager Redis et se réinitialise à chaque GET
 	errRedis := redis.Media.SetObject(ctx, mediaPayload.ID, mediaPayload)
 	if errRedis != nil {
-		return numan_error.NewAppError(500, numan_error.CodeCacheError, "Impossible de placer le média dans l'Object Cache.", errRedis)
+		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeCacheError, "Impossible de placer le média dans l'Object Cache.", errRedis)
 	}
 	return nil
 }
@@ -30,7 +32,10 @@ func GetMediaFromObjectCache(ctx context.Context, mediaID int64) (media_models.M
 
 	errRedis := redis.Media.GetObject(ctx, mediaID, &mediaPayload)
 	if errRedis != nil {
-		return media_models.MediaPayload{}, errRedis // Cache Miss standard
+		if errors.Is(errRedis, goredis.Nil) {
+			return media_models.MediaPayload{}, numan_error.NewNotFound(numan_error.CodeNotFound, "Média introuvable dans le cache.", errRedis)
+		}
+		return media_models.MediaPayload{}, numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeCacheError, "Impossible de récupérer le média depuis l'Object Cache.", errRedis)
 	}
 
 	// Rejet immédiat si le média est soft-deleted

@@ -2,14 +2,17 @@ package object_cache_service
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/comment_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
+	goredis "github.com/go-redis/redis/v8"
 )
 
 // ############################################################################
@@ -22,7 +25,10 @@ func GetCommentFromObjectCache(ctx context.Context, commentID int64) (comment_mo
 
 	errRedis := redis.Comments.GetObject(ctx, commentID, &commentPayload)
 	if errRedis != nil {
-		return comment_models.CommentPayload{}, errRedis
+		if errors.Is(errRedis, goredis.Nil) {
+			return comment_models.CommentPayload{}, numan_error.NewNotFound(numan_error.CodeNotFound, "Commentaire introuvable dans le cache.", errRedis)
+		}
+		return comment_models.CommentPayload{}, numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeCacheError, "Impossible de récupérer le commentaire depuis l'Object Cache.", errRedis)
 	}
 
 	return commentPayload, nil
@@ -91,7 +97,9 @@ func AddCommentToZSET(ctx context.Context, postID int64, commentID int64, commen
 		)
 	}
 
-	_ = redis.PostComments.RefreshTTL(ctx, postID)
+	if errTTL := redis.PostComments.RefreshTTL(ctx, postID); errTTL != nil {
+		numan_log.Warn(ctx).Err(errTTL).Entity("post_comments", postID).Msg("Impossible de rafraîchir le TTL du ZSET des commentaires")
+	}
 	return nil
 }
 
@@ -126,7 +134,9 @@ func IncrementCommentScoreInZSET(ctx context.Context, postID int64, commentID in
 		)
 	}
 
-	_ = redis.PostComments.RefreshTTL(ctx, postID)
+	if errTTL := redis.PostComments.RefreshTTL(ctx, postID); errTTL != nil {
+		numan_log.Warn(ctx).Err(errTTL).Entity("post_comments", postID).Msg("Impossible de rafraîchir le TTL du ZSET des commentaires")
+	}
 	return nil
 }
 
@@ -134,13 +144,19 @@ func IncrementCommentScoreInZSET(ctx context.Context, postID int64, commentID in
 // et atomise le ZSET de tri associé à la publication.
 func PurgePostCommentsFromL1(ctx context.Context, postID int64) {
 	idStringsList, errRedis := redis.PostComments.ZRevRange(ctx, postID, 0, -1)
-	if errRedis == nil {
+	if errRedis != nil {
+		numan_log.Warn(ctx).Err(errRedis).Entity("post_comments", postID).Action(numan_log.ActionEvict).Msg("Impossible de lister les commentaires du ZSET pour purge L1")
+	} else {
 		parsedCommentIDsList := pkg.ParseInt64List(idStringsList)
 		for _, parsedCommentID := range parsedCommentIDsList {
-			_ = DeleteCommentFromObjectCache(ctx, parsedCommentID)
+			if errDel := DeleteCommentFromObjectCache(ctx, parsedCommentID); errDel != nil {
+				numan_log.Warn(ctx).Err(errDel).Entity("comment", parsedCommentID).Action(numan_log.ActionEvict).Msg("Impossible de purger le commentaire de l'Object Cache L1")
+			}
 		}
 	}
 
 	// Atomisation complète du ZSET de la publication
-	_ = redis.PostComments.DeleteObject(ctx, postID)
+	if errDel := redis.PostComments.DeleteObject(ctx, postID); errDel != nil {
+		numan_log.Warn(ctx).Err(errDel).Entity("post_comments", postID).Action(numan_log.ActionEvict).Msg("Impossible de supprimer le ZSET des commentaires en L1")
+	}
 }

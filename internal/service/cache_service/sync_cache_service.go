@@ -49,13 +49,19 @@ func RecordMessageMutation(ctx context.Context, conversationID int64, messageID 
 	// 1. Inscription du message dans le Ledger (ZSET unique par conversation)
 	errRedis := redis.ConvMessageLedger.ZAdd(ctx, conversationID, currentTimestampMs, messageIDString)
 	if errRedis == nil {
-		_ = redis.ConvMessageLedger.RefreshTTL(ctx, conversationID)
+		if errTTL := redis.ConvMessageLedger.RefreshTTL(ctx, conversationID); errTTL != nil {
+			numan_log.Warn(ctx).Err(errTTL).Entity("conversation", conversationID).Msg("Impossible de rafraîchir le TTL du ConvMessageLedger")
+		}
 	} else {
 		numan_log.Warn(ctx).Err(errRedis).Int64("message_id", messageID).Msg("Échec de l'insertion dans le ConvMessageLedger")
 	}
 
 	// 2. On "allume le gyrophare" sur la conversation parente pour tous les participants
-	return RecordConversationMutation(ctx, conversationID, participantIDsList)
+	if err := RecordConversationMutation(ctx, conversationID, participantIDsList); err != nil {
+		// Error already wrapped by RecordConversationMutation; propagate it without wrapping again.
+		return err
+	}
+	return nil
 }
 
 // ############################################################################

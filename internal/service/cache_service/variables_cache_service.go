@@ -37,12 +37,40 @@ func IsVariablesCacheReady() bool {
 
 // LoadDynamicVariablesFromCache récupère de manière atomique l'état de référence des variables personnalisées et leur version depuis Redis.
 func LoadDynamicVariablesFromCache(ctx context.Context) (map[string]string, int64, error) {
-	return redis.DynamicVariables.LoadVariablesStateAtomic(ctx, variablesOverridesKey, variablesVersionKey)
+	overrides, ver, err := redis.DynamicVariables.LoadVariablesStateAtomic(ctx, variablesOverridesKey, variablesVersionKey)
+	if err != nil {
+		var appErr *numan_error.AppError
+		if errors.As(err, &appErr) {
+			// Error already wrapped by LoadVariablesStateAtomic; propagate it without wrapping again.
+			return nil, 0, err
+		}
+		return nil, 0, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de charger l'état des variables dynamiques depuis le cache.",
+			err,
+		)
+	}
+	return overrides, ver, nil
 }
 
 // SaveDynamicVariablesPatchInCache persiste de manière atomique un lot de variables modifiées dans Redis et retourne la nouvelle version.
 func SaveDynamicVariablesPatchInCache(ctx context.Context, toSet map[string]string, toDelete []string) (int64, error) {
-	return redis.DynamicVariables.ApplyVariablesPatchAtomic(ctx, variablesOverridesKey, variablesVersionKey, toSet, toDelete)
+	ver, err := redis.DynamicVariables.ApplyVariablesPatchAtomic(ctx, variablesOverridesKey, variablesVersionKey, toSet, toDelete)
+	if err != nil {
+		var appErr *numan_error.AppError
+		if errors.As(err, &appErr) {
+			// Error already wrapped by ApplyVariablesPatchAtomic; propagate it without wrapping again.
+			return 0, err
+		}
+		return 0, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible d'enregistrer le patch de variables dynamiques dans le cache.",
+			err,
+		)
+	}
+	return ver, nil
 }
 
 // GetDynamicVariablesRemoteVersion lit en O(1) le numéro de version global des variables dans Redis.
@@ -52,7 +80,12 @@ func GetDynamicVariablesRemoteVersion(ctx context.Context) (int64, error) {
 		if errors.Is(err, goredis.Nil) {
 			return 0, nil
 		}
-		return 0, err
+		return 0, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de lire la version distante des variables dynamiques depuis le cache.",
+			err,
+		)
 	}
 	return ver, nil
 }
@@ -61,9 +94,17 @@ func GetDynamicVariablesRemoteVersion(ctx context.Context) (int64, error) {
 func PublishDynamicVariablesSync(ctx context.Context, event VariablesSyncEvent) error {
 	payload, err := json.Marshal(event)
 	if err != nil {
-		return err
+		return numan_error.NewInternal(err)
 	}
-	return redis.DynamicVariablesSync.PushFlux(ctx, payload)
+	if err := redis.DynamicVariablesSync.PushFlux(ctx, payload); err != nil {
+		return numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de publier l'événement de synchronisation des variables dynamiques.",
+			err,
+		)
+	}
+	return nil
 }
 
 // SubscribeDynamicVariablesSync ouvre un canal d'écoute sur le flux de synchronisation des variables dynamiques.
@@ -85,6 +126,7 @@ func ApplyAndBroadcastDynamicVariablesPatch(ctx context.Context, preparedPatch *
 
 	newVersion, errSave := SaveDynamicVariablesPatchInCache(ctx, preparedPatch.ToSet, preparedPatch.ToDelete)
 	if errSave != nil {
+		// Error already wrapped by SaveDynamicVariablesPatchInCache; propagate it without wrapping again.
 		return 0, errSave
 	}
 

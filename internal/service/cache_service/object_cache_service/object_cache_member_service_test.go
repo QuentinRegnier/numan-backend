@@ -3,19 +3,21 @@ package object_cache_service
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/member_models"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 )
 
 func TestMemberObjectCache_SetAndGet(t *testing.T) {
-	srv := setupTestRedis(t)
+	srv := test.SetupTestRedis(t)
 	ctx := context.Background()
 
-	// Cache miss returns error
-	if _, err := GetMemberFromObjectCache(ctx, 10, 20); err == nil {
-		t.Fatalf("expected error on cache miss, got nil")
-	}
+	// Cache miss returns 404 CodeNotFound AppError
+	_, errMiss := GetMemberFromObjectCache(ctx, 10, 20)
+	assertAppError(t, errMiss, http.StatusNotFound, numan_error.CodeNotFound)
 
 	mem := member_models.MemberPayload{
 		ID:             1,
@@ -49,9 +51,13 @@ func TestMemberObjectCache_SetAndGet(t *testing.T) {
 		t.Errorf("GetMemberFromObjectCache = %+v, want %+v", got, mem)
 	}
 
-	// Error branch
-	srv.setFailCmd("SET", errors.New("set failed"))
-	if err := SetMemberInObjectCache(ctx, mem); err == nil {
-		t.Errorf("expected error when SET fails, got nil")
-	}
+	// Error branches
+	srv.SetFailCmd("GET", errors.New("get failed"))
+	_, errGet := GetMemberFromObjectCache(ctx, 10, 20)
+	assertAppError(t, errGet, http.StatusInternalServerError, numan_error.CodeCacheError)
+	srv.SetFailCmd("GET", nil)
+
+	srv.SetFailCmd("SET", errors.New("set failed"))
+	errSet := SetMemberInObjectCache(ctx, mem)
+	assertAppError(t, errSet, http.StatusInternalServerError, numan_error.CodeCacheError)
 }

@@ -3,6 +3,7 @@ package cache_service
 import (
 	"context"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
@@ -28,19 +29,34 @@ func getIdempotencyCollection(targetEntityType int) *redis.Collection {
 // Retourne true si l'ajout est un succès (l'utilisateur n'avait pas encore liké).
 func TryAddLikeIdempotency(ctx context.Context, targetEntityType int, targetID int64, userID int64) bool {
 	redisCollection := getIdempotencyCollection(targetEntityType)
+	if redisCollection == nil {
+		numan_log.Warn(ctx).Int("target_type", targetEntityType).Int64("target_id", targetID).Msg("Type d'entité cible inconnu pour l'idempotence des likes")
+		return false
+	}
 
 	elementsAddedCount, errRedis := redisCollection.SAddCount(ctx, targetID, userID)
+	if errRedis != nil {
+		numan_log.Warn(ctx).Err(errRedis).Int("target_type", targetEntityType).Int64("target_id", targetID).Int64("user_id", userID).Msg("Échec Redis lors de la vérification d'idempotence d'ajout de like")
+		return false
+	}
 
-	// Si errRedis != nil, cela échouera (false), ce qui est le comportement de sécurité souhaité.
-	return errRedis == nil && elementsAddedCount > 0
+	return elementsAddedCount > 0
 }
 
 // TryRemoveLikeIdempotency gère la suppression d'idempotence pour les Likes (O(1)).
 // Retourne true si le retrait est un succès (l'utilisateur avait bien liké).
 func TryRemoveLikeIdempotency(ctx context.Context, targetEntityType int, targetID int64, userID int64) bool {
 	redisCollection := getIdempotencyCollection(targetEntityType)
+	if redisCollection == nil {
+		numan_log.Warn(ctx).Int("target_type", targetEntityType).Int64("target_id", targetID).Msg("Type d'entité cible inconnu pour l'idempotence de retrait de like")
+		return false
+	}
 
 	elementsRemovedCount, errRedis := redisCollection.SRemCount(ctx, targetID, userID)
+	if errRedis != nil {
+		numan_log.Warn(ctx).Err(errRedis).Int("target_type", targetEntityType).Int64("target_id", targetID).Int64("user_id", userID).Msg("Échec Redis lors de la vérification d'idempotence de retrait de like")
+		return false
+	}
 
-	return errRedis == nil && elementsRemovedCount > 0
+	return elementsRemovedCount > 0
 }

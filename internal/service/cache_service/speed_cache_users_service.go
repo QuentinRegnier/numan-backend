@@ -2,6 +2,7 @@ package cache_service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
+	goredis "github.com/go-redis/redis/v8"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -54,7 +56,9 @@ func storeUserLiteInSpeedCache(ctx context.Context, userLitePayload lite_models.
 func AddUserToSpeedCache(ctx context.Context, userPayload auth_models.UserPayload, settingsPayload user_settings_models.UserSettingsPayload) error {
 
 	lexicographicValue := fmt.Sprintf("%s:%d", strings.ToLower(userPayload.Username), userPayload.ID)
-	_ = redis.UsersLex.ZAdd(ctx, variables.LexicographicGlobalKey, 0, lexicographicValue)
+	if errLex := redis.UsersLex.ZAdd(ctx, variables.LexicographicGlobalKey, 0, lexicographicValue); errLex != nil {
+		numan_log.Warn(ctx).Err(errLex).Int64("user_id", userPayload.ID).Msg("Échec de l'indexation lexicographique d'un utilisateur")
+	}
 
 	userBadges := userPayload.Badges
 	if userBadges == nil {
@@ -97,6 +101,9 @@ func UpdateUserSpeedCachePrivacy(ctx context.Context, userID int64, conversation
 	var userLitePayload lite_models.UserLiteRequest
 
 	errGet := redis.UsersLite.GetObject(ctx, userID, &userLitePayload)
+	if errGet != nil && !errors.Is(errGet, goredis.Nil) {
+		numan_log.Warn(ctx).Err(errGet).Int64("user_id", userID).Msg("Erreur Redis lors de la lecture du profil allégé pour mise à jour de confidentialité")
+	}
 	if errGet == nil && userLitePayload.ID != 0 {
 		userLitePayload.ConversationPermission = conversationPerm
 		userLitePayload.AddGroupPermission = addGroupPerm
@@ -164,6 +171,8 @@ func SearchUserByPrefix(ctx context.Context, searchPrefix string, searchOffset, 
 			var userLitePayload lite_models.UserLiteRequest
 			if errUnmarshal := msgpack.Unmarshal(binaryData, &userLitePayload); errUnmarshal == nil {
 				hydratedUsersList = append(hydratedUsersList, userLitePayload)
+			} else {
+				numan_log.Warn(ctx).Err(errUnmarshal).Int64("user_id", requestedID).Msg("Échec de désérialisation MessagePack d'un utilisateur")
 			}
 		}
 	}
@@ -188,10 +197,15 @@ func GetUserLite(ctx context.Context, userID int64) (lite_models.UserLiteRequest
 	userFromMongo, errMongo := mongo.MongoLoadUser(ctx, userID, "", "", "")
 	if errMongo == nil {
 		// Récupération des paramètres de confidentialité L1
-		settingsPayload, _ := object_cache_service.GetUserSettingsCascade(ctx, userID)
+		settingsPayload, errSettings := object_cache_service.GetUserSettingsCascade(ctx, userID)
+		if errSettings != nil {
+			numan_log.Warn(ctx).Err(errSettings).Int64("user_id", userID).Msg("Impossible de récupérer les paramètres utilisateur lors de l'hydratation UserLite L2")
+		}
 
 		// Réhydratation L1 synchrone avec les deux objets combinés
-		_ = AddUserToSpeedCache(ctx, userFromMongo, settingsPayload)
+		if errAdd := AddUserToSpeedCache(ctx, userFromMongo, settingsPayload); errAdd != nil {
+			numan_log.Warn(ctx).Err(errAdd).Int64("user_id", userID).Action(numan_log.ActionHydrate).Msg("Échec de la réhydratation L1 UserLite depuis L2")
+		}
 
 		userBadges := userFromMongo.Badges
 		if userBadges == nil {
@@ -218,17 +232,28 @@ func GetUserLite(ctx context.Context, userID int64) (lite_models.UserLiteRequest
 
 	// ── ÉTAPE 3 : FALLBACK ABSOLU L3 (COLD STORAGE POSTGRESQL) ──────────────
 	userFromPg, errPg := postgres.FuncLoadUser(ctx, userID, "", "", "")
-	if errPg == nil {
+	if errPg != nil {
+		// Error already wrapped by FuncLoadUser; propagate it without wrapping again.
+		return userLitePayload, errPg
+	}
+	if userFromPg.ID != 0 {
 
 		// PROMOTION L3 -> L2 (Write-Behind)
 		go func(promotedUser auth_models.UserPayload) {
 			backgroundCtx := context.Background()
-			_ = redis.EnqueueDB(backgroundCtx, promotedUser.ID, 0, redis.EntityUser, redis.ActionUpdate, promotedUser, redis.TargetMongo)
+			if err := redis.EnqueueDB(backgroundCtx, promotedUser.ID, 0, redis.EntityUser, redis.ActionUpdate, promotedUser, redis.TargetMongo); err != nil {
+				numan_log.Warn(backgroundCtx).Err(err).Entity("user", promotedUser.ID).Action(numan_log.ActionSync).Msg("Échec de la mise en file d'attente L3->L2 de l'utilisateur")
+			}
 		}(userFromPg)
 
 		// PROMOTION L3 -> L1
-		settingsPayload, _ := object_cache_service.GetUserSettingsCascade(ctx, userID)
-		_ = AddUserToSpeedCache(ctx, userFromPg, settingsPayload)
+		settingsPayload, errSettings := object_cache_service.GetUserSettingsCascade(ctx, userID)
+		if errSettings != nil {
+			numan_log.Warn(ctx).Err(errSettings).Int64("user_id", userID).Msg("Impossible de récupérer les paramètres utilisateur lors de l'hydratation UserLite L3")
+		}
+		if errAdd := AddUserToSpeedCache(ctx, userFromPg, settingsPayload); errAdd != nil {
+			numan_log.Warn(ctx).Err(errAdd).Int64("user_id", userID).Action(numan_log.ActionHydrate).Msg("Échec de la réhydratation L1 UserLite depuis L3")
+		}
 
 		pgBadges := userFromPg.Badges
 		if pgBadges == nil {

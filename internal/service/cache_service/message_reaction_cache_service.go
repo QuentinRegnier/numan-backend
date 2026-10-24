@@ -2,12 +2,14 @@ package cache_service
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
+	goredis "github.com/go-redis/redis/v8"
 )
 
 // ############################################################################
@@ -19,8 +21,15 @@ func GetUserReaction(ctx context.Context, messageID int64, userID int64) (string
 	emojiString, errRedis := redis.MessageUserReactions.HGet(ctx, messageID, strconv.FormatInt(userID, 10)).Result()
 
 	if errRedis != nil {
-		// Redis renvoie une erreur s'il n'y a pas de résultat, on l'étouffe proprement si c'est un "Nil".
-		return "", nil
+		if errors.Is(errRedis, goredis.Nil) {
+			return "", nil
+		}
+		return "", numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible de récupérer la réaction de l'utilisateur depuis le cache.",
+			errRedis,
+		)
 	}
 
 	return emojiString, nil
@@ -94,7 +103,12 @@ func GetMessageReactionCounts(ctx context.Context, messageID int64) (map[string]
 
 	reactionCounts := make(map[string]int)
 	for emojiKey, countStr := range rawReactionMap {
-		if parsedCount, errParse := strconv.Atoi(countStr); errParse == nil && parsedCount > 0 {
+		parsedCount, errParse := strconv.Atoi(countStr)
+		if errParse != nil {
+			numan_log.Warn(ctx).Err(errParse).Int64("message_id", messageID).Str("emoji", emojiKey).Msg("Valeur de compteur de réaction invalide dans Redis")
+			continue
+		}
+		if parsedCount > 0 {
 			reactionCounts[emojiKey] = parsedCount
 		}
 	}

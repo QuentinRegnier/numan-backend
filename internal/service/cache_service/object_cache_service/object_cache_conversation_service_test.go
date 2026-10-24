@@ -3,19 +3,21 @@ package object_cache_service
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/conversation_models"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 )
 
 func TestConversationObjectCache_SetAndGet(t *testing.T) {
-	srv := setupTestRedis(t)
+	srv := test.SetupTestRedis(t)
 	ctx := context.Background()
 
-	// Cache miss returns error
-	if _, err := GetConversationFromObjectCache(ctx, 404); err == nil {
-		t.Fatalf("expected error on cache miss, got nil")
-	}
+	// Cache miss returns 404 CodeNotFound AppError
+	_, errMiss := GetConversationFromObjectCache(ctx, 404)
+	assertAppError(t, errMiss, http.StatusNotFound, numan_error.CodeNotFound)
 
 	conv := conversation_models.ConversationPayload{
 		ID:            700,
@@ -42,9 +44,13 @@ func TestConversationObjectCache_SetAndGet(t *testing.T) {
 		t.Errorf("GetConversationFromObjectCache = %+v, want %+v", got, conv)
 	}
 
-	// Error branch
-	srv.setFailCmd("SET", errors.New("set failed"))
-	if err := SetConversationInObjectCache(ctx, conv); err == nil {
-		t.Errorf("expected error when SET fails, got nil")
-	}
+	// Error branches
+	srv.SetFailCmd("GET", errors.New("get failed"))
+	_, errGet := GetConversationFromObjectCache(ctx, 700)
+	assertAppError(t, errGet, http.StatusInternalServerError, numan_error.CodeCacheError)
+	srv.SetFailCmd("GET", nil)
+
+	srv.SetFailCmd("SET", errors.New("set failed"))
+	errSet := SetConversationInObjectCache(ctx, conv)
+	assertAppError(t, errSet, http.StatusInternalServerError, numan_error.CodeCacheError)
 }

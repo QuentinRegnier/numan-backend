@@ -2,6 +2,7 @@ package cache_service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
+	goredis "github.com/go-redis/redis/v8"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -57,6 +59,9 @@ func updateCommunityMemberCountInSpeedCache(ctx context.Context, communityID int
 
 	// On modifie silencieusement seulement si la communauté est bien présente en L1
 	errGet := redis.SpeedCommunity.GetObject(ctx, communityID, &communityLitePayload)
+	if errGet != nil && !errors.Is(errGet, goredis.Nil) {
+		numan_log.Warn(ctx).Err(errGet).Int64("community_id", communityID).Msg("Erreur Redis lors de la lecture de la communauté en L1")
+	}
 	if errGet == nil && communityLitePayload.ID != 0 {
 		communityLitePayload.MemberCount += delta
 		if communityLitePayload.MemberCount < 0 {
@@ -119,6 +124,8 @@ func SearchCommunitiesByPrefix(ctx context.Context, searchPrefix string, resultO
 			var communityLitePayload lite_models.CommunityLiteRequest
 			if errUnmarshal := msgpack.Unmarshal(binaryData, &communityLitePayload); errUnmarshal == nil {
 				hydratedCommunitiesList = append(hydratedCommunitiesList, communityLitePayload)
+			} else {
+				numan_log.Warn(ctx).Err(errUnmarshal).Int64("community_id", requestedID).Msg("Échec de désérialisation MessagePack d'une communauté")
 			}
 		}
 	}

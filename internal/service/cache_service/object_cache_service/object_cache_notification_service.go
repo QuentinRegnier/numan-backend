@@ -43,6 +43,7 @@ func GetNotificationsView(ctx context.Context, targetNotificationIDs []int64) ([
 	// ── ÉTAPE 1 : TENTATIVE L1 (MGET) ───────────────────────────────────────
 	mgetResult, errMGet := redis.NotificationsObj.GetMany(ctx, targetNotificationIDs)
 	if errMGet != nil {
+		numan_log.Warn(ctx).Err(errMGet).Msg("Erreur Redis MGET lors de la récupération des notifications (fallback L2 déclenché)")
 		mgetResult = &redis.GetManyResult{MissingIDs: targetNotificationIDs}
 	} else {
 		for notificationID, binaryData := range mgetResult.Found {
@@ -50,6 +51,7 @@ func GetNotificationsView(ctx context.Context, targetNotificationIDs []int64) ([
 			if errDecode := msgpack.Unmarshal(binaryData, &notificationPayload); errDecode == nil {
 				temporaryNotificationsMap[notificationID] = notificationPayload
 			} else {
+				numan_log.Warn(ctx).Err(errDecode).Entity("notification", notificationID).Msg("Échec du décodage MessagePack d'une notification en L1")
 				mgetResult.MissingIDs = append(mgetResult.MissingIDs, notificationID)
 			}
 		}
@@ -65,7 +67,9 @@ func GetNotificationsView(ctx context.Context, targetNotificationIDs []int64) ([
 				// PROMOTION L2 -> L1 (Auto-guérison asynchrone)
 				go func(notifToPromote notification_models.NotificationPayload) {
 					backgroundCtx := context.Background()
-					_ = SetNotificationInObjectCache(backgroundCtx, notifToPromote)
+					if err := SetNotificationInObjectCache(backgroundCtx, notifToPromote); err != nil {
+						numan_log.Warn(backgroundCtx).Err(err).Entity("notification", notifToPromote.ID).Action(numan_log.ActionHydrate).Msg("Échec de la promotion L2->L1 de la notification")
+					}
 				}(mongoNotification)
 			}
 		} else {

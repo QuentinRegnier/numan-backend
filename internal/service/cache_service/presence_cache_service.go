@@ -59,6 +59,7 @@ func IsUserOnline(ctx context.Context, userID int64) bool {
 // Utilise l'abstraction DDD de la Collection pour faire un MGET propre et ultra-rapide.
 func AreUsersOnline(ctx context.Context, input sync_models.SyncPresenceInput) (map[int64]bool, error) {
 	if err := pkg.ListLimitVerifDefault(input.UserIDs); err != nil {
+		// Error already wrapped by ListLimitVerifDefault; propagate it without wrapping again.
 		return nil, err
 	}
 	presenceResultsMap := make(map[int64]bool)

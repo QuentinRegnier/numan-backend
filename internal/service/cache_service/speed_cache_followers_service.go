@@ -37,7 +37,9 @@ func RelationValue(ctx context.Context, targetID int64, callerID int64) int {
 	// ── ÉTAPE 2 : COLD STORAGE L2 (MONGODB WARM STORAGE) ────────────────────
 	relationStateFromMongo, errMongo := mongo.MongoGetRelationState(ctx, callerID, targetID)
 	if errMongo == nil {
-		_ = redis.SpeedRelations.HSet(ctx, targetID, callerIDString, relationStateFromMongo)
+		if errHSet := redis.SpeedRelations.HSet(ctx, targetID, callerIDString, relationStateFromMongo); errHSet != nil {
+			numan_log.Warn(ctx).Err(errHSet).Int64("target_id", targetID).Int64("caller_id", callerID).Msg("Échec de la réhydratation L1 de la relation depuis L2")
+		}
 		return relationStateFromMongo
 	}
 
@@ -48,7 +50,9 @@ func RelationValue(ctx context.Context, targetID int64, callerID int64) int {
 		return variables.RelationStateNone // Zéro-valeur sécurisée par défaut
 	}
 
-	_ = redis.SpeedRelations.HSet(ctx, targetID, callerIDString, relationStateFromPg)
+	if errHSet := redis.SpeedRelations.HSet(ctx, targetID, callerIDString, relationStateFromPg); errHSet != nil {
+		numan_log.Warn(ctx).Err(errHSet).Int64("target_id", targetID).Int64("caller_id", callerID).Msg("Échec de la réhydratation L1 de la relation depuis L3")
+	}
 
 	// RÉHYDRATATION L2 ASYNCHRONE
 	go func(currentState int) {
@@ -59,7 +63,9 @@ func RelationValue(ctx context.Context, targetID int64, callerID int64) int {
 			State:       currentState,
 			UpdatedAt:   domain.NowMillis(),
 		}
-		_ = redis.EnqueueDB(backgroundCtx, 0, targetID, redis.EntityRelation, redis.ActionUpdate, relationPayload, redis.TargetMongo)
+		if err := redis.EnqueueDB(backgroundCtx, 0, targetID, redis.EntityRelation, redis.ActionUpdate, relationPayload, redis.TargetMongo); err != nil {
+			numan_log.Warn(backgroundCtx).Err(err).Int64("target_id", targetID).Int64("caller_id", callerID).Action(numan_log.ActionSync).Msg("Échec de la mise en file d'attente L3->L2 de la relation")
+		}
 	}(relationStateFromPg)
 
 	return relationStateFromPg
@@ -86,17 +92,47 @@ func UpdateRelationState(ctx context.Context, targetID int64, callerID int64, ne
 
 	// 2. Gestion des ZSETs chronologiques directionnels
 	// On nettoie l'ancien état par précaution pour éviter les doublons
-	_ = redis.SpeedRelationsIndex.ZRem(ctx, fmt.Sprintf("in:%d:%d", variables.RelationStateFollow, targetID), callerIDString)
-	_ = redis.SpeedRelationsIndex.ZRem(ctx, fmt.Sprintf("in:%d:%d", variables.RelationStateFriend, targetID), callerIDString)
-	_ = redis.SpeedRelationsIndex.ZRem(ctx, fmt.Sprintf("out:%d:%d", variables.RelationStateBlocked, callerID), targetIDString)
+	if err := redis.SpeedRelationsIndex.ZRem(ctx, fmt.Sprintf("in:%d:%d", variables.RelationStateFollow, targetID), callerIDString); err != nil {
+		numan_log.Warn(ctx).Err(err).Int64("target_id", targetID).Int64("caller_id", callerID).Msg("Échec ZRem de l'index Follow lors de la mise à jour de relation")
+	}
+	if err := redis.SpeedRelationsIndex.ZRem(ctx, fmt.Sprintf("in:%d:%d", variables.RelationStateFriend, targetID), callerIDString); err != nil {
+		numan_log.Warn(ctx).Err(err).Int64("target_id", targetID).Int64("caller_id", callerID).Msg("Échec ZRem de l'index Friend lors de la mise à jour de relation")
+	}
+	if err := redis.SpeedRelationsIndex.ZRem(ctx, fmt.Sprintf("out:%d:%d", variables.RelationStateBlocked, callerID), targetIDString); err != nil {
+		numan_log.Warn(ctx).Err(err).Int64("target_id", targetID).Int64("caller_id", callerID).Msg("Échec ZRem de l'index Blocked lors de la mise à jour de relation")
+	}
 
 	// 3. Ajout dans le nouveau ZSET si l'état est actif
 	if newRelationState == variables.RelationStateFollow {
-		_ = redis.SpeedRelationsIndex.ZAdd(ctx, fmt.Sprintf("in:%d:%d", variables.RelationStateFollow, targetID), timestampScore, callerIDString)
+		if err := redis.SpeedRelationsIndex.ZAdd(ctx, fmt.Sprintf("in:%d:%d", variables.RelationStateFollow, targetID), timestampScore, callerIDString); err != nil {
+			numan_log.Warn(ctx).Err(err).Int64("target_id", targetID).Int64("caller_id", callerID).Msg("Échec ZAdd de l'index Follow lors de la mise à jour de relation")
+			return numan_error.NewAppError(
+				http.StatusInternalServerError,
+				numan_error.CodeCacheError,
+				"Impossible de mettre à jour l'index temporel de la relation dans le cache.",
+				err,
+			)
+		}
 	} else if newRelationState == variables.RelationStateFriend {
-		_ = redis.SpeedRelationsIndex.ZAdd(ctx, fmt.Sprintf("in:%d:%d", variables.RelationStateFriend, targetID), timestampScore, callerIDString)
+		if err := redis.SpeedRelationsIndex.ZAdd(ctx, fmt.Sprintf("in:%d:%d", variables.RelationStateFriend, targetID), timestampScore, callerIDString); err != nil {
+			numan_log.Warn(ctx).Err(err).Int64("target_id", targetID).Int64("caller_id", callerID).Msg("Échec ZAdd de l'index Friend lors de la mise à jour de relation")
+			return numan_error.NewAppError(
+				http.StatusInternalServerError,
+				numan_error.CodeCacheError,
+				"Impossible de mettre à jour l'index temporel de la relation dans le cache.",
+				err,
+			)
+		}
 	} else if newRelationState == variables.RelationStateBlocked {
-		_ = redis.SpeedRelationsIndex.ZAdd(ctx, fmt.Sprintf("out:%d:%d", variables.RelationStateBlocked, callerID), timestampScore, targetIDString)
+		if err := redis.SpeedRelationsIndex.ZAdd(ctx, fmt.Sprintf("out:%d:%d", variables.RelationStateBlocked, callerID), timestampScore, targetIDString); err != nil {
+			numan_log.Warn(ctx).Err(err).Int64("target_id", targetID).Int64("caller_id", callerID).Msg("Échec ZAdd de l'index Blocked lors de la mise à jour de relation")
+			return numan_error.NewAppError(
+				http.StatusInternalServerError,
+				numan_error.CodeCacheError,
+				"Impossible de mettre à jour l'index temporel de la relation dans le cache.",
+				err,
+			)
+		}
 	}
 
 	return nil
@@ -143,7 +179,11 @@ func GetSpeedFriends(ctx context.Context, userID int64) ([]int64, error) {
 // GetFollowerCount retourne le nombre total d'abonnés en O(1).
 func GetFollowerCount(ctx context.Context, userID int64) int64 {
 	zsetKey := fmt.Sprintf("in:%d:%d", variables.RelationStateFollow, userID)
-	count, _ := redis.SpeedRelationsIndex.ZCard(ctx, zsetKey)
+	count, err := redis.SpeedRelationsIndex.ZCard(ctx, zsetKey)
+	if err != nil {
+		numan_log.Warn(ctx).Err(err).Int64("user_id", userID).Msg("Échec de la lecture du nombre d'abonnés depuis le cache")
+		return 0
+	}
 	return count
 }
 

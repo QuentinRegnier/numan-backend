@@ -2,6 +2,7 @@ package object_cache_service
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/message_models"
@@ -10,6 +11,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
+	goredis "github.com/go-redis/redis/v8"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -23,7 +25,10 @@ func GetMessageFromObjectCache(ctx context.Context, messageID int64) (message_mo
 
 	errRedis := redis.Messages.GetObject(ctx, messageID, &messagePayload)
 	if errRedis != nil {
-		return message_models.MessagePayload{}, errRedis
+		if errors.Is(errRedis, goredis.Nil) {
+			return message_models.MessagePayload{}, numan_error.NewNotFound(numan_error.CodeNotFound, "Message introuvable dans le cache.", errRedis)
+		}
+		return message_models.MessagePayload{}, numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeCacheError, "Impossible de récupérer le message depuis l'Object Cache.", errRedis)
 	}
 
 	return messagePayload, nil
@@ -69,6 +74,7 @@ func GetMessagesView(ctx context.Context, targetMessageIDs []int64) ([]message_m
 	// ── ÉTAPE 1 : NIVEAU 1 (REDIS MGET ULTRA-RAPIDE) ────────────────────────
 	mgetResult, errMGet := redis.Messages.GetMany(ctx, targetMessageIDs)
 	if errMGet != nil {
+		numan_log.Warn(ctx).Err(errMGet).Msg("Erreur Redis MGET lors de la récupération des messages (fallback L2 déclenché)")
 		mgetResult = &redis.GetManyResult{MissingIDs: targetMessageIDs}
 	} else {
 		for messageID, binaryData := range mgetResult.Found {
@@ -76,6 +82,7 @@ func GetMessagesView(ctx context.Context, targetMessageIDs []int64) ([]message_m
 			if errDecode := msgpack.Unmarshal(binaryData, &messagePayload); errDecode == nil {
 				temporaryMessagesMap[messageID] = messagePayload
 			} else {
+				numan_log.Warn(ctx).Err(errDecode).Entity("message", messageID).Msg("Échec du décodage MessagePack d'un message en L1")
 				mgetResult.MissingIDs = append(mgetResult.MissingIDs, messageID)
 			}
 		}
@@ -94,7 +101,9 @@ func GetMessagesView(ctx context.Context, targetMessageIDs []int64) ([]message_m
 				// PROMOTION L2 -> L1 (Immédiat en RAM dans une goroutine dédiée)
 				go func(msgToPromote message_models.MessagePayload) {
 					backgroundCtx := context.Background()
-					_ = SetMessageInObjectCache(backgroundCtx, msgToPromote)
+					if err := SetMessageInObjectCache(backgroundCtx, msgToPromote); err != nil {
+						numan_log.Warn(backgroundCtx).Err(err).Entity("message", msgToPromote.ID).Action(numan_log.ActionHydrate).Msg("Échec de la promotion L2->L1 du message")
+					}
 				}(mongoMessage)
 			}
 
@@ -121,10 +130,14 @@ func GetMessagesView(ctx context.Context, targetMessageIDs []int64) ([]message_m
 					backgroundCtx := context.Background()
 
 					// L1 : Hydratation immédiate en RAM
-					_ = SetMessageInObjectCache(backgroundCtx, msgToPromote)
+					if err := SetMessageInObjectCache(backgroundCtx, msgToPromote); err != nil {
+						numan_log.Warn(backgroundCtx).Err(err).Entity("message", msgToPromote.ID).Action(numan_log.ActionHydrate).Msg("Échec de la promotion L3->L1 du message")
+					}
 
 					// L2 : Hydratation asynchrone via la queue pour bénéficier du BulkWrite MongoDB des workers
-					_ = redis.EnqueueDB(backgroundCtx, msgToPromote.ID, msgToPromote.ConversationID, redis.EntityMessage, redis.ActionUpdate, msgToPromote, redis.TargetMongo)
+					if err := redis.EnqueueDB(backgroundCtx, msgToPromote.ID, msgToPromote.ConversationID, redis.EntityMessage, redis.ActionUpdate, msgToPromote, redis.TargetMongo); err != nil {
+						numan_log.Warn(backgroundCtx).Err(err).Entity("message", msgToPromote.ID).Action(numan_log.ActionSync).Msg("Échec de la mise en file d'attente L3->L2 du message")
+					}
 				}(pgMessage)
 			}
 		} else {

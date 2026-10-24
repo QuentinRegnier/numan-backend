@@ -2,6 +2,7 @@ package cache_service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
+	goredis "github.com/go-redis/redis/v8"
 )
 
 // ############################################################################
@@ -68,6 +70,8 @@ func LoadSessionFromCache(ctx context.Context, userID int64, firebaseInstallatio
 
 		if errRedisIndex == nil {
 			resolvedSessionID = retrievedID
+		} else if !errors.Is(errRedisIndex, goredis.Nil) {
+			numan_log.Warn(timeoutCtx).Err(errRedisIndex).Int64("user_id", userID).Msg("Erreur Redis lors de la lecture de l'index de session")
 		}
 	}
 
@@ -105,15 +109,27 @@ func DeleteSessionFromCache(ctx context.Context, sessionID int64, userID int64, 
 		// 1. POSE DU TOMBSTONE VIA L'ABSTRACTION DDD (Blocage immédiat)
 		err := redis.SessionBlacklist.SetPrimitive(timeoutCtx, indexCompositeKey, "1")
 		if err != nil {
-			numan_log.Warn(ctx).Err(err).Int64("session_id", sessionID).Msg("Impossible de poser le Tombstone de révocation de session")
-			return err
+			appErr := numan_error.NewAppError(
+				http.StatusInternalServerError,
+				numan_error.CodeCacheError,
+				"Impossible de poser le Tombstone de révocation de session.",
+				err,
+			)
+			numan_log.Warn(ctx).Err(appErr).Int64("session_id", sessionID).Msg("Impossible de poser le Tombstone de révocation de session")
+			return appErr
 		}
 
 		// 2. Suppression de l'index de recherche inversé
 		err = redis.SessionIndexes.DeletePrimitive(timeoutCtx, indexCompositeKey)
 		if err != nil {
-			numan_log.Warn(ctx).Err(err).Int64("session_id", sessionID).Msg("Impossible de supprimer l'index de recherche inversé")
-			return err
+			appErr := numan_error.NewAppError(
+				http.StatusInternalServerError,
+				numan_error.CodeCacheError,
+				"Impossible de supprimer l'index de recherche inversé de session.",
+				err,
+			)
+			numan_log.Warn(ctx).Err(appErr).Int64("session_id", sessionID).Msg("Impossible de supprimer l'index de recherche inversé")
+			return appErr
 		}
 	}
 
@@ -140,14 +156,18 @@ func GetFirebaseInstallationIDsCascade(ctx context.Context, userID int64) ([]str
 	// ── ÉTAPE 1 : TENTATIVE L1 (REDIS VIA SMEMBERS SUR L'ABSTRACTION) ───────
 
 	firebaseTokensList, errRedis := redis.SessionIndexes.SMembers(timeoutCtx, userID)
-	if errRedis == nil && len(firebaseTokensList) > 0 {
+	if errRedis != nil {
+		numan_log.Warn(timeoutCtx).Err(errRedis).Int64("user_id", userID).Msg("Erreur L1 lors de la récupération des tokens Firebase")
+	} else if len(firebaseTokensList) > 0 {
 		return firebaseTokensList, nil
 	}
 
 	// ── ÉTAPE 2 : FALLBACK L2 (MONGODB WARM STORAGE) ────────────────────────
 
 	firebaseTokensList, errMongo := mongo.MongoGetFirebaseInstallationIDs(ctx, userID)
-	if errMongo == nil && len(firebaseTokensList) > 0 {
+	if errMongo != nil {
+		numan_log.Warn(ctx).Err(errMongo).Int64("user_id", userID).Msg("Erreur L2 lors de la récupération des tokens Firebase")
+	} else if len(firebaseTokensList) > 0 {
 		// AUTO-GUÉRISON L1 : On répare le cache RAM
 		go healSessionIndexL1(userID, firebaseTokensList)
 		return firebaseTokensList, nil
@@ -157,6 +177,7 @@ func GetFirebaseInstallationIDsCascade(ctx context.Context, userID int64) ([]str
 
 	sessionsListFromPg, errPg := postgres.FuncLoadAllUserSessions(ctx, userID)
 	if errPg != nil {
+		// Error already wrapped by FuncLoadAllUserSessions; propagate it without wrapping again.
 		return nil, errPg
 	}
 
