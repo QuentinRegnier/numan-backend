@@ -1,12 +1,7 @@
-package cache_service
+package test
 
 import (
 	"bufio"
-	"context"
-	"database/sql"
-	"database/sql/driver"
-	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -17,23 +12,12 @@ import (
 	"testing"
 	"time"
 
-	infraMongo "github.com/QuentinRegnier/numan-backend/internal/infrastructure/mongo"
-	infraPg "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
-	repoMongo "github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	goredis "github.com/go-redis/redis/v8"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
-	"go.mongodb.org/mongo-driver/x/mongo/driver/wiremessage"
 )
 
-// ============================================================================
-// 1. IN-MEMORY REDIS RESP SERVER (TEST DOUBLE FOR L1 CACHE)
-// ============================================================================
-
-type fakeRedisServer struct {
+type FakeRedisServer struct {
 	listener  net.Listener
 	mu        sync.RWMutex
 	strings   map[string]string
@@ -48,14 +32,14 @@ type fakeRedisServer struct {
 	pubsubSub map[string][]net.Conn
 }
 
-func newFakeRedisServer(t *testing.T) (*fakeRedisServer, *goredis.Client) {
+func newFakeRedisServer(t *testing.T) (*FakeRedisServer, *goredis.Client) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to start fake redis listener: %v", err)
 	}
 
-	srv := &fakeRedisServer{
+	srv := &FakeRedisServer{
 		listener:  ln,
 		strings:   make(map[string]string),
 		hashes:    make(map[string]map[string]string),
@@ -93,7 +77,7 @@ func newFakeRedisServer(t *testing.T) (*fakeRedisServer, *goredis.Client) {
 	return srv, client
 }
 
-func setupTestRedis(t *testing.T) *fakeRedisServer {
+func SetupTestRedis(t *testing.T) *FakeRedisServer {
 	t.Helper()
 	srv, client := newFakeRedisServer(t)
 	infraRedis.Rdb = client
@@ -101,7 +85,7 @@ func setupTestRedis(t *testing.T) *fakeRedisServer {
 	return srv
 }
 
-func (s *fakeRedisServer) setFailCmd(cmd string, err error) {
+func (s *FakeRedisServer) SetFailCmd(cmd string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err == nil {
@@ -111,7 +95,7 @@ func (s *fakeRedisServer) setFailCmd(cmd string, err error) {
 	}
 }
 
-func (s *fakeRedisServer) setFailKey(key string, err error) {
+func (s *FakeRedisServer) setFailKey(key string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err == nil {
@@ -121,13 +105,13 @@ func (s *fakeRedisServer) setFailKey(key string, err error) {
 	}
 }
 
-func (s *fakeRedisServer) getTTL(key string) time.Duration {
+func (s *FakeRedisServer) GetTTL(key string) time.Duration {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.ttls[key]
 }
 
-func (s *fakeRedisServer) acceptLoop() {
+func (s *FakeRedisServer) acceptLoop() {
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
@@ -137,7 +121,7 @@ func (s *fakeRedisServer) acceptLoop() {
 	}
 }
 
-func (s *fakeRedisServer) handleConn(conn net.Conn) {
+func (s *FakeRedisServer) handleConn(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 	reader := bufio.NewReader(conn)
 	for {
@@ -216,7 +200,7 @@ func respArray(items []string) string {
 	return sb.String()
 }
 
-func (s *fakeRedisServer) execCommand(args []string) string {
+func (s *FakeRedisServer) execCommand(args []string) string {
 	cmd := strings.ToUpper(args[0])
 
 	s.mu.Lock()
@@ -723,7 +707,7 @@ func (s *fakeRedisServer) execCommand(args []string) string {
 	}
 }
 
-func (s *fakeRedisServer) execEval(args []string) string {
+func (s *FakeRedisServer) execEval(args []string) string {
 	if len(args) < 3 {
 		return respErr("wrong number of arguments for EVAL")
 	}
@@ -801,7 +785,7 @@ type zItem struct {
 	score  float64
 }
 
-func (s *fakeRedisServer) sortedZSet(key string, desc bool) []zItem {
+func (s *FakeRedisServer) sortedZSet(key string, desc bool) []zItem {
 	zs := s.zsets[key]
 	items := make([]zItem, 0, len(zs))
 	for m, sc := range zs {
@@ -886,374 +870,4 @@ func matchLexBound(member, bound string, isMin bool) bool {
 		return member <= clean
 	}
 	return member < clean
-}
-
-// ============================================================================
-// 2. IN-MEMORY POSTGRES SQL DRIVER (TEST DOUBLE FOR L3 COLD STORAGE)
-// ============================================================================
-
-type fakeSQLResponse struct {
-	cols []string
-	rows [][]driver.Value
-	err  error
-}
-
-type fakeSQLHandler func(query string, args []driver.NamedValue) fakeSQLResponse
-
-var (
-	registerSQLOnce sync.Once
-	sqlHandlersMu   sync.RWMutex
-	sqlHandlers     = make(map[string]fakeSQLHandler)
-)
-
-type fakeDriver struct{}
-
-func (d *fakeDriver) Open(name string) (driver.Conn, error) {
-	return &fakeSQLConn{dsn: name}, nil
-}
-
-type fakeSQLConn struct {
-	dsn string
-}
-
-func (c *fakeSQLConn) Prepare(query string) (driver.Stmt, error) {
-	return &fakeSQLStmt{dsn: c.dsn, query: query}, nil
-}
-func (c *fakeSQLConn) Close() error              { return nil }
-func (c *fakeSQLConn) Begin() (driver.Tx, error) { return nil, errors.New("not supported") }
-
-func (c *fakeSQLConn) QueryContext(_ context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
-	sqlHandlersMu.RLock()
-	h := sqlHandlers[c.dsn]
-	sqlHandlersMu.RUnlock()
-	if h == nil {
-		return nil, errors.New("no sql handler registered")
-	}
-	resp := h(query, args)
-	if resp.err != nil {
-		return nil, resp.err
-	}
-	return &fakeSQLRows{cols: resp.cols, rows: resp.rows}, nil
-}
-
-type fakeSQLStmt struct {
-	dsn   string
-	query string
-}
-
-func (s *fakeSQLStmt) Close() error  { return nil }
-func (s *fakeSQLStmt) NumInput() int { return -1 }
-func (s *fakeSQLStmt) Exec(_ []driver.Value) (driver.Result, error) {
-	return nil, errors.New("exec not supported")
-}
-func (s *fakeSQLStmt) Query(args []driver.Value) (driver.Rows, error) {
-	named := make([]driver.NamedValue, len(args))
-	for i, a := range args {
-		named[i] = driver.NamedValue{Ordinal: i + 1, Value: a}
-	}
-	sqlHandlersMu.RLock()
-	h := sqlHandlers[s.dsn]
-	sqlHandlersMu.RUnlock()
-	if h == nil {
-		return nil, errors.New("no sql handler registered")
-	}
-	resp := h(s.query, named)
-	if resp.err != nil {
-		return nil, resp.err
-	}
-	return &fakeSQLRows{cols: resp.cols, rows: resp.rows}, nil
-}
-
-type fakeSQLRows struct {
-	cols []string
-	rows [][]driver.Value
-	idx  int
-}
-
-func (r *fakeSQLRows) Columns() []string { return r.cols }
-func (r *fakeSQLRows) Close() error      { return nil }
-func (r *fakeSQLRows) Next(dest []driver.Value) error {
-	if r.idx >= len(r.rows) {
-		return io.EOF
-	}
-	row := r.rows[r.idx]
-	r.idx++
-	for i := range dest {
-		if i < len(row) {
-			dest[i] = row[i]
-		}
-	}
-	return nil
-}
-
-func setupTestPostgres(t *testing.T, handler fakeSQLHandler) {
-	t.Helper()
-	registerSQLOnce.Do(func() {
-		sql.Register("fake_pg_cache_service", &fakeDriver{})
-	})
-	dsn := fmt.Sprintf("dsn_%s_%d", t.Name(), time.Now().UnixNano())
-	sqlHandlersMu.Lock()
-	sqlHandlers[dsn] = handler
-	sqlHandlersMu.Unlock()
-
-	db, err := sql.Open("fake_pg_cache_service", dsn)
-	if err != nil {
-		t.Fatalf("failed to open fake sql db: %v", err)
-	}
-	infraPg.PostgresDB = db
-
-	t.Cleanup(func() {
-		_ = db.Close()
-		sqlHandlersMu.Lock()
-		delete(sqlHandlers, dsn)
-		sqlHandlersMu.Unlock()
-	})
-}
-
-// ============================================================================
-// 3. IN-MEMORY MONGODB WIRE PROTOCOL SERVER (TEST DOUBLE FOR L2 STORAGE)
-// ============================================================================
-
-type fakeMongoServer struct {
-	listener net.Listener
-	mu       sync.RWMutex
-	docs     map[string][]bson.M
-	failColl map[string]bool
-	upserted map[string][]bson.M
-}
-
-func setupTestMongo(t *testing.T) *fakeMongoServer {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to start fake mongo listener: %v", err)
-	}
-
-	srv := &fakeMongoServer{
-		listener: ln,
-		docs:     make(map[string][]bson.M),
-		failColl: make(map[string]bool),
-		upserted: make(map[string][]bson.M),
-	}
-
-	go srv.acceptLoop()
-
-	uri := fmt.Sprintf("mongodb://%s/?directConnection=true&serverSelectionTimeoutMS=2000", ln.Addr().String())
-	client, err := mongo.Connect(context.Background(), options.Client().ApplyURI(uri))
-	if err != nil {
-		t.Fatalf("failed to connect fake mongo client: %v", err)
-	}
-
-	infraMongo.MongoClient = client
-	repoMongo.InitCacheDatabase()
-
-	t.Cleanup(func() {
-		_ = client.Disconnect(context.Background())
-		_ = ln.Close()
-	})
-
-	return srv
-}
-
-func (m *fakeMongoServer) setDocs(coll string, docs ...bson.M) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.docs[coll] = docs
-}
-
-func (m *fakeMongoServer) setFailCollection(coll string, fail bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.failColl[coll] = fail
-}
-
-func (m *fakeMongoServer) acceptLoop() {
-	for {
-		conn, err := m.listener.Accept()
-		if err != nil {
-			return
-		}
-		go m.handleConn(conn)
-	}
-}
-
-func (m *fakeMongoServer) handleConn(conn net.Conn) {
-	defer func() { _ = conn.Close() }()
-	for {
-		header := make([]byte, 16)
-		if _, err := io.ReadFull(conn, header); err != nil {
-			return
-		}
-		length, reqID, _, opCode, _, ok := wiremessage.ReadHeader(header)
-		if !ok || length < 16 {
-			return
-		}
-		body := make([]byte, length-16)
-		if _, err := io.ReadFull(conn, body); err != nil {
-			return
-		}
-
-		var cmdDoc bson.Raw
-		const legacyOpQueryCode = wiremessage.OpCode(2004)
-		if opCode == legacyOpQueryCode {
-			if len(body) < 12 {
-				return
-			}
-			pos := 4
-			for pos < len(body) && body[pos] != 0 {
-				pos++
-			}
-			pos++
-			if pos+8 > len(body) {
-				return
-			}
-			pos += 8
-			cmdDoc = bson.Raw(body[pos:])
-		} else if opCode == wiremessage.OpMsg {
-			_, rem, okFlags := wiremessage.ReadMsgFlags(body)
-			if !okFlags {
-				return
-			}
-			for len(rem) > 0 {
-				var st wiremessage.SectionType
-				st, rem, ok = wiremessage.ReadMsgSectionType(rem)
-				if !ok {
-					break
-				}
-				if st == wiremessage.SingleDocument {
-					var docBytes []byte
-					docBytes, rem, ok = wiremessage.ReadMsgSectionSingleDocument(rem)
-					if ok && len(cmdDoc) == 0 {
-						cmdDoc = bson.Raw(docBytes)
-					}
-				} else if st == wiremessage.DocumentSequence {
-					_, seqDocs, nextRem, seqOk := wiremessage.ReadMsgSectionDocumentSequence(rem)
-					rem = nextRem
-					ok = seqOk
-					if ok && len(seqDocs) > 0 {
-						docsBytes := make([][]byte, 0, len(seqDocs))
-						for _, doc := range seqDocs {
-							docsBytes = append(docsBytes, []byte(doc))
-						}
-						// Store upserted updates if present
-						m.recordUpdateDocs(cmdDoc, docsBytes)
-					}
-				}
-			}
-		}
-
-		replyDoc := m.buildReply(cmdDoc)
-		replyBytes, _ := bson.Marshal(replyDoc)
-
-		if opCode == legacyOpQueryCode {
-			var dst []byte
-			idx, dst := wiremessage.AppendHeaderStart(dst, 1, reqID, wiremessage.OpReply)
-			dst = wiremessage.AppendReplyFlags(dst, 0)
-			dst = wiremessage.AppendReplyCursorID(dst, 0)
-			dst = wiremessage.AppendReplyStartingFrom(dst, 0)
-			dst = wiremessage.AppendReplyNumberReturned(dst, 1)
-			dst = append(dst, replyBytes...)
-			binary.LittleEndian.PutUint32(dst[idx:], uint32(len(dst)))
-			_, _ = conn.Write(dst)
-		} else {
-			var dst []byte
-			idx, dst := wiremessage.AppendHeaderStart(dst, 1, reqID, wiremessage.OpMsg)
-			dst = wiremessage.AppendMsgFlags(dst, 0)
-			dst = wiremessage.AppendMsgSectionType(dst, wiremessage.SingleDocument)
-			dst = append(dst, replyBytes...)
-			binary.LittleEndian.PutUint32(dst[idx:], uint32(len(dst)))
-			_, _ = conn.Write(dst)
-		}
-	}
-}
-
-func (m *fakeMongoServer) recordUpdateDocs(cmdDoc bson.Raw, docsBytes [][]byte) {
-	var parsed bson.M
-	if err := bson.Unmarshal(cmdDoc, &parsed); err != nil {
-		return
-	}
-	collName, ok := parsed["update"].(string)
-	if !ok {
-		return
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, b := range docsBytes {
-		var u bson.M
-		if bson.Unmarshal(b, &u) == nil {
-			m.upserted[collName] = append(m.upserted[collName], u)
-		}
-	}
-}
-
-func (m *fakeMongoServer) buildReply(cmdDoc bson.Raw) bson.D {
-	elems, err := cmdDoc.Elements()
-	if err != nil || len(elems) == 0 {
-		return bson.D{{Key: "ok", Value: 1.0}}
-	}
-	firstKey := elems[0].Key()
-
-	switch strings.ToLower(firstKey) {
-	case "ismaster", "hello":
-		return bson.D{
-			{Key: "ismaster", Value: true},
-			{Key: "isWritablePrimary", Value: true},
-			{Key: "maxBsonObjectSize", Value: int32(16777216)},
-			{Key: "maxMessageSizeBytes", Value: int32(48000000)},
-			{Key: "maxWriteBatchSize", Value: int32(100000)},
-			{Key: "localTime", Value: time.Now()},
-			{Key: "minWireVersion", Value: int32(0)},
-			{Key: "maxWireVersion", Value: int32(17)},
-			{Key: "ok", Value: 1.0},
-		}
-
-	case "find":
-		collName, _ := elems[0].Value().StringValueOK()
-		m.mu.RLock()
-		shouldFail := m.failColl[collName]
-		docs := append([]bson.M(nil), m.docs[collName]...)
-		m.mu.RUnlock()
-
-		if shouldFail {
-			return bson.D{
-				{Key: "ok", Value: 0.0},
-				{Key: "errmsg", Value: "simulated mongo find error"},
-				{Key: "code", Value: int32(1)},
-			}
-		}
-
-		batch := make(bson.A, 0, len(docs))
-		for _, d := range docs {
-			batch = append(batch, d)
-		}
-		return bson.D{
-			{Key: "cursor", Value: bson.D{
-				{Key: "firstBatch", Value: batch},
-				{Key: "id", Value: int64(0)},
-				{Key: "ns", Value: "numan_mongo." + collName},
-			}},
-			{Key: "ok", Value: 1.0},
-		}
-
-	case "update":
-		collName, _ := elems[0].Value().StringValueOK()
-		m.mu.RLock()
-		shouldFail := m.failColl[collName]
-		m.mu.RUnlock()
-		if shouldFail {
-			return bson.D{
-				{Key: "ok", Value: 0.0},
-				{Key: "errmsg", Value: "simulated mongo update error"},
-				{Key: "code", Value: int32(1)},
-			}
-		}
-		return bson.D{
-			{Key: "n", Value: int32(1)},
-			{Key: "nModified", Value: int32(1)},
-			{Key: "ok", Value: 1.0},
-		}
-
-	default:
-		return bson.D{{Key: "ok", Value: 1.0}}
-	}
 }

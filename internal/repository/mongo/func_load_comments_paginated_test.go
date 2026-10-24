@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
@@ -11,7 +12,7 @@ import (
 )
 
 func TestMongoLoadCommentsPaginated(t *testing.T) {
-	defer resetCollections()()
+	defer test.ResetCollections()
 
 	ctx := context.Background()
 
@@ -19,23 +20,23 @@ func TestMongoLoadCommentsPaginated(t *testing.T) {
 	Comments = nil
 	comments, err := MongoLoadCommentsPaginated(ctx, 100, 0, 10)
 	assert.Nil(t, comments)
-	assertDatabaseError(t, err)
+	test.AssertDatabaseError_Mongo(t, err)
 
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	// 2. DB error
 	mt.Run("DB error", func(mt *mtest.T) {
-		Comments = newMockCollection(mt, "comments", nil)
+		Comments = test.NewMockCollection(mt, "comments", nil)
 		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 96, Message: "failed"}))
 
 		comments, err := MongoLoadCommentsPaginated(ctx, 100, 0, 10)
 		assert.Nil(mt, comments)
-		assertDatabaseError(mt, err)
+		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 3. Empty result
 	mt.Run("Empty result", func(mt *mtest.T) {
-		Comments = newMockCollection(mt, "comments", nil)
+		Comments = test.NewMockCollection(mt, "comments", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.comments", mtest.FirstBatch))
 
 		comments, err := MongoLoadCommentsPaginated(ctx, 100, 0, 10)
@@ -46,19 +47,19 @@ func TestMongoLoadCommentsPaginated(t *testing.T) {
 
 	// 4. Deserialization error
 	mt.Run("Deserialization error", func(mt *mtest.T) {
-		Comments = newMockCollection(mt, "comments", nil)
+		Comments = test.NewMockCollection(mt, "comments", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.comments", mtest.FirstBatch, bson.D{
 			{Key: "id", Value: "not_an_int64"},
 		}))
 
 		comments, err := MongoLoadCommentsPaginated(ctx, 100, 0, 10)
 		assert.Nil(mt, comments)
-		assertDatabaseError(mt, err)
+		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 5. Success
 	mt.Run("Success", func(mt *mtest.T) {
-		Comments = newMockCollection(mt, "comments", nil)
+		Comments = test.NewMockCollection(mt, "comments", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.comments", mtest.FirstBatch, bson.D{
 			{Key: "id", Value: int64(201)},
 			{Key: "post_id", Value: int64(100)},

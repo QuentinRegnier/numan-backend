@@ -3,6 +3,7 @@ package mongo
 import (
 	"testing"
 
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
@@ -10,29 +11,29 @@ import (
 )
 
 func TestMongoLoadMembersByRolePaginated(t *testing.T) {
-	defer resetCollections()()
+	defer test.ResetCollections()
 
 	// 1. Members is nil
 	Members = nil
 	members, err := MongoLoadMembersByRolePaginated(10, 1, 10, 0)
 	assert.Nil(t, members)
-	assertDatabaseError(t, err)
+	test.AssertDatabaseError_Mongo(t, err)
 
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	// 2. DB error
 	mt.Run("DB error", func(mt *mtest.T) {
-		Members = newMockCollection(mt, "members", nil)
+		Members = test.NewMockCollection(mt, "members", nil)
 		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 96, Message: "failed"}))
 
 		members, err := MongoLoadMembersByRolePaginated(10, 1, 10, 0)
 		assert.Nil(mt, members)
-		assertDatabaseError(mt, err)
+		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 3. Empty result
 	mt.Run("Empty result", func(mt *mtest.T) {
-		Members = newMockCollection(mt, "members", nil)
+		Members = test.NewMockCollection(mt, "members", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.members", mtest.FirstBatch))
 
 		members, err := MongoLoadMembersByRolePaginated(10, 1, 10, 0)
@@ -43,19 +44,19 @@ func TestMongoLoadMembersByRolePaginated(t *testing.T) {
 
 	// 4. Deserialization error
 	mt.Run("Deserialization error", func(mt *mtest.T) {
-		Members = newMockCollection(mt, "members", nil)
+		Members = test.NewMockCollection(mt, "members", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.members", mtest.FirstBatch, bson.D{
 			{Key: "id", Value: "invalid_id"},
 		}))
 
 		members, err := MongoLoadMembersByRolePaginated(10, 1, 10, 0)
 		assert.Nil(mt, members)
-		assertDatabaseError(mt, err)
+		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 5. Success
 	mt.Run("Success", func(mt *mtest.T) {
-		Members = newMockCollection(mt, "members", nil)
+		Members = test.NewMockCollection(mt, "members", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.members", mtest.FirstBatch, bson.D{
 			{Key: "id", Value: int64(101)},
 			{Key: "conversation_id", Value: int64(10)},

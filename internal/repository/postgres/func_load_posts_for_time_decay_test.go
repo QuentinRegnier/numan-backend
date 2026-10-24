@@ -8,6 +8,7 @@ import (
 	"time"
 
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,7 +23,7 @@ func TestFuncLoadPostsForTimeDecay(t *testing.T) {
 
 		posts, err := FuncLoadPostsForTimeDecay(ctx, "1 day", "7 days")
 		assert.Nil(t, posts)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	cols := []string{
@@ -32,12 +33,12 @@ func TestFuncLoadPostsForTimeDecay(t *testing.T) {
 	now := time.Now()
 
 	t.Run("returns_time_decay_posts_successfully", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			assert.Contains(t, query, "content.func_load_posts_for_time_decay")
 			require.Len(t, args, 2)
 			assert.Equal(t, "1 day", args[0].Value)
 			assert.Equal(t, "7 days", args[1].Value)
-			return newMockRows(cols, [][]driver.Value{
+			return test.NewMockRows(cols, [][]driver.Value{
 				{int64(100), 5, 2, 50, true, now, "{tag1,tag2}", "{itag1}", 1, 0, 0},
 			}), nil
 		}, nil)
@@ -55,8 +56,8 @@ func TestFuncLoadPostsForTimeDecay(t *testing.T) {
 	})
 
 	t.Run("handles_empty_posts", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{}), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{}), nil
 		}, nil)
 
 		posts, err := FuncLoadPostsForTimeDecay(ctx, "1 day", "7 days")
@@ -66,24 +67,24 @@ func TestFuncLoadPostsForTimeDecay(t *testing.T) {
 	})
 
 	t.Run("handles_database_query_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return nil, errors.New("db failure")
 		}, nil)
 
 		posts, err := FuncLoadPostsForTimeDecay(ctx, "1 day", "7 days")
 		assert.Nil(t, posts)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	t.Run("handles_row_iteration_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRowsWithErr(cols, [][]driver.Value{
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRowsWithErr(cols, [][]driver.Value{
 				{int64(100), 0, 0, 0, false, now, "{}", "{}", 1, 0, 0},
 			}, errors.New("iter err")), nil
 		}, nil)
 
 		posts, err := FuncLoadPostsForTimeDecay(ctx, "1 day", "7 days")
 		assert.Nil(t, posts)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 }

@@ -77,7 +77,12 @@ func Login(ctx context.Context, input auth_models.LoginInput, ipAddresses []stri
 
 	// Interception Double Authentification (2FA)
 	if userPayload.TwoFactorEnabled && userPayload.TwoFactorMethod > 0 {
-		return initiateLoginTwoFactorChallenge(ctx, userPayload, input, ipAddresses)
+		payload, err := initiateLoginTwoFactorChallenge(ctx, userPayload, input, ipAddresses)
+		if err != nil {
+			numan_log.Error(ctx).Err(err).Int64("user_id", userPayload.ID).Msg("Échec critique de l'initialisation du challenge 2FA lors du login")
+			return auth_models.LoginResponse{}, numan_error.NewInternal(err)
+		}
+		return payload, nil
 	}
 
 	// ── ÉTAPE 3 : GESTION DE LA SESSION DE L'APPAREIL (CASCADE L1->L2->L3) ──

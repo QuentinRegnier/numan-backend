@@ -10,6 +10,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/auth_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 )
 
@@ -47,7 +48,11 @@ func FuncLoadUser(ctx context.Context, ID int64, Username string, Email string, 
 			err,
 		)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			numan_log.Error(ctx).Err(err).Msg("Impossible de fermer le curseur SQL, risque de fuite de connexion au pool")
+		}
+	}()
 
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {

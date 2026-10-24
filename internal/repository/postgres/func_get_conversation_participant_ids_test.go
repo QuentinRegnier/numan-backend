@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,17 +22,17 @@ func TestFuncGetConversationParticipantIDs(t *testing.T) {
 
 		ids, err := FuncGetConversationParticipantIDs(ctx, 123)
 		assert.Nil(t, ids)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	cols := []string{"user_id"}
 
 	t.Run("returns_participant_ids_successfully", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			assert.Contains(t, query, "messaging.func_get_conversation_participant_ids")
 			require.Len(t, args, 1)
 			assert.Equal(t, int64(123), args[0].Value)
-			return newMockRows(cols, [][]driver.Value{
+			return test.NewMockRows(cols, [][]driver.Value{
 				{int64(10)},
 				{int64(20)},
 				{int64(30)},
@@ -44,8 +45,8 @@ func TestFuncGetConversationParticipantIDs(t *testing.T) {
 	})
 
 	t.Run("handles_empty_results", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{}), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{}), nil
 		}, nil)
 
 		ids, err := FuncGetConversationParticipantIDs(ctx, 123)
@@ -55,22 +56,22 @@ func TestFuncGetConversationParticipantIDs(t *testing.T) {
 	})
 
 	t.Run("handles_database_query_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return nil, errors.New("db error")
 		}, nil)
 
 		ids, err := FuncGetConversationParticipantIDs(ctx, 123)
 		assert.Nil(t, ids)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	t.Run("handles_row_iteration_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRowsWithErr(cols, [][]driver.Value{{int64(10)}}, errors.New("stream err")), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRowsWithErr(cols, [][]driver.Value{{int64(10)}}, errors.New("stream err")), nil
 		}, nil)
 
 		ids, err := FuncGetConversationParticipantIDs(ctx, 123)
 		assert.Nil(t, ids)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 }

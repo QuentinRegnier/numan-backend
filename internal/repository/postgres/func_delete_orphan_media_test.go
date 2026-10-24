@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,15 +22,15 @@ func TestFuncDeleteOrphanMedia(t *testing.T) {
 
 		results, err := FuncDeleteOrphanMedia(ctx)
 		assert.Nil(t, results)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	cols := []string{"id", "storage_path"}
 
 	t.Run("returns_orphan_media_successfully", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			assert.Contains(t, query, "content.func_delete_orphan_media")
-			return newMockRows(cols, [][]driver.Value{
+			return test.NewMockRows(cols, [][]driver.Value{
 				{int64(10), "uploads/orphan1.jpg"},
 				{int64(20), "uploads/orphan2.jpg"},
 			}), nil
@@ -43,8 +44,8 @@ func TestFuncDeleteOrphanMedia(t *testing.T) {
 	})
 
 	t.Run("handles_empty_results", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{}), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{}), nil
 		}, nil)
 
 		results, err := FuncDeleteOrphanMedia(ctx)
@@ -54,22 +55,22 @@ func TestFuncDeleteOrphanMedia(t *testing.T) {
 	})
 
 	t.Run("handles_database_query_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return nil, errors.New("db failure")
 		}, nil)
 
 		results, err := FuncDeleteOrphanMedia(ctx)
 		assert.Nil(t, results)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	t.Run("handles_row_iteration_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRowsWithErr(cols, [][]driver.Value{{int64(10), "uploads/orphan.jpg"}}, errors.New("iter err")), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRowsWithErr(cols, [][]driver.Value{{int64(10), "uploads/orphan.jpg"}}, errors.New("iter err")), nil
 		}, nil)
 
 		results, err := FuncDeleteOrphanMedia(ctx)
 		assert.Nil(t, results)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
@@ -11,7 +12,7 @@ import (
 )
 
 func TestMongoLoadPosts(t *testing.T) {
-	defer resetCollections()()
+	defer test.ResetCollections()
 
 	ctx := context.Background()
 
@@ -19,13 +20,13 @@ func TestMongoLoadPosts(t *testing.T) {
 	Posts = nil
 	posts, err := MongoLoadPosts(ctx, []int64{1, 2})
 	assert.Nil(t, posts)
-	assertDatabaseError(t, err)
+	test.AssertDatabaseError_Mongo(t, err)
 
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	// 2. Empty input
 	mt.Run("Empty IDs returns non-nil slice", func(mt *mtest.T) {
-		Posts = newMockCollection(mt, "posts", nil)
+		Posts = test.NewMockCollection(mt, "posts", nil)
 		posts, err := MongoLoadPosts(ctx, []int64{})
 		require.NoError(mt, err)
 		assert.NotNil(mt, posts)
@@ -34,29 +35,29 @@ func TestMongoLoadPosts(t *testing.T) {
 
 	// 3. DB error
 	mt.Run("DB error", func(mt *mtest.T) {
-		Posts = newMockCollection(mt, "posts", nil)
+		Posts = test.NewMockCollection(mt, "posts", nil)
 		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 96, Message: "failed"}))
 
 		posts, err := MongoLoadPosts(ctx, []int64{10})
 		assert.Nil(mt, posts)
-		assertDatabaseError(mt, err)
+		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 4. Deserialization error
 	mt.Run("Deserialization error", func(mt *mtest.T) {
-		Posts = newMockCollection(mt, "posts", nil)
+		Posts = test.NewMockCollection(mt, "posts", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.posts", mtest.FirstBatch, bson.D{
 			{Key: "id", Value: "invalid_id_not_int64"},
 		}))
 
 		posts, err := MongoLoadPosts(ctx, []int64{10})
 		assert.Nil(mt, posts)
-		assertDatabaseError(mt, err)
+		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 5. Success
 	mt.Run("Success", func(mt *mtest.T) {
-		Posts = newMockCollection(mt, "posts", nil)
+		Posts = test.NewMockCollection(mt, "posts", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.posts", mtest.FirstBatch, bson.D{
 			{Key: "id", Value: int64(10)},
 			{Key: "user_id", Value: int64(42)},

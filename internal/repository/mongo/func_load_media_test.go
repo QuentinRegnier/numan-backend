@@ -3,6 +3,7 @@ package mongo
 import (
 	"testing"
 
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
@@ -10,19 +11,19 @@ import (
 )
 
 func TestMongoLoadMedia(t *testing.T) {
-	defer resetCollections()()
+	defer test.ResetCollections()
 
 	// 1. Media is nil
 	Media = nil
 	media, err := MongoLoadMedia([]int64{1, 2})
 	assert.Nil(t, media)
-	assertDatabaseError(t, err)
+	test.AssertDatabaseError_Mongo(t, err)
 
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	// 2. Empty input
 	mt.Run("Empty mediaIDs returns non-nil slice", func(mt *mtest.T) {
-		Media = newMockCollection(mt, "media", nil)
+		Media = test.NewMockCollection(mt, "media", nil)
 		media, err := MongoLoadMedia([]int64{})
 		require.NoError(mt, err)
 		assert.NotNil(mt, media)
@@ -31,17 +32,17 @@ func TestMongoLoadMedia(t *testing.T) {
 
 	// 3. Find error
 	mt.Run("Find error", func(mt *mtest.T) {
-		Media = newMockCollection(mt, "media", nil)
+		Media = test.NewMockCollection(mt, "media", nil)
 		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 96, Message: "find failed"}))
 
 		media, err := MongoLoadMedia([]int64{10})
 		assert.Nil(mt, media)
-		assertDatabaseError(mt, err)
+		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 4. Empty result
 	mt.Run("Empty result", func(mt *mtest.T) {
-		Media = newMockCollection(mt, "media", nil)
+		Media = test.NewMockCollection(mt, "media", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.media", mtest.FirstBatch))
 
 		media, err := MongoLoadMedia([]int64{10})
@@ -52,7 +53,7 @@ func TestMongoLoadMedia(t *testing.T) {
 
 	// 5. Success
 	mt.Run("Success", func(mt *mtest.T) {
-		Media = newMockCollection(mt, "media", nil)
+		Media = test.NewMockCollection(mt, "media", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.media", mtest.FirstBatch, bson.D{
 			{Key: "id", Value: int64(10)},
 			{Key: "owner_id", Value: int64(42)},

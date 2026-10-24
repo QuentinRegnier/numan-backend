@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/post_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 )
 
@@ -33,7 +34,11 @@ func FuncLoadUserPostsKeyset(ctx context.Context, userID int64, beforeCreatedAt 
 			err,
 		)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			numan_log.Error(ctx).Err(err).Msg("Impossible de fermer le curseur SQL, risque de fuite de connexion au pool")
+		}
+	}()
 
 	return scanPosts(ctx, rows)
 }

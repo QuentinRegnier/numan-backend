@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,7 +22,7 @@ func TestFuncLoadActiveConversations(t *testing.T) {
 
 		convs, err := FuncLoadActiveConversations(ctx)
 		assert.Nil(t, convs)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	cols := []string{"id", "type", "title", "description", "avatar_id", "last_message_id", "settings", "external_link"}
@@ -29,9 +30,9 @@ func TestFuncLoadActiveConversations(t *testing.T) {
 	t.Run("returns_active_conversations_successfully", func(t *testing.T) {
 		settingsJSON := `{"write_permission":1,"join_approval_required":true}`
 		linksJSON := `{"title":"Discord","url":"https://discord.gg/numan"}`
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			assert.Contains(t, query, "messaging.func_load_active_conversations")
-			return newMockRows(cols, [][]driver.Value{
+			return test.NewMockRows(cols, [][]driver.Value{
 				{int64(1), 1, "Public Conv", "Discussion", int64(10), int64(100), settingsJSON, linksJSON},
 				{int64(2), 0, nil, nil, nil, nil, nil, nil},
 			}), nil
@@ -55,32 +56,32 @@ func TestFuncLoadActiveConversations(t *testing.T) {
 	})
 
 	t.Run("handles_invalid_settings_json", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{
 				{int64(1), 1, "Title", nil, nil, nil, "invalid-json", nil},
 			}), nil
 		}, nil)
 
 		convs, err := FuncLoadActiveConversations(ctx)
 		assert.Nil(t, convs)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	t.Run("handles_invalid_external_link_json", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{
 				{int64(1), 1, "Title", nil, nil, nil, nil, "invalid-links-json"},
 			}), nil
 		}, nil)
 
 		convs, err := FuncLoadActiveConversations(ctx)
 		assert.Nil(t, convs)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	t.Run("handles_empty_conversations", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{}), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{}), nil
 		}, nil)
 
 		convs, err := FuncLoadActiveConversations(ctx)
@@ -90,22 +91,22 @@ func TestFuncLoadActiveConversations(t *testing.T) {
 	})
 
 	t.Run("handles_database_query_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return nil, errors.New("db failure")
 		}, nil)
 
 		convs, err := FuncLoadActiveConversations(ctx)
 		assert.Nil(t, convs)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	t.Run("handles_row_iteration_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRowsWithErr(cols, [][]driver.Value{{int64(1), 0, nil, nil, nil, nil, nil, nil}}, errors.New("iter err")), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRowsWithErr(cols, [][]driver.Value{{int64(1), 0, nil, nil, nil, nil, nil, nil}}, errors.New("iter err")), nil
 		}, nil)
 
 		convs, err := FuncLoadActiveConversations(ctx)
 		assert.Nil(t, convs)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 }

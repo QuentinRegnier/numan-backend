@@ -8,6 +8,7 @@ import (
 	"time"
 
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,16 +23,16 @@ func TestFuncLoadPostsForGraphSeeding(t *testing.T) {
 
 		seeds, err := FuncLoadPostsForGraphSeeding(ctx)
 		assert.Nil(t, seeds)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	cols := []string{"id", "hashtags", "indirect_hashtags", "created_at"}
 	now := time.Now()
 
 	t.Run("returns_graph_seeds_successfully", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			assert.Contains(t, query, "content.func_load_posts_for_graph_seeding")
-			return newMockRows(cols, [][]driver.Value{
+			return test.NewMockRows(cols, [][]driver.Value{
 				{int64(101), "{golang,postgres}", "{backend}", now},
 				{int64(102), "{cloud}", "{}", now},
 			}), nil
@@ -47,8 +48,8 @@ func TestFuncLoadPostsForGraphSeeding(t *testing.T) {
 	})
 
 	t.Run("handles_empty_seeds", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{}), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{}), nil
 		}, nil)
 
 		seeds, err := FuncLoadPostsForGraphSeeding(ctx)
@@ -58,24 +59,24 @@ func TestFuncLoadPostsForGraphSeeding(t *testing.T) {
 	})
 
 	t.Run("handles_database_query_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return nil, errors.New("db error")
 		}, nil)
 
 		seeds, err := FuncLoadPostsForGraphSeeding(ctx)
 		assert.Nil(t, seeds)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	t.Run("handles_row_iteration_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRowsWithErr(cols, [][]driver.Value{
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRowsWithErr(cols, [][]driver.Value{
 				{int64(101), "{}", "{}", now},
 			}, errors.New("iter err")), nil
 		}, nil)
 
 		seeds, err := FuncLoadPostsForGraphSeeding(ctx)
 		assert.Nil(t, seeds)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 }

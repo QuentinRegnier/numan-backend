@@ -8,6 +8,7 @@ import (
 	"time"
 
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,7 +20,7 @@ func TestFuncLoadCommentsKeyset(t *testing.T) {
 		badTime := "invalid-timestamp"
 		comments, err := FuncLoadCommentsKeyset(ctx, 10, nil, &badTime, nil, 10)
 		assert.Nil(t, comments)
-		assertBadRequestError(t, err)
+		test.AssertBadRequestError_Postgres(t, err)
 	})
 
 	t.Run("handles_uninitialized_database", func(t *testing.T) {
@@ -29,7 +30,7 @@ func TestFuncLoadCommentsKeyset(t *testing.T) {
 
 		comments, err := FuncLoadCommentsKeyset(ctx, 10, nil, nil, nil, 10)
 		assert.Nil(t, comments)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	cols := []string{"id", "post_id", "user_id", "content", "visibility", "like_count", "score", "created_at", "updated_at"}
@@ -40,7 +41,7 @@ func TestFuncLoadCommentsKeyset(t *testing.T) {
 		score := 5
 		id := int64(100)
 
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			assert.Contains(t, query, "content.func_load_comments_keyset")
 			require.Len(t, args, 5)
 			assert.Equal(t, int64(10), args[0].Value)
@@ -48,7 +49,7 @@ func TestFuncLoadCommentsKeyset(t *testing.T) {
 			assert.Equal(t, validTime, args[2].Value)
 			assert.Equal(t, int64(100), args[3].Value)
 			assert.Equal(t, int64(10), args[4].Value)
-			return newMockRows(cols, [][]driver.Value{
+			return test.NewMockRows(cols, [][]driver.Value{
 				{int64(1), int64(10), int64(201), "Comment 1", 1, 3, 5, validTime, validTime},
 			}), nil
 		}, nil)
@@ -61,8 +62,8 @@ func TestFuncLoadCommentsKeyset(t *testing.T) {
 	})
 
 	t.Run("handles_empty_comments", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{}), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{}), nil
 		}, nil)
 
 		comments, err := FuncLoadCommentsKeyset(ctx, 10, nil, nil, nil, 10)
@@ -72,36 +73,36 @@ func TestFuncLoadCommentsKeyset(t *testing.T) {
 	})
 
 	t.Run("handles_scan_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{
 				{"not-an-int-id", int64(10), int64(201), "Comment", 1, 0, 0, now, now},
 			}), nil
 		}, nil)
 
 		comments, err := FuncLoadCommentsKeyset(ctx, 10, nil, nil, nil, 10)
 		assert.Nil(t, comments)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	t.Run("handles_database_query_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return nil, errors.New("db error")
 		}, nil)
 
 		comments, err := FuncLoadCommentsKeyset(ctx, 10, nil, nil, nil, 10)
 		assert.Nil(t, comments)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	t.Run("handles_row_iteration_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRowsWithErr(cols, [][]driver.Value{
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRowsWithErr(cols, [][]driver.Value{
 				{int64(1), int64(10), int64(201), "Comment", 1, 0, 0, now, now},
 			}, errors.New("iter err")), nil
 		}, nil)
 
 		comments, err := FuncLoadCommentsKeyset(ctx, 10, nil, nil, nil, 10)
 		assert.Nil(t, comments)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 }

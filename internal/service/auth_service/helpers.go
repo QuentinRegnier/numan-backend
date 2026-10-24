@@ -19,7 +19,7 @@ import (
 
 // resolveConfiguredTwoFactorMethods détermine toutes les méthodes 2FA (1: Email, 2: TOTP, 3: Passkey)
 // configurées et utilisables par l'utilisateur au moment de sa connexion.
-func resolveConfiguredTwoFactorMethods(ctx context.Context, user auth_models.UserPayload) ([]int, []two_factor_models.PasskeyPayload) {
+func resolveConfiguredTwoFactorMethods(ctx context.Context, user auth_models.UserPayload) ([]int, []two_factor_models.PasskeyPayload, error) {
 	var methods []int
 
 	// 1. Vérification Email (Bit 0 actif ou fallback si TwoFactorMethod == 1)
@@ -33,9 +33,10 @@ func resolveConfiguredTwoFactorMethods(ctx context.Context, user auth_models.Use
 	}
 
 	// 3. Vérification Passkeys (Clés matérielles FIDO2 enregistrées)
-	passkeys, _ := object_cache_service.GetUserPasskeysCascade(ctx, user.ID)
-	if len(passkeys) > 0 {
-		methods = append(methods, variables.TwoFactorMethodPasskey)
+	passkeys, errPasskeys := object_cache_service.GetUserPasskeysCascade(ctx, user.ID)
+	if errPasskeys != nil {
+		numan_log.Error(ctx).Err(errPasskeys).Int64("user_id", user.ID).Msg("Échec lors de la récupération en cascade L1->L2->L3 des Passkeys")
+		return nil, nil, numan_error.NewInternal(errPasskeys)
 	}
 
 	// Sécurité : si TwoFactorEnabled est true mais qu'aucun bit précis n'a matché, on autorise l'Email par défaut
@@ -43,7 +44,7 @@ func resolveConfiguredTwoFactorMethods(ctx context.Context, user auth_models.Use
 		methods = append(methods, variables.TwoFactorMethodEmail)
 	}
 
-	return methods, passkeys
+	return methods, passkeys, nil
 }
 
 // initiateLoginTwoFactorChallenge prépare la PreAuthSession en RAM (L1) en exposant TOUTES les méthodes
@@ -54,7 +55,10 @@ func initiateLoginTwoFactorChallenge(
 	input auth_models.LoginInput,
 	ipAddresses []string,
 ) (auth_models.LoginResponse, error) {
-	availableMethods, passkeys := resolveConfiguredTwoFactorMethods(ctx, userPayload)
+	availableMethods, passkeys, err := resolveConfiguredTwoFactorMethods(ctx, userPayload)
+	if err != nil {
+		return auth_models.LoginResponse{}, err
+	}
 
 	preAuthToken, errToken := pkg.GenerateToken(userPayload.ID, input.FirebaseInstallationID, 300)
 	if errToken != nil {
@@ -126,7 +130,7 @@ func initiateLoginTwoFactorChallenge(
 		if len(availableMethods) == 1 {
 			go func(targetID int64, email, username, code string) {
 				bgCtx := context.Background()
-				_ = email_service.DispatchEmail(
+				errEmail := email_service.DispatchEmail(
 					bgCtx,
 					targetID,
 					email,
@@ -137,6 +141,9 @@ func initiateLoginTwoFactorChallenge(
 						"Code":     code,
 					},
 				)
+				if errEmail != nil {
+					numan_log.Error(bgCtx).Err(errEmail).Int64("user_id", targetID).Str("template", "two_factor_code").Msg("Write-Behind : Échec de la mise en file d'attente de l'email 2FA")
+				}
 			}(userPayload.ID, userPayload.Email, userPayload.Username, rawCode)
 			response.Message = "Un code de vérification a été envoyé par email."
 		}
@@ -196,7 +203,7 @@ func initiateSignupTwoFactorChallenge(
 
 		go func(targetID int64, email, username, code string) {
 			bgCtx := context.Background()
-			_ = email_service.DispatchEmail(
+			errEmail := email_service.DispatchEmail(
 				bgCtx,
 				targetID,
 				email,
@@ -207,6 +214,9 @@ func initiateSignupTwoFactorChallenge(
 					"Code":     code,
 				},
 			)
+			if errEmail != nil {
+				numan_log.Error(bgCtx).Err(errEmail).Int64("user_id", targetID).Str("template", "two_factor_code").Msg("Write-Behind : Échec de la mise en file d'attente de l'email 2FA")
+			}
 		}(pendingUserID, input.Email, input.Username, rawCode)
 
 		response.Message = "Un code de vérification a été envoyé par email pour finaliser votre inscription."

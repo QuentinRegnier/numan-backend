@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,7 +22,7 @@ func TestFuncLoadUsersPaginated(t *testing.T) {
 
 		users, err := FuncLoadUsersPaginated(ctx, 10, 0)
 		assert.Nil(t, users)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	cols := []string{
@@ -30,12 +31,12 @@ func TestFuncLoadUsersPaginated(t *testing.T) {
 	}
 
 	t.Run("returns_users_paginated_successfully", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			assert.Contains(t, query, "auth.func_load_users_paginated")
 			require.Len(t, args, 2)
 			assert.Equal(t, int64(10), args[0].Value)
 			assert.Equal(t, int64(0), args[1].Value)
-			return newMockRows(cols, [][]driver.Value{
+			return test.NewMockRows(cols, [][]driver.Value{
 				{int64(1), "alice", "Alice", "Dupont", int64(50), "Dev", 1, 0, 1},
 				{int64(2), "bob", "Bob", "Martin", nil, nil, 0, 1, 0},
 			}), nil
@@ -55,8 +56,8 @@ func TestFuncLoadUsersPaginated(t *testing.T) {
 	})
 
 	t.Run("handles_empty_users", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{}), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{}), nil
 		}, nil)
 
 		users, err := FuncLoadUsersPaginated(ctx, 10, 0)
@@ -66,24 +67,24 @@ func TestFuncLoadUsersPaginated(t *testing.T) {
 	})
 
 	t.Run("handles_database_query_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return nil, errors.New("db error")
 		}, nil)
 
 		users, err := FuncLoadUsersPaginated(ctx, 10, 0)
 		assert.Nil(t, users)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	t.Run("handles_row_iteration_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRowsWithErr(cols, [][]driver.Value{
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRowsWithErr(cols, [][]driver.Value{
 				{int64(1), "alice", "Alice", "Dupont", nil, nil, 1, 0, 0},
 			}, errors.New("iter err")), nil
 		}, nil)
 
 		users, err := FuncLoadUsersPaginated(ctx, 10, 0)
 		assert.Nil(t, users)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 }

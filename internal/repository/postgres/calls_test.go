@@ -8,6 +8,7 @@ import (
 	"time"
 
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,8 +40,8 @@ func TestCalls_ScanPosts(t *testing.T) {
 	}
 
 	t.Run("scans_valid_post_row_successfully", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{validRow}), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{validRow}), nil
 		}, nil)
 
 		rows, err := infradb.PostgresDB.QueryContext(ctx, "SELECT * FROM posts")
@@ -58,8 +59,8 @@ func TestCalls_ScanPosts(t *testing.T) {
 	})
 
 	t.Run("returns_empty_slice_when_rows_empty", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{}), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{}), nil
 		}, nil)
 
 		rows, err := infradb.PostgresDB.QueryContext(ctx, "SELECT * FROM posts")
@@ -80,8 +81,8 @@ func TestCalls_ScanPosts(t *testing.T) {
 			false, "{}", 1, float64(0), float64(0), 0,
 		}
 
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{corruptedRow, validRow}), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{corruptedRow, validRow}), nil
 		}, nil)
 
 		rows, err := infradb.PostgresDB.QueryContext(ctx, "SELECT * FROM posts")
@@ -95,8 +96,8 @@ func TestCalls_ScanPosts(t *testing.T) {
 	})
 
 	t.Run("handles_rows_err_with_structured_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRowsWithErr(cols, [][]driver.Value{validRow}, errors.New("stream truncated")), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRowsWithErr(cols, [][]driver.Value{validRow}, errors.New("stream truncated")), nil
 		}, nil)
 
 		rows, err := infradb.PostgresDB.QueryContext(ctx, "SELECT * FROM posts")
@@ -105,6 +106,6 @@ func TestCalls_ScanPosts(t *testing.T) {
 
 		posts, err := scanPosts(ctx, rows)
 		assert.Nil(t, posts)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 }

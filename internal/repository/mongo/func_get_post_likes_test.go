@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
@@ -11,7 +12,7 @@ import (
 )
 
 func TestMongoGetPostLikes(t *testing.T) {
-	defer resetCollections()()
+	defer test.ResetCollections()
 
 	ctx := context.Background()
 
@@ -19,23 +20,23 @@ func TestMongoGetPostLikes(t *testing.T) {
 	Likes = nil
 	likes, err := MongoGetPostLikes(ctx, 123, 10, 0)
 	assert.Nil(t, likes)
-	assertDatabaseError(t, err)
+	test.AssertDatabaseError_Mongo(t, err)
 
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	// 2. DB error
 	mt.Run("DB error", func(mt *mtest.T) {
-		Likes = newMockCollection(mt, "likes", nil)
+		Likes = test.NewMockCollection(mt, "likes", nil)
 		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 96, Message: "failed"}))
 
 		likes, err := MongoGetPostLikes(ctx, 123, 10, 0)
 		assert.Nil(mt, likes)
-		assertDatabaseError(mt, err)
+		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 3. Empty result
 	mt.Run("Empty result", func(mt *mtest.T) {
-		Likes = newMockCollection(mt, "likes", nil)
+		Likes = test.NewMockCollection(mt, "likes", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.likes", mtest.FirstBatch))
 
 		likes, err := MongoGetPostLikes(ctx, 123, 10, 0)
@@ -46,7 +47,7 @@ func TestMongoGetPostLikes(t *testing.T) {
 
 	// 4. Success with various user ID types
 	mt.Run("Success with user IDs", func(mt *mtest.T) {
-		Likes = newMockCollection(mt, "likes", nil)
+		Likes = test.NewMockCollection(mt, "likes", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.likes", mtest.FirstBatch,
 			bson.D{{Key: "user_id", Value: float64(101)}},
 			bson.D{{Key: "user_id", Value: int64(102)}},

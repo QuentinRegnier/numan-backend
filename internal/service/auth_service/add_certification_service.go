@@ -65,7 +65,11 @@ func AddCertification(ctx context.Context, userID int64, input auth_models.AddCe
 	// A. Éviction du cache L1 (RAM).
 	// Comme vu dans ton architecture, on supprime la clé en RAM pour forcer le prochain GET
 	// à recharger la donnée fraîche depuis Mongo/Postgres et l'hydrater avec ses nouveaux badges.
-	_ = redis.UsersLite.DeleteObject(ctx, fmt.Sprintf("%d", userID))
+	errCache := redis.UsersLite.DeleteObject(ctx, fmt.Sprintf("%d", userID))
+	if errCache != nil {
+		numan_log.Error(ctx).Err(errCache).Int64("user_id", userID).Msg("CRITICAL: Impossible d'évincer l'utilisateur du cache L1 UsersLite")
+		return auth_models.AddCertificationOutput{}, numan_error.NewInternal(errCache)
+	}
 
 	// B. Write-Behind (Propagation Asynchrone vers L2 MongoDB et L3 PostgreSQL)
 	errQueue := redis.EnqueueDB(ctx, userPayload.ID, 0, redis.EntityUser, redis.ActionUpdate, userPayload, redis.TargetAll)

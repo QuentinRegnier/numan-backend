@@ -8,6 +8,7 @@ import (
 	"time"
 
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,7 +23,7 @@ func TestFuncGetMember(t *testing.T) {
 
 		m, err := FuncGetMember(ctx, 10, 20)
 		assert.Empty(t, m.ID)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	cols := []string{
@@ -33,12 +34,12 @@ func TestFuncGetMember(t *testing.T) {
 
 	t.Run("returns_member_successfully", func(t *testing.T) {
 		settingsJSON := `{"is_muted":1,"pinned":1}`
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			assert.Contains(t, query, "messaging.func_get_member")
 			require.Len(t, args, 2)
 			assert.Equal(t, int64(10), args[0].Value)
 			assert.Equal(t, int64(20), args[1].Value)
-			return newMockRows(cols, [][]driver.Value{
+			return test.NewMockRows(cols, [][]driver.Value{
 				{int64(1), int64(10), int64(20), 1, settingsJSON, now, 3, int64(100), int64(150), now, now},
 			}), nil
 		}, nil)
@@ -57,34 +58,34 @@ func TestFuncGetMember(t *testing.T) {
 	})
 
 	t.Run("handles_member_not_found", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{}), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{}), nil
 		}, nil)
 
 		m, err := FuncGetMember(ctx, 10, 999)
 		assert.Empty(t, m.ID)
-		assertNotFoundError(t, err, "MEMBER_NOT_FOUND")
+		test.AssertNotFoundError_Postgres(t, err, "MEMBER_NOT_FOUND")
 	})
 
 	t.Run("handles_invalid_settings_json", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{
 				{int64(1), int64(10), int64(20), 1, "not-json", now, 0, nil, nil, now, now},
 			}), nil
 		}, nil)
 
 		m, err := FuncGetMember(ctx, 10, 20)
 		assert.Empty(t, m.ID)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	t.Run("handles_database_query_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return nil, errors.New("db error")
 		}, nil)
 
 		m, err := FuncGetMember(ctx, 10, 20)
 		assert.Empty(t, m.ID)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 }

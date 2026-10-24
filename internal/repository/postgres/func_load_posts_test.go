@@ -8,6 +8,7 @@ import (
 	"time"
 
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,7 +23,7 @@ func TestFuncLoadPosts(t *testing.T) {
 
 		posts, err := FuncLoadPosts(ctx, []int64{1, 2}, 10, 0)
 		assert.Nil(t, posts)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	cols := []string{
@@ -34,12 +35,12 @@ func TestFuncLoadPosts(t *testing.T) {
 	now := time.Now()
 
 	t.Run("returns_posts_successfully", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			assert.Contains(t, query, "content.func_load_posts")
 			require.Len(t, args, 3)
 			assert.Equal(t, int64(10), args[1].Value)
 			assert.Equal(t, int64(0), args[2].Value)
-			return newMockRows(cols, [][]driver.Value{
+			return test.NewMockRows(cols, [][]driver.Value{
 				{
 					int64(101), int64(202), "Loaded post", "{tag}", "{}", "{}",
 					"{}", 1, 0, nil, now.UnixMilli(),
@@ -57,10 +58,10 @@ func TestFuncLoadPosts(t *testing.T) {
 	})
 
 	t.Run("passes_nil_when_post_ids_slice_is_empty", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			require.Len(t, args, 3)
 			assert.Nil(t, args[0].Value)
-			return newMockRows(cols, [][]driver.Value{}), nil
+			return test.NewMockRows(cols, [][]driver.Value{}), nil
 		}, nil)
 
 		posts, err := FuncLoadPosts(ctx, []int64{}, 10, 0)
@@ -70,12 +71,12 @@ func TestFuncLoadPosts(t *testing.T) {
 	})
 
 	t.Run("handles_database_query_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return nil, errors.New("db failure")
 		}, nil)
 
 		posts, err := FuncLoadPosts(ctx, []int64{101}, 10, 0)
 		assert.Nil(t, posts)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 }

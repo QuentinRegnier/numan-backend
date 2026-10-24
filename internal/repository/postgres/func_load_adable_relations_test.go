@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,17 +22,17 @@ func TestFuncLoadAddableRelations(t *testing.T) {
 
 		rels, err := FuncLoadAddableRelations(ctx, 10)
 		assert.Nil(t, rels)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	cols := []string{"target_id", "state"}
 
 	t.Run("returns_addable_relations_successfully", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			assert.Contains(t, query, "auth.func_load_addable_relations")
 			require.Len(t, args, 1)
 			assert.Equal(t, int64(10), args[0].Value)
-			return newMockRows(cols, [][]driver.Value{
+			return test.NewMockRows(cols, [][]driver.Value{
 				{int64(101), 1},
 				{int64(102), 2},
 			}), nil
@@ -46,8 +47,8 @@ func TestFuncLoadAddableRelations(t *testing.T) {
 	})
 
 	t.Run("handles_empty_relations", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{}), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{}), nil
 		}, nil)
 
 		rels, err := FuncLoadAddableRelations(ctx, 10)
@@ -57,22 +58,22 @@ func TestFuncLoadAddableRelations(t *testing.T) {
 	})
 
 	t.Run("handles_database_query_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return nil, errors.New("db error")
 		}, nil)
 
 		rels, err := FuncLoadAddableRelations(ctx, 10)
 		assert.Nil(t, rels)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	t.Run("handles_row_iteration_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRowsWithErr(cols, [][]driver.Value{{int64(101), 1}}, errors.New("iter err")), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRowsWithErr(cols, [][]driver.Value{{int64(101), 1}}, errors.New("iter err")), nil
 		}, nil)
 
 		rels, err := FuncLoadAddableRelations(ctx, 10)
 		assert.Nil(t, rels)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 }

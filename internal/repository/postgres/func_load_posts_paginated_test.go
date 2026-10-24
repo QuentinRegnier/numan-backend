@@ -8,6 +8,7 @@ import (
 	"time"
 
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,7 +23,7 @@ func TestFuncLoadPostsPaginated(t *testing.T) {
 
 		posts, err := FuncLoadPostsPaginated(ctx, 10, 0)
 		assert.Nil(t, posts)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	cols := []string{
@@ -34,12 +35,12 @@ func TestFuncLoadPostsPaginated(t *testing.T) {
 	now := time.Now()
 
 	t.Run("returns_paginated_posts_successfully", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			assert.Contains(t, query, "content.func_load_posts_paginated")
 			require.Len(t, args, 2)
 			assert.Equal(t, int64(10), args[0].Value)
 			assert.Equal(t, int64(0), args[1].Value)
-			return newMockRows(cols, [][]driver.Value{
+			return test.NewMockRows(cols, [][]driver.Value{
 				{
 					int64(101), int64(202), "Paginated post", "{tag}", "{}", "{}",
 					"{}", 1, 0, "Paris", now.UnixMilli(),
@@ -57,8 +58,8 @@ func TestFuncLoadPostsPaginated(t *testing.T) {
 	})
 
 	t.Run("handles_empty_posts", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{}), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{}), nil
 		}, nil)
 
 		posts, err := FuncLoadPostsPaginated(ctx, 10, 0)
@@ -68,12 +69,12 @@ func TestFuncLoadPostsPaginated(t *testing.T) {
 	})
 
 	t.Run("handles_database_query_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return nil, errors.New("query failed")
 		}, nil)
 
 		posts, err := FuncLoadPostsPaginated(ctx, 10, 0)
 		assert.Nil(t, posts)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 }

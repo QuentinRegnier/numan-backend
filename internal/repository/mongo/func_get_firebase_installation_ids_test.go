@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
@@ -11,7 +12,7 @@ import (
 )
 
 func TestMongoGetFirebaseInstallationIDs(t *testing.T) {
-	defer resetCollections()()
+	defer test.ResetCollections()
 
 	ctx := context.Background()
 
@@ -19,23 +20,23 @@ func TestMongoGetFirebaseInstallationIDs(t *testing.T) {
 	Sessions = nil
 	tokens, err := MongoGetFirebaseInstallationIDs(ctx, 123)
 	assert.Nil(t, tokens)
-	assertDatabaseError(t, err)
+	test.AssertDatabaseError_Mongo(t, err)
 
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	// 2. DB error
 	mt.Run("DB error", func(mt *mtest.T) {
-		Sessions = newMockCollection(mt, "sessions", nil)
+		Sessions = test.NewMockCollection(mt, "sessions", nil)
 		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 96, Message: "failed"}))
 
 		tokens, err := MongoGetFirebaseInstallationIDs(ctx, 123)
 		assert.Nil(mt, tokens)
-		assertDatabaseError(mt, err)
+		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 3. Empty result returns non-nil empty slice
 	mt.Run("Empty result", func(mt *mtest.T) {
-		Sessions = newMockCollection(mt, "sessions", nil)
+		Sessions = test.NewMockCollection(mt, "sessions", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.sessions", mtest.FirstBatch))
 
 		tokens, err := MongoGetFirebaseInstallationIDs(ctx, 456)
@@ -46,7 +47,7 @@ func TestMongoGetFirebaseInstallationIDs(t *testing.T) {
 
 	// 4. Success with tokens
 	mt.Run("Success with tokens", func(mt *mtest.T) {
-		Sessions = newMockCollection(mt, "sessions", nil)
+		Sessions = test.NewMockCollection(mt, "sessions", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.sessions", mtest.FirstBatch,
 			bson.D{{Key: "firebase_installation_id", Value: "token-abc"}},
 			bson.D{{Key: "firebase_installation_id", Value: "token-def"}},

@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
@@ -16,41 +17,41 @@ func TestCollection_NilReceiver(t *testing.T) {
 
 	// Set
 	err := nilColl.Set(map[string]any{"id": int64(1)})
-	assertDatabaseError(t, err)
+	test.AssertDatabaseError_Mongo(t, err)
 
 	// Get
 	docs, err := nilColl.Get(map[string]any{"id": int64(1)}, nil)
 	assert.Nil(t, docs)
-	assertDatabaseError(t, err)
+	test.AssertDatabaseError_Mongo(t, err)
 
 	// Delete
 	err = nilColl.Delete(map[string]any{"id": int64(1)})
-	assertDatabaseError(t, err)
+	test.AssertDatabaseError_Mongo(t, err)
 
 	// update
 	err = nilColl.update(map[string]any{"id": int64(1)}, map[string]any{"id": int64(1)})
-	assertDatabaseError(t, err)
+	test.AssertDatabaseError_Mongo(t, err)
 
 	// GetPaginated
 	docs, err = nilColl.GetPaginated(map[string]any{"id": int64(1)}, nil, 0, 10)
 	assert.Nil(t, docs)
-	assertDatabaseError(t, err)
+	test.AssertDatabaseError_Mongo(t, err)
 
 	// validate
 	err = nilColl.validate(context.Background(), map[string]any{"id": int64(1)}, false)
-	assertDatabaseError(t, err)
+	test.AssertDatabaseError_Mongo(t, err)
 
 	// Collection with nil DB
 	collNilDB := &Collection{Name: "test", DB: nil}
-	assertDatabaseError(t, collNilDB.Set(map[string]any{"id": int64(1)}))
+	test.AssertDatabaseError_Mongo(t, collNilDB.Set(map[string]any{"id": int64(1)}))
 	docs, err = collNilDB.Get(map[string]any{"id": int64(1)}, nil)
 	assert.Nil(t, docs)
-	assertDatabaseError(t, err)
-	assertDatabaseError(t, collNilDB.Delete(map[string]any{"id": int64(1)}))
-	assertDatabaseError(t, collNilDB.update(map[string]any{"id": int64(1)}, map[string]any{"id": int64(1)}))
+	test.AssertDatabaseError_Mongo(t, err)
+	test.AssertDatabaseError_Mongo(t, collNilDB.Delete(map[string]any{"id": int64(1)}))
+	test.AssertDatabaseError_Mongo(t, collNilDB.update(map[string]any{"id": int64(1)}, map[string]any{"id": int64(1)}))
 	docs, err = collNilDB.GetPaginated(map[string]any{"id": int64(1)}, nil, 0, 10)
 	assert.Nil(t, docs)
-	assertDatabaseError(t, err)
+	test.AssertDatabaseError_Mongo(t, err)
 }
 
 func TestCollection_Validate(t *testing.T) {
@@ -62,11 +63,11 @@ func TestCollection_Validate(t *testing.T) {
 
 	// Missing required field (partial = false)
 	err := coll.validate(context.Background(), map[string]any{"id": int64(1)}, false)
-	assertDatabaseError(t, err)
+	test.AssertDatabaseError_Mongo(t, err)
 
 	// Inconsistent type
 	err = coll.validate(context.Background(), map[string]any{"id": "not an int", "name": "foo"}, false)
-	assertDatabaseError(t, err)
+	test.AssertDatabaseError_Mongo(t, err)
 
 	// Partial valid
 	err = coll.validate(context.Background(), map[string]any{"id": int64(2)}, true)
@@ -86,12 +87,12 @@ func TestCollection_Operations(t *testing.T) {
 	}
 
 	mt.Run("Set success and error", func(mt *mtest.T) {
-		coll := newMockCollection(mt, "items", schema)
+		coll := test.NewMockCollection(mt, "items", schema)
 
 		// DB error on UpdateOne
 		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 11000, Message: "duplicate"}))
 		err := coll.Set(map[string]any{"id": int64(1), "name": "foo"})
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Mongo(t, err)
 
 		// DB success
 		mt.AddMockResponses(mtest.CreateSuccessResponse())
@@ -100,13 +101,13 @@ func TestCollection_Operations(t *testing.T) {
 	})
 
 	mt.Run("Get success, empty and error", func(mt *mtest.T) {
-		coll := newMockCollection(mt, "items", schema)
+		coll := test.NewMockCollection(mt, "items", schema)
 
 		// DB error on Find
 		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 96, Message: "operation failed"}))
 		docs, err := coll.Get(map[string]any{"id": int64(1)}, nil)
 		assert.Nil(t, docs)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Mongo(t, err)
 
 		// DB empty result returns non-nil empty slice
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.items", mtest.FirstBatch))
@@ -127,12 +128,12 @@ func TestCollection_Operations(t *testing.T) {
 	})
 
 	mt.Run("Delete success and error", func(mt *mtest.T) {
-		coll := newMockCollection(mt, "items", schema)
+		coll := test.NewMockCollection(mt, "items", schema)
 
 		// DB error
 		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 96, Message: "delete failed"}))
 		err := coll.Delete(map[string]any{"id": int64(1)})
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Mongo(t, err)
 
 		// DB success
 		mt.AddMockResponses(mtest.CreateSuccessResponse())
@@ -141,16 +142,16 @@ func TestCollection_Operations(t *testing.T) {
 	})
 
 	mt.Run("update success, validation error and error", func(mt *mtest.T) {
-		coll := newMockCollection(mt, "items", schema)
+		coll := test.NewMockCollection(mt, "items", schema)
 
 		// Validation error
 		err := coll.update(map[string]any{"id": int64(1)}, map[string]any{"name": 12345})
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Mongo(t, err)
 
 		// DB error
 		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 96, Message: "update failed"}))
 		err = coll.update(map[string]any{"id": int64(1)}, map[string]any{"name": "new"})
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Mongo(t, err)
 
 		// DB success
 		mt.AddMockResponses(mtest.CreateSuccessResponse())
@@ -159,13 +160,13 @@ func TestCollection_Operations(t *testing.T) {
 	})
 
 	mt.Run("GetPaginated success, empty and error", func(mt *mtest.T) {
-		coll := newMockCollection(mt, "items", schema)
+		coll := test.NewMockCollection(mt, "items", schema)
 
 		// DB error
 		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 96, Message: "paginated failed"}))
 		docs, err := coll.GetPaginated(map[string]any{"id": int64(1)}, nil, 0, 10)
 		assert.Nil(t, docs)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Mongo(t, err)
 
 		// Empty result
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.items", mtest.FirstBatch))

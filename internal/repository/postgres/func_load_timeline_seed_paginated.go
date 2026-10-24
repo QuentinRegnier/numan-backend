@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 )
 
@@ -38,7 +39,11 @@ func FuncLoadTimelineSeedPaginated(ctx context.Context, limit, offset int) ([]ti
 			err,
 		)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			numan_log.Error(ctx).Err(err).Msg("Impossible de fermer le curseur SQL, risque de fuite de connexion au pool")
+		}
+	}()
 
 	seeds := make([]timelineSeedPayload, 0)
 	for rows.Next() {

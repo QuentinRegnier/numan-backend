@@ -8,6 +8,7 @@ import (
 	"time"
 
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,7 +23,7 @@ func TestFuncGetPasskeyByCredentialID(t *testing.T) {
 
 		p, err := FuncGetPasskeyByCredentialID(ctx, "cred123")
 		assert.Empty(t, p.ID)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	cols := []string{
@@ -32,11 +33,11 @@ func TestFuncGetPasskeyByCredentialID(t *testing.T) {
 	now := time.Now().UnixMilli()
 
 	t.Run("returns_passkey_successfully", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			assert.Contains(t, query, "auth.func_get_passkey_by_credential_id")
 			require.Len(t, args, 1)
 			assert.Equal(t, "cred123", args[0].Value)
-			return newMockRows(cols, [][]driver.Value{
+			return test.NewMockRows(cols, [][]driver.Value{
 				{int64(1), int64(10), "cred123", []byte("pubkey"), "none", []byte("aaguid"), int64(5), "MacBook", "{usb,ble}", now, now},
 			}), nil
 		}, nil)
@@ -53,8 +54,8 @@ func TestFuncGetPasskeyByCredentialID(t *testing.T) {
 	})
 
 	t.Run("handles_no_rows_returning_empty_payload_and_nil_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{}), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{}), nil
 		}, nil)
 
 		p, err := FuncGetPasskeyByCredentialID(ctx, "unknown")
@@ -63,12 +64,12 @@ func TestFuncGetPasskeyByCredentialID(t *testing.T) {
 	})
 
 	t.Run("handles_database_query_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return nil, errors.New("query error")
 		}, nil)
 
 		p, err := FuncGetPasskeyByCredentialID(ctx, "cred123")
 		assert.Empty(t, p.ID)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 }

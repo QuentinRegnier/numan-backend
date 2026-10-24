@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -12,7 +13,7 @@ import (
 )
 
 func TestMongoCheckUnique(t *testing.T) {
-	defer resetCollections()()
+	defer test.ResetCollections()
 
 	ctx := context.Background()
 
@@ -20,26 +21,26 @@ func TestMongoCheckUnique(t *testing.T) {
 	Users = nil
 	exists, err := MongoCheckUnique(ctx, redis.EntityUser, "email", "test@test.com")
 	assert.False(t, exists)
-	assertDatabaseError(t, err)
+	test.AssertDatabaseError_Mongo(t, err)
 
 	// 2. Unsupported entity
 	exists, err = MongoCheckUnique(ctx, redis.EntityType("invalid"), "email", "test@test.com")
 	assert.False(t, exists)
-	assertDatabaseError(t, err)
+	test.AssertDatabaseError_Mongo(t, err)
 
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 
 	mt.Run("DB error", func(mt *mtest.T) {
-		Users = newMockCollection(mt, "users", nil)
+		Users = test.NewMockCollection(mt, "users", nil)
 		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 96, Message: "query failure"}))
 
 		exists, err := MongoCheckUnique(ctx, redis.EntityUser, "username", "john")
 		assert.False(mt, exists)
-		assertDatabaseError(mt, err)
+		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	mt.Run("Found value (exists = true)", func(mt *mtest.T) {
-		Users = newMockCollection(mt, "users", nil)
+		Users = test.NewMockCollection(mt, "users", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.users", mtest.FirstBatch, bson.D{
 			{Key: "id", Value: int64(100)},
 		}))
@@ -50,7 +51,7 @@ func TestMongoCheckUnique(t *testing.T) {
 	})
 
 	mt.Run("Not found value (exists = false)", func(mt *mtest.T) {
-		Users = newMockCollection(mt, "users", nil)
+		Users = test.NewMockCollection(mt, "users", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.users", mtest.FirstBatch))
 
 		exists, err := MongoCheckUnique(ctx, redis.EntityUser, "username", "nobody")

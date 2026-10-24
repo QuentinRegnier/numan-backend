@@ -212,7 +212,7 @@ func CreateUser(ctx context.Context, input auth_models.SignUpInput, ipAddress st
 	// Exécuté dans une goroutine dédiée avec context.Background() pour ne pas impacter le temps de réponse HTTP (< 5ms)
 	go func(targetID int64, email, username string) {
 		bgCtx := context.Background()
-		_ = email_service.DispatchEmail(
+		errEmail := email_service.DispatchEmail(
 			bgCtx,
 			targetID,
 			email,
@@ -222,6 +222,9 @@ func CreateUser(ctx context.Context, input auth_models.SignUpInput, ipAddress st
 				"Username": username,
 			},
 		)
+		if errEmail != nil {
+			numan_log.Error(bgCtx).Err(errEmail).Int64("user_id", targetID).Str("template", "welcome").Msg("Write-Behind : Échec de la mise en file d'attente de l'email de bienvenue")
+		}
 	}(userPayload.ID, userPayload.Email, userPayload.Username)
 
 	return auth_models.SignUpResponse{

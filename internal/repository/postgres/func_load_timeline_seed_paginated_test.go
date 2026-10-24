@@ -8,6 +8,7 @@ import (
 	"time"
 
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,19 +23,19 @@ func TestFuncLoadTimelineSeedPaginated(t *testing.T) {
 
 		seeds, err := FuncLoadTimelineSeedPaginated(ctx, 10, 0)
 		assert.Nil(t, seeds)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	cols := []string{"post_id", "user_id", "created_at"}
 	now := time.Now()
 
 	t.Run("returns_timeline_seed_successfully", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			assert.Contains(t, query, "content.func_load_timeline_seed_paginated")
 			require.Len(t, args, 2)
 			assert.Equal(t, int64(10), args[0].Value)
 			assert.Equal(t, int64(0), args[1].Value)
-			return newMockRows(cols, [][]driver.Value{
+			return test.NewMockRows(cols, [][]driver.Value{
 				{int64(1001), int64(201), now},
 				{int64(1002), int64(202), now},
 			}), nil
@@ -48,8 +49,8 @@ func TestFuncLoadTimelineSeedPaginated(t *testing.T) {
 	})
 
 	t.Run("handles_empty_seeds", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{}), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{}), nil
 		}, nil)
 
 		seeds, err := FuncLoadTimelineSeedPaginated(ctx, 10, 0)
@@ -59,24 +60,24 @@ func TestFuncLoadTimelineSeedPaginated(t *testing.T) {
 	})
 
 	t.Run("handles_database_query_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return nil, errors.New("query failed")
 		}, nil)
 
 		seeds, err := FuncLoadTimelineSeedPaginated(ctx, 10, 0)
 		assert.Nil(t, seeds)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	t.Run("handles_row_iteration_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRowsWithErr(cols, [][]driver.Value{
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRowsWithErr(cols, [][]driver.Value{
 				{int64(1001), int64(201), now},
 			}, errors.New("iter err")), nil
 		}, nil)
 
 		seeds, err := FuncLoadTimelineSeedPaginated(ctx, 10, 0)
 		assert.Nil(t, seeds)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 }

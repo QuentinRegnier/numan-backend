@@ -8,6 +8,7 @@ import (
 	"time"
 
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,7 +23,7 @@ func TestFuncLoadUser(t *testing.T) {
 
 		u, err := FuncLoadUser(ctx, 1, "", "", "")
 		assert.Empty(t, u.ID)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	cols := []string{
@@ -37,12 +38,12 @@ func TestFuncLoadUser(t *testing.T) {
 	now := time.Now()
 
 	t.Run("returns_user_successfully", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			assert.Contains(t, query, "auth.func_load_user")
 			require.Len(t, args, 4)
 			assert.Equal(t, int64(1), args[0].Value)
 			assert.Equal(t, "alice", args[1].Value)
-			return newMockRows(cols, [][]driver.Value{
+			return test.NewMockRows(cols, [][]driver.Value{
 				{
 					int64(1), "alice", "alice@example.com", true,
 					"+33123456789", true, "hash123",
@@ -65,8 +66,8 @@ func TestFuncLoadUser(t *testing.T) {
 	})
 
 	t.Run("handles_user_not_found_returning_empty_payload_and_nil_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{}), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{}), nil
 		}, nil)
 
 		u, err := FuncLoadUser(ctx, 999, "", "", "")
@@ -75,12 +76,12 @@ func TestFuncLoadUser(t *testing.T) {
 	})
 
 	t.Run("handles_database_query_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return nil, errors.New("db error")
 		}, nil)
 
 		u, err := FuncLoadUser(ctx, 1, "", "", "")
 		assert.Empty(t, u.ID)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 }

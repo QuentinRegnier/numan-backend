@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,15 +22,15 @@ func TestFuncLoadAllUserIdentifiers(t *testing.T) {
 
 		idents, err := FuncLoadAllUserIdentifiers(ctx)
 		assert.Nil(t, idents)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	cols := []string{"username", "email", "phone"}
 
 	t.Run("returns_identifiers_successfully", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			assert.Contains(t, query, "auth.func_load_all_user_identifiers")
-			return newMockRows(cols, [][]driver.Value{
+			return test.NewMockRows(cols, [][]driver.Value{
 				{"alice", "alice@example.com", "+33123456789"},
 				{"bob", nil, nil},
 			}), nil
@@ -52,8 +53,8 @@ func TestFuncLoadAllUserIdentifiers(t *testing.T) {
 	})
 
 	t.Run("handles_empty_identifiers", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{}), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{}), nil
 		}, nil)
 
 		idents, err := FuncLoadAllUserIdentifiers(ctx)
@@ -63,22 +64,22 @@ func TestFuncLoadAllUserIdentifiers(t *testing.T) {
 	})
 
 	t.Run("handles_database_query_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return nil, errors.New("db error")
 		}, nil)
 
 		idents, err := FuncLoadAllUserIdentifiers(ctx)
 		assert.Nil(t, idents)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	t.Run("handles_row_iteration_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRowsWithErr(cols, [][]driver.Value{{"alice", nil, nil}}, errors.New("iter err")), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRowsWithErr(cols, [][]driver.Value{{"alice", nil, nil}}, errors.New("iter err")), nil
 		}, nil)
 
 		idents, err := FuncLoadAllUserIdentifiers(ctx)
 		assert.Nil(t, idents)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 }

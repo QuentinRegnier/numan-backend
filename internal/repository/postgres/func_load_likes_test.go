@@ -8,6 +8,7 @@ import (
 	"time"
 
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,14 +23,14 @@ func TestFuncLoadLikes(t *testing.T) {
 
 		likes, err := FuncLoadLikes(ctx, 1, 10, 20, 10, 0)
 		assert.Nil(t, likes)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	cols := []string{"id", "target_type", "target_id", "user_id", "created_at"}
 	now := time.Now().UTC()
 
 	t.Run("returns_likes_successfully", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			assert.Contains(t, query, "content.func_load_likes")
 			require.Len(t, args, 5)
 			assert.Equal(t, int64(1), args[0].Value)
@@ -37,7 +38,7 @@ func TestFuncLoadLikes(t *testing.T) {
 			assert.Equal(t, int64(20), args[2].Value)
 			assert.Equal(t, int64(10), args[3].Value)
 			assert.Equal(t, int64(0), args[4].Value)
-			return newMockRows(cols, [][]driver.Value{
+			return test.NewMockRows(cols, [][]driver.Value{
 				{int64(1), 1, int64(10), int64(20), now},
 			}), nil
 		}, nil)
@@ -53,12 +54,12 @@ func TestFuncLoadLikes(t *testing.T) {
 	})
 
 	t.Run("handles_null_filter_parameters", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			require.Len(t, args, 5)
 			assert.Nil(t, args[0].Value)
 			assert.Nil(t, args[1].Value)
 			assert.Nil(t, args[2].Value)
-			return newMockRows(cols, [][]driver.Value{}), nil
+			return test.NewMockRows(cols, [][]driver.Value{}), nil
 		}, nil)
 
 		likes, err := FuncLoadLikes(ctx, -1, 0, 0, 10, 0)
@@ -68,24 +69,24 @@ func TestFuncLoadLikes(t *testing.T) {
 	})
 
 	t.Run("handles_database_query_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return nil, errors.New("db error")
 		}, nil)
 
 		likes, err := FuncLoadLikes(ctx, 1, 10, 20, 10, 0)
 		assert.Nil(t, likes)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	t.Run("handles_row_iteration_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRowsWithErr(cols, [][]driver.Value{
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRowsWithErr(cols, [][]driver.Value{
 				{int64(1), 1, int64(10), int64(20), now},
 			}, errors.New("iter err")), nil
 		}, nil)
 
 		likes, err := FuncLoadLikes(ctx, 1, 10, 20, 10, 0)
 		assert.Nil(t, likes)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 }

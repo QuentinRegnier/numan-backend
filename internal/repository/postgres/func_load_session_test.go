@@ -8,6 +8,7 @@ import (
 	"time"
 
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,7 +19,7 @@ func TestFuncLoadSession(t *testing.T) {
 	t.Run("validates_empty_parameters_returning_bad_request", func(t *testing.T) {
 		s, err := FuncLoadSession(ctx, -1, -1, "", "")
 		assert.Empty(t, s.ID)
-		assertBadRequestError(t, err)
+		test.AssertBadRequestError_Postgres(t, err)
 	})
 
 	t.Run("handles_uninitialized_database", func(t *testing.T) {
@@ -28,7 +29,7 @@ func TestFuncLoadSession(t *testing.T) {
 
 		s, err := FuncLoadSession(ctx, 100, -1, "", "")
 		assert.Empty(t, s.ID)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	cols := []string{
@@ -40,14 +41,14 @@ func TestFuncLoadSession(t *testing.T) {
 
 	t.Run("returns_session_successfully", func(t *testing.T) {
 		devJSON := `{"platform":"iOS","os_version":"17.0"}`
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			assert.Contains(t, query, "auth.func_load_sessions")
 			require.Len(t, args, 4)
 			assert.Equal(t, int64(100), args[0].Value)
 			assert.Nil(t, args[1].Value)
 			assert.Nil(t, args[2].Value)
 			assert.Nil(t, args[3].Value)
-			return newMockRows(cols, [][]driver.Value{
+			return test.NewMockRows(cols, [][]driver.Value{
 				{int64(100), int64(1), "tok_master", "firebase_tok", []byte(devJSON), "{127.0.0.1}", now, future},
 			}), nil
 		}, nil)
@@ -63,8 +64,8 @@ func TestFuncLoadSession(t *testing.T) {
 	})
 
 	t.Run("handles_no_rows_returning_empty_payload_and_nil_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{}), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{}), nil
 		}, nil)
 
 		s, err := FuncLoadSession(ctx, 999, -1, "", "")
@@ -73,24 +74,24 @@ func TestFuncLoadSession(t *testing.T) {
 	})
 
 	t.Run("handles_invalid_device_info_json", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{
 				{int64(100), int64(1), "tok", nil, []byte("invalid-json"), "{}", now, now},
 			}), nil
 		}, nil)
 
 		s, err := FuncLoadSession(ctx, 100, -1, "", "")
 		assert.Empty(t, s.ID)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	t.Run("handles_database_query_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return nil, errors.New("db error")
 		}, nil)
 
 		s, err := FuncLoadSession(ctx, 100, -1, "", "")
 		assert.Empty(t, s.ID)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,7 +23,7 @@ func TestFuncLoadActiveMembers(t *testing.T) {
 
 		members, err := FuncLoadActiveMembers(ctx)
 		assert.Nil(t, members)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	cols := []string{
@@ -33,9 +34,9 @@ func TestFuncLoadActiveMembers(t *testing.T) {
 
 	t.Run("returns_active_members_successfully", func(t *testing.T) {
 		settingsJSON := `{"is_muted":1,"pinned":2}`
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			assert.Contains(t, query, "messaging.func_load_active_members")
-			return newMockRows(cols, [][]driver.Value{
+			return test.NewMockRows(cols, [][]driver.Value{
 				{int64(100), int64(200), 1, settingsJSON, 4, int64(10), int64(15), int64(25), now},
 			}), nil
 		}, nil)
@@ -55,20 +56,20 @@ func TestFuncLoadActiveMembers(t *testing.T) {
 	})
 
 	t.Run("handles_invalid_settings_json", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{
 				{int64(100), int64(200), 1, "corrupt-json", 0, nil, nil, nil, now},
 			}), nil
 		}, nil)
 
 		members, err := FuncLoadActiveMembers(ctx)
 		assert.Nil(t, members)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	t.Run("handles_empty_results", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{}), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{}), nil
 		}, nil)
 
 		members, err := FuncLoadActiveMembers(ctx)
@@ -78,24 +79,24 @@ func TestFuncLoadActiveMembers(t *testing.T) {
 	})
 
 	t.Run("handles_database_query_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return nil, errors.New("db error")
 		}, nil)
 
 		members, err := FuncLoadActiveMembers(ctx)
 		assert.Nil(t, members)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	t.Run("handles_row_iteration_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRowsWithErr(cols, [][]driver.Value{
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRowsWithErr(cols, [][]driver.Value{
 				{int64(100), int64(200), 1, "{}", 0, nil, nil, nil, now},
 			}, errors.New("iter err")), nil
 		}, nil)
 
 		members, err := FuncLoadActiveMembers(ctx)
 		assert.Nil(t, members)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 }

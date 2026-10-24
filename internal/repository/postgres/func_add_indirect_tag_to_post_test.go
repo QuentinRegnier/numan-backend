@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,11 +21,11 @@ func TestFuncAddIndirectTagToPost(t *testing.T) {
 		defer func() { infradb.PostgresDB = orig }()
 
 		err := FuncAddIndirectTagToPost(ctx, 100, "golang")
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	t.Run("adds_indirect_tag_successfully", func(t *testing.T) {
-		setupMockDB(t, nil, func(query string, args []driver.NamedValue) (driver.Result, error) {
+		test.SetupMockDB(t, nil, func(query string, args []driver.NamedValue) (driver.Result, error) {
 			assert.Contains(t, query, "content.func_add_indirect_tag_to_post")
 			require.Len(t, args, 2)
 			assert.Equal(t, int64(100), args[0].Value)
@@ -37,11 +38,11 @@ func TestFuncAddIndirectTagToPost(t *testing.T) {
 	})
 
 	t.Run("handles_exec_error", func(t *testing.T) {
-		setupMockDB(t, nil, func(query string, args []driver.NamedValue) (driver.Result, error) {
+		test.SetupMockDB(t, nil, func(query string, args []driver.NamedValue) (driver.Result, error) {
 			return nil, errors.New("exec failed")
 		})
 
 		err := FuncAddIndirectTagToPost(ctx, 100, "golang")
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 }

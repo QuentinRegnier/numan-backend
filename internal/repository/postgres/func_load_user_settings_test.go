@@ -8,6 +8,7 @@ import (
 	"time"
 
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,7 +23,7 @@ func TestFuncLoadUserSettings(t *testing.T) {
 
 		s, err := FuncLoadUserSettings(ctx, 1)
 		assert.Empty(t, s.ID)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	cols := []string{
@@ -32,11 +33,11 @@ func TestFuncLoadUserSettings(t *testing.T) {
 	now := time.Now()
 
 	t.Run("returns_user_settings_successfully", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			assert.Contains(t, query, "auth.func_load_user_settings")
 			require.Len(t, args, 1)
 			assert.Equal(t, int64(1), args[0].Value)
-			return newMockRows(cols, [][]driver.Value{
+			return test.NewMockRows(cols, [][]driver.Value{
 				{
 					int64(10), int64(1), []byte(`{"profile_visibility":0,"show_online_status":true}`),
 					[]byte(`{"master_push_enabled":true}`), []byte(`{"theme":2}`),
@@ -58,8 +59,8 @@ func TestFuncLoadUserSettings(t *testing.T) {
 	})
 
 	t.Run("handles_no_rows_as_default_settings", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{}), nil
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{}), nil
 		}, nil)
 
 		s, err := FuncLoadUserSettings(ctx, 999)
@@ -68,24 +69,24 @@ func TestFuncLoadUserSettings(t *testing.T) {
 	})
 
 	t.Run("handles_invalid_privacy_json", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
-			return newMockRows(cols, [][]driver.Value{
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{
 				{int64(10), int64(1), []byte("corrupt-json"), nil, nil, "{}", "{}", now.UnixMilli()},
 			}), nil
 		}, nil)
 
 		s, err := FuncLoadUserSettings(ctx, 1)
 		assert.Empty(t, s.ID)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 
 	t.Run("handles_database_query_error", func(t *testing.T) {
-		setupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return nil, errors.New("query failed")
 		}, nil)
 
 		s, err := FuncLoadUserSettings(ctx, 1)
 		assert.Empty(t, s.ID)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 }

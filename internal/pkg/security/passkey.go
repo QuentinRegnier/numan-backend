@@ -89,7 +89,10 @@ func VerifyPasskeyAssertion(
 		return 0, false, err
 	}
 
-	clientDataRaw, _ := base64.RawURLEncoding.DecodeString(clientDataB64)
+	clientDataRaw, err := base64.RawURLEncoding.DecodeString(clientDataB64)
+	if err != nil {
+		return 0, false, errors.New("signature Base64URL invalide")
+	}
 	sigBytes, err := base64.RawURLEncoding.DecodeString(signatureB64)
 	if err != nil {
 		return 0, false, errors.New("signature Base64URL invalide")

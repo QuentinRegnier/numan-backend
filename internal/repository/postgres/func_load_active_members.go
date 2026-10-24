@@ -11,6 +11,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/member_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 )
 
@@ -40,7 +41,11 @@ func FuncLoadActiveMembers(ctx context.Context) ([]activeMemberResult, error) {
 			err,
 		)
 	}
-	defer func() { _ = rows.Close() }()
+	defer func() {
+		if err := rows.Close(); err != nil {
+			numan_log.Error(ctx).Err(err).Msg("Impossible de fermer le curseur SQL, risque de fuite de connexion au pool")
+		}
+	}()
 
 	results := make([]activeMemberResult, 0)
 	for rows.Next() {

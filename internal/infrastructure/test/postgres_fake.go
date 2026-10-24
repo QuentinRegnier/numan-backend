@@ -1,4 +1,4 @@
-package postgres
+package test
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -87,14 +88,14 @@ func (r *mockRows) Next(dest []driver.Value) error {
 	return nil
 }
 
-func newMockRows(cols []string, rows [][]driver.Value) *mockRows {
+func NewMockRows(cols []string, rows [][]driver.Value) *mockRows {
 	return &mockRows{
 		cols: cols,
 		rows: rows,
 	}
 }
 
-func newMockRowsWithErr(cols []string, rows [][]driver.Value, errOnNext error) *mockRows {
+func NewMockRowsWithErr(cols []string, rows [][]driver.Value, errOnNext error) *mockRows {
 	return &mockRows{
 		cols:      cols,
 		rows:      rows,
@@ -103,7 +104,7 @@ func newMockRowsWithErr(cols []string, rows [][]driver.Value, errOnNext error) *
 }
 
 // setupMockDB replaces infradb.PostgresDB with a mock database and returns a cleanup function.
-func setupMockDB(t *testing.T, onQuery queryHandler, onExec execHandler) (*sql.DB, func()) {
+func SetupMockDB(t *testing.T, onQuery queryHandler, onExec execHandler) (*sql.DB, func()) {
 	t.Helper()
 	origDB := infradb.PostgresDB
 
@@ -115,14 +116,16 @@ func setupMockDB(t *testing.T, onQuery queryHandler, onExec execHandler) (*sql.D
 	infradb.PostgresDB = db
 
 	cleanup := func() {
-		_ = db.Close()
+		if err := db.Close(); err != nil {
+			numan_log.Error(context.Background()).Err(err).Msg("Impossible de fermer le curseur SQL, risque de fuite de connexion au pool")
+		}
 		infradb.PostgresDB = origDB
 	}
 	t.Cleanup(cleanup)
 	return db, cleanup
 }
 
-func assertDatabaseError(t *testing.T, err error) {
+func AssertDatabaseError_Postgres(t *testing.T, err error) {
 	t.Helper()
 	require.Error(t, err)
 	var appErr *numan_error.AppError
@@ -131,7 +134,7 @@ func assertDatabaseError(t *testing.T, err error) {
 	assert.Equal(t, numan_error.CodeDatabaseError, appErr.Code)
 }
 
-func assertNotFoundError(t *testing.T, err error, expectedCode string) {
+func AssertNotFoundError_Postgres(t *testing.T, err error, expectedCode string) {
 	t.Helper()
 	require.Error(t, err)
 	var appErr *numan_error.AppError
@@ -142,7 +145,7 @@ func assertNotFoundError(t *testing.T, err error, expectedCode string) {
 	}
 }
 
-func assertBadRequestError(t *testing.T, err error) {
+func AssertBadRequestError_Postgres(t *testing.T, err error) {
 	t.Helper()
 	require.Error(t, err)
 	var appErr *numan_error.AppError
