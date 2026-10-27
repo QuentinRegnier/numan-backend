@@ -20,6 +20,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/media_service"
+	"github.com/QuentinRegnier/numan-backend/internal/service/moderation_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/realtime_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/security_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
@@ -152,6 +153,7 @@ func CreateMessage(ctx context.Context, senderID int64, conversationID int64, in
 		messageAttachments = make(map[string]any)
 	}
 
+	var messageMediaIAScore float64
 	if input.MessageType == variables.MessageTypeWidget {
 		rawWidget, hasWidget := messageAttachments["widget"]
 		if !hasWidget || rawWidget == nil {
@@ -202,12 +204,23 @@ func CreateMessage(ctx context.Context, senderID int64, conversationID int64, in
 		}
 
 		if uploadedMediaID > 0 {
-			if errActivation := media_service.ActivateMediaBatch(ctx, []int64{uploadedMediaID}, senderID); errActivation != nil {
+			mediaIAScore, errActivation := media_service.ActivateMediaForMessage(ctx, uploadedMediaID, senderID)
+			if errActivation != nil {
 				return message_models.CreateMessageOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Impossible de valider ce média.", errActivation)
 			}
+			messageMediaIAScore = mediaIAScore
 		} else {
 			return message_models.CreateMessageOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant du média est invalide.", nil)
 		}
+
+		// Si le client Flutter a transmis directement ia_score dans attachments, on retient le max
+		if rawIAScore, hasIA := messageAttachments["ia_score"].(float64); hasIA {
+			messageMediaIAScore = moderation_service.AggregateMaxIAScore(messageMediaIAScore, rawIAScore)
+		}
+		if messageMediaIAScore > 0 {
+			messageAttachments["ia_score"] = messageMediaIAScore
+		}
+		input.Content = pkg.CleanStr(input.Content)
 	} else {
 		input.Content = pkg.CleanStr(input.Content)
 		if input.Content == "" && input.MessageType == variables.MessageTypeText {
@@ -219,9 +232,20 @@ func CreateMessage(ctx context.Context, senderID int64, conversationID int64, in
 	validatedMentionUserIDs := pkg.ExtractMentions(input.Content)
 
 	// ── ÉTAPE 5 : PRÉPARATION DU PAYLOAD ET CACHE IMMÉDIAT (L1) ─────────────
-
 	newMessageID := pkg.GenerateID()
 	currentTimestamp := time.Now().UTC()
+
+	// Si le message comporte une image (MessageTypeMedia), évaluation combinée (P_ia, T_auteur)
+	// pour émettre un signalement automatique Robot si le seuil de risque est dépassé.
+	if input.MessageType == variables.MessageTypeMedia && messageMediaIAScore > 0 {
+		senderTrustScore := variables.TrustScoreInitial
+		if senderLite, errLite := cache_service.GetUserLite(ctx, senderID); errLite == nil && senderLite.TrustScore > 0 {
+			senderTrustScore = senderLite.TrustScore
+		}
+		_, _, _ = moderation_service.EvaluateAndTriggerAutoReport(
+			ctx, senderID, senderTrustScore, variables.ReportTargetMessage, newMessageID, messageMediaIAScore,
+		)
+	}
 
 	allowNewReactions := true
 	if !variables.ShouldAllowNewReactions(input.MessageType) {

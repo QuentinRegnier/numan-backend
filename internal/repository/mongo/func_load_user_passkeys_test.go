@@ -1,7 +1,8 @@
-package mongo
+package mongo_test
 
 import (
 	"context"
+	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"testing"
 
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
@@ -16,9 +17,9 @@ func TestMongoLoadUserPasskeys(t *testing.T) {
 
 	ctx := context.Background()
 
-	// 1. Passkeys is nil
-	Passkeys = nil
-	passkeys, err := MongoLoadUserPasskeys(ctx, 42)
+	// 1. mongo.Passkeys is nil
+	mongo.Passkeys = nil
+	passkeys, err := mongo.MongoLoadUserPasskeys(ctx, 42)
 	assert.Nil(t, passkeys)
 	test.AssertDatabaseError_Mongo(t, err)
 
@@ -26,20 +27,20 @@ func TestMongoLoadUserPasskeys(t *testing.T) {
 
 	// 2. DB error
 	mt.Run("DB error", func(mt *mtest.T) {
-		Passkeys = test.NewMockCollection(mt, "passkeys", nil)
+		mongo.Passkeys = test.NewMockCollection(mt, "passkeys", nil)
 		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 96, Message: "failed"}))
 
-		passkeys, err := MongoLoadUserPasskeys(ctx, 42)
+		passkeys, err := mongo.MongoLoadUserPasskeys(ctx, 42)
 		assert.Nil(mt, passkeys)
 		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 3. Empty result
 	mt.Run("Empty result", func(mt *mtest.T) {
-		Passkeys = test.NewMockCollection(mt, "passkeys", nil)
+		mongo.Passkeys = test.NewMockCollection(mt, "passkeys", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.passkeys", mtest.FirstBatch))
 
-		passkeys, err := MongoLoadUserPasskeys(ctx, 42)
+		passkeys, err := mongo.MongoLoadUserPasskeys(ctx, 42)
 		require.NoError(mt, err)
 		assert.NotNil(mt, passkeys)
 		assert.Empty(mt, passkeys)
@@ -47,19 +48,19 @@ func TestMongoLoadUserPasskeys(t *testing.T) {
 
 	// 4. Deserialization error
 	mt.Run("Deserialization error", func(mt *mtest.T) {
-		Passkeys = test.NewMockCollection(mt, "passkeys", nil)
+		mongo.Passkeys = test.NewMockCollection(mt, "passkeys", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.passkeys", mtest.FirstBatch, bson.D{
 			{Key: "id", Value: "invalid_id_not_int64"},
 		}))
 
-		passkeys, err := MongoLoadUserPasskeys(ctx, 42)
+		passkeys, err := mongo.MongoLoadUserPasskeys(ctx, 42)
 		assert.Nil(mt, passkeys)
 		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 5. Success
 	mt.Run("Success", func(mt *mtest.T) {
-		Passkeys = test.NewMockCollection(mt, "passkeys", nil)
+		mongo.Passkeys = test.NewMockCollection(mt, "passkeys", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.passkeys", mtest.FirstBatch, bson.D{
 			{Key: "id", Value: int64(1)},
 			{Key: "user_id", Value: int64(42)},
@@ -67,7 +68,7 @@ func TestMongoLoadUserPasskeys(t *testing.T) {
 			{Key: "device_name", Value: "MacBook Pro"},
 		}))
 
-		passkeys, err := MongoLoadUserPasskeys(ctx, 42)
+		passkeys, err := mongo.MongoLoadUserPasskeys(ctx, 42)
 		require.NoError(mt, err)
 		require.Len(mt, passkeys, 1)
 		assert.Equal(mt, int64(1), passkeys[0].ID)

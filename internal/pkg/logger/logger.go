@@ -61,6 +61,6 @@ func CloseLogger(c context.Context) {
 	// On ignore l'erreur de fermeture volontairement pour satisfaire le linter.
 	err := asyncWriter.Close()
 	if err != nil {
-		fmt.Printf("Erreur lors de la fermeture du writer asynchrone", err)
+		fmt.Printf("Erreur lors de la fermeture du writer asynchrone: %v\n", err)
 	}
 }

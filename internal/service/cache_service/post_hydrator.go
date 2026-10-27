@@ -92,17 +92,17 @@ func getPostsFromPostgresPaginated(ctx context.Context, rankType string, offset 
 	case variables.RedisKeyStrictLikes, "likes:strict":
 		sqlQuery = `
 			SELECT p.id FROM content.posts p 
-			WHERE p.visibility != 2 
+			WHERE p.visibility >= 0 AND p.visibility < 2 
 			ORDER BY (SELECT COUNT(*) FROM content.likes l WHERE l.target_id = p.id AND l.target_type = 0) DESC, p.created_at DESC 
 			OFFSET $1 LIMIT $2`
 	case variables.RedisKeyStrictViews, "views:strict":
 		sqlQuery = `
 			SELECT p.id FROM content.posts p 
-			WHERE p.visibility != 2 
+			WHERE p.visibility >= 0 AND p.visibility < 2 
 			ORDER BY (SELECT COUNT(*) FROM content.views v WHERE v.target_id = p.id AND v.target_type = 0) DESC, p.created_at DESC 
 			OFFSET $1 LIMIT $2`
 	default:
-		sqlQuery = `SELECT id FROM content.posts WHERE visibility != 2 ORDER BY created_at DESC OFFSET $1 LIMIT $2`
+		sqlQuery = `SELECT id FROM content.posts WHERE visibility >= 0 AND visibility < 2 ORDER BY created_at DESC OFFSET $1 LIMIT $2`
 	}
 
 	if postgres.PostgresDB == nil {

@@ -73,6 +73,21 @@ func (f *FakeMinioServer) handleRequest(w http.ResponseWriter, r *http.Request) 
 	}
 	bucket := parts[0]
 
+	// Simulation du HEAD (BucketExists / ObjectExists)
+	if r.Method == http.MethodHead {
+		w.Header().Set("ETag", "\"d41d8cd98f00b204e9800998ecf8427e\"")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// Requête sur le bucket (ex: GetBucketLocation ou BucketExists)
+	if r.Method == http.MethodGet && (len(parts) == 1 || parts[1] == "") {
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></LocationConstraint>`)
+		return
+	}
+
 	// Simulation du GET Object (ex: utilisé par le Watermark Service)
 	if r.Method == http.MethodGet && len(parts) == 2 {
 		key := parts[1]
@@ -110,6 +125,7 @@ func (f *FakeMinioServer) handleRequest(w http.ResponseWriter, r *http.Request) 
 		f.mu.Unlock()
 		f.mu.RLock() // Restore Read Lock for defer
 
+		w.Header().Set("ETag", "\"d41d8cd98f00b204e9800998ecf8427e\"")
 		w.WriteHeader(http.StatusOK)
 		return
 	}

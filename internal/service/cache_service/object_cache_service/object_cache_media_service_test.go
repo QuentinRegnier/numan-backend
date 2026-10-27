@@ -24,7 +24,7 @@ func TestMediaObjectCache_LifecycleAndSoftDeleteCheck(t *testing.T) {
 		ID:          101,
 		OwnerID:     10,
 		StoragePath: "s3://numan-media/users/10/post_101.webp",
-		Visibility:  true,
+		Visibility:  1,
 		CreatedAt:   1700000001000,
 		UpdatedAt:   1700000002000,
 	}
@@ -39,18 +39,18 @@ func TestMediaObjectCache_LifecycleAndSoftDeleteCheck(t *testing.T) {
 	if got.ID != visibleMedia.ID ||
 		got.OwnerID != visibleMedia.OwnerID ||
 		got.StoragePath != visibleMedia.StoragePath ||
-		!got.Visibility ||
+		got.Visibility != visibleMedia.Visibility ||
 		got.CreatedAt != visibleMedia.CreatedAt ||
 		got.UpdatedAt != visibleMedia.UpdatedAt {
 		t.Errorf("unexpected media payload: got %+v, want %+v", got, visibleMedia)
 	}
 
-	// 2. Soft-deleted media (Visibility == false) is immediately rejected with 404 NotFound
+	// 2. Soft-deleted media (Visibility == -1) is immediately rejected with 404 NotFound
 	deletedMedia := media_models.MediaPayload{
 		ID:          102,
 		OwnerID:     10,
 		StoragePath: "s3://numan-media/users/10/deleted_102.webp",
-		Visibility:  false,
+		Visibility:  -1,
 		CreatedAt:   1700000003000,
 		UpdatedAt:   1700000004000,
 	}

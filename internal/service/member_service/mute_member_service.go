@@ -18,6 +18,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/message_service"
+	"github.com/QuentinRegnier/numan-backend/internal/service/moderation_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/realtime_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/security_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
@@ -118,6 +119,17 @@ func MuteMember(ctx context.Context, callerID int64, input member_models.MuteMem
 	if errQueue != nil {
 		numan_log.Error(ctx).Err(errQueue).Int64("user_id", targetMemberPayload.UserID).Msg("Échec du Write-Behind pour la restriction d'un membre")
 		return numan_error.NewInternal()
+	}
+
+	// Malus Trust Score si exclusion d'une communauté publique (§C.13 : -0.10)
+	if input.RestrictedUntil > domain.NowMillis() {
+		_ = moderation_service.PublishTrustScoreEvent(
+			ctx,
+			input.TargetUserID,
+			variables.TrustTriggerMutedInPublicComm,
+			input.ConversationID,
+			"Mute temporaire dans un salon ou communauté",
+		)
 	}
 
 	// SYNC LEDGER (Trigger d'invalidation mutuelle)

@@ -19,6 +19,7 @@ const (
 	MessageTypeWidget = 10
 
 	// System Actions (Clés protocolaires immuables)
+	SysActionMemberJoined         = "member_joined"
 	SysActionMemberJoinedWithLink = "member_joined_link"
 	SysActionMemberJoinedThanksTo = "memner_joined_thanks_to"
 	SysActionMemberBanned         = "member_banned"

@@ -23,7 +23,8 @@ func FuncLoadUsersPaginated(ctx context.Context, limit, offset int) ([]lite_mode
 		)
 	}
 
-	query := `SELECT id, username, first_name, last_name, profile_picture_id, bio, grade, conversation_permission, add_group_permission FROM auth.func_load_users_paginated($1, $2)`
+	query := `SELECT id, username, first_name, last_name, profile_picture_id, bio, grade, trust_score, conversation_permission, add_group_permission FROM auth.func_load_users_paginated($1, $2)`
+
 	rows, err := postgres.PostgresDB.QueryContext(ctx, query, limit, offset)
 	if err != nil {
 		return nil, numan_error.NewAppError(
@@ -44,7 +45,8 @@ func FuncLoadUsersPaginated(ctx context.Context, limit, offset int) ([]lite_mode
 		var u lite_models.UserLiteRequest
 		var pp sql.NullInt64
 		var bio sql.NullString
-		if err := rows.Scan(&u.ID, &u.Username, &u.FirstName, &u.LastName, &pp, &bio, &u.Grade, &u.ConversationPermission, &u.AddGroupPermission); err == nil {
+
+		if err := rows.Scan(&u.ID, &u.Username, &u.FirstName, &u.LastName, &pp, &bio, &u.Grade, &u.TrustScore, &u.ConversationPermission, &u.AddGroupPermission); err == nil {
 			if pp.Valid {
 				u.ProfilePictureID = pp.Int64
 			}

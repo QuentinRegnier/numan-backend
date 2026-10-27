@@ -35,6 +35,9 @@ func handleGraphUpdate(ctx context.Context, events []redis.AsyncEvent) {
 				numan_log.Warn(ctx).Err(errUnmarshal).Msg("Graph Worker : Impossible de désérialiser le payload du post")
 				continue
 			}
+			if post.Visibility < 0 || post.Visibility > 2 {
+				continue // Ignorer les posts en quarantaine (Shadowban) ou supprimés
+			}
 
 			// ── ÉTAPE 2 : FUSION DES TAGS DIRECTS ET INDIRECTS ──────────────────
 			// On combine les hashtags écrits par l'auteur et ceux ajoutés par la communauté

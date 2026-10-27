@@ -1,7 +1,8 @@
-package mongo
+package mongo_test
 
 import (
 	"context"
+	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"testing"
 	"time"
 
@@ -18,9 +19,9 @@ func TestMongoGetMember(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Uninitialized
-	Members = nil
-	Messages = nil
-	m, err := MongoGetMember(ctx, 10, 20)
+	mongo.Members = nil
+	mongo.Messages = nil
+	m, err := mongo.MongoGetMember(ctx, 10, 20)
 	assert.Empty(t, m.ID)
 	test.AssertDatabaseError_Mongo(t, err)
 
@@ -28,43 +29,43 @@ func TestMongoGetMember(t *testing.T) {
 
 	// 2. DB query error
 	mt.Run("DB query error", func(mt *mtest.T) {
-		Members = test.NewMockCollection(mt, "members", nil)
-		Messages = test.NewMockCollection(mt, "messages", nil)
+		mongo.Members = test.NewMockCollection(mt, "members", nil)
+		mongo.Messages = test.NewMockCollection(mt, "messages", nil)
 		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 96, Message: "find failed"}))
 
-		m, err := MongoGetMember(ctx, 10, 20)
+		m, err := mongo.MongoGetMember(ctx, 10, 20)
 		assert.Empty(mt, m.ID)
 		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 3. Not found
 	mt.Run("Not found (empty results)", func(mt *mtest.T) {
-		Members = test.NewMockCollection(mt, "members", nil)
-		Messages = test.NewMockCollection(mt, "messages", nil)
+		mongo.Members = test.NewMockCollection(mt, "members", nil)
+		mongo.Messages = test.NewMockCollection(mt, "messages", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.members", mtest.FirstBatch))
 
-		m, err := MongoGetMember(ctx, 10, 20)
+		m, err := mongo.MongoGetMember(ctx, 10, 20)
 		assert.Empty(mt, m.ID)
 		test.AssertNotFoundError_Mongo(mt, err, "MEMBER_NOT_FOUND")
 	})
 
 	// 4. Deserialization error
 	mt.Run("Deserialization error", func(mt *mtest.T) {
-		Members = test.NewMockCollection(mt, "members", nil)
-		Messages = test.NewMockCollection(mt, "messages", nil)
+		mongo.Members = test.NewMockCollection(mt, "members", nil)
+		mongo.Messages = test.NewMockCollection(mt, "messages", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.members", mtest.FirstBatch, bson.D{
 			{Key: "id", Value: "invalid_id_type"},
 		}))
 
-		m, err := MongoGetMember(ctx, 10, 20)
+		m, err := mongo.MongoGetMember(ctx, 10, 20)
 		assert.Empty(mt, m.ID)
 		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 5. Success
 	mt.Run("Success with recount", func(mt *mtest.T) {
-		Members = test.NewMockCollection(mt, "members", nil)
-		Messages = test.NewMockCollection(mt, "messages", nil)
+		mongo.Members = test.NewMockCollection(mt, "members", nil)
+		mongo.Messages = test.NewMockCollection(mt, "messages", nil)
 
 		nowMillis := time.Now().UnixMilli()
 		mt.AddMockResponses(
@@ -78,7 +79,7 @@ func TestMongoGetMember(t *testing.T) {
 			}),
 		)
 
-		m, err := MongoGetMember(ctx, 10, 20)
+		m, err := mongo.MongoGetMember(ctx, 10, 20)
 		require.NoError(mt, err)
 		assert.Equal(mt, int64(101), m.ID)
 		assert.Equal(mt, 2, m.UnreadCount)

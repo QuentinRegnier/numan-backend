@@ -79,7 +79,7 @@ func MarkConversationAsRead(ctx context.Context, callerID int64, conversationID 
 
 		// Règle d'infrastructure : on bloque le broadcast si > 50 membres
 		// pour prévenir la saturation réseau (Tempête d'acquittements / ACK Storm).
-		if activeParticipantCount <= variables.MaxActiveParticipantsForBroadcast {
+		if activeParticipantCount <= int64(variables.MaxActiveParticipantsForBroadcast) {
 			websocketPayload := map[string]any{
 				"conversation_id":      conversationID,
 				"user_id":              callerID,

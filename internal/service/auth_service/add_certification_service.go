@@ -15,6 +15,8 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
+	"github.com/QuentinRegnier/numan-backend/internal/service/moderation_service"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
 
 // AddCertification gère le use case complet de la vérification de licence et d'attribution du badge.
@@ -77,6 +79,15 @@ func AddCertification(ctx context.Context, userID int64, input auth_models.AddCe
 		numan_log.Error(ctx).Err(errQueue).Int64("user_id", userID).Msg("CRITICAL: Impossible d'enqueue la mise à jour des badges vers la BDD")
 		return auth_models.AddCertificationOutput{}, numan_error.NewInternal()
 	}
+
+	// Bonus Trust Score pour certification officielle d'identité (§C.13 : +0.10)
+	_ = moderation_service.PublishTrustScoreEvent(
+		ctx,
+		userPayload.ID,
+		variables.TrustTriggerVerifiedIdentity,
+		userPayload.ID,
+		"Certification officielle validée ("+badgeName+")",
+	)
 
 	// Succès
 	numan_log.Info(ctx).Int64("user_id", userID).Str("badge", badgeName).Msg("Certification validée et attribuée avec succès.")

@@ -13,7 +13,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/integration/mtest"
 )
 
-// resetCollections saves and returns a restore function for all global collections.
+// ResetCollections saves and returns a restore function for all global collections.
 func ResetCollections() func() {
 	origUsers := mongo.Users
 	origUserSettings := mongo.UserSettings

@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/media_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
 	"go.mongodb.org/mongo-driver/bson"
 )
 
@@ -28,10 +29,10 @@ func MongoLoadMedia(mediaIDs []int64) ([]media_models.MediaPayload, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// On ajoute "visibility: true" au filtre pour ignorer silencieusement les supprimés
+	// On filtre sur visibility = 1 (MediaVisibilityPublic) pour ignorer les médias supprimés ou en quarantaine
 	filter := bson.M{
 		"id":         bson.M{"$in": mediaIDs},
-		"visibility": true,
+		"visibility": variables.MediaVisibilityPublic,
 	}
 
 	cursor, err := Media.DB.Collection(Media.Name).Find(ctx, filter)

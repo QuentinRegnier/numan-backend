@@ -3,12 +3,16 @@ package media_handlers
 import (
 	"mime/multipart"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/media_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
+	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/media_service"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
 	"github.com/gin-gonic/gin"
 )
 
@@ -108,12 +112,46 @@ func UploadMediaHandler(c *gin.Context) {
 	}(file)
 
 	mediaID := pkg.GenerateID()
-	if err := media_service.UploadMedia(file, callerID, mediaID, false); err != nil {
+
+	// Détection de la Zone de Quarantaine (via le middleware ou lecture O(1) RAM)
+	forceQuarantine := c.GetBool("force_quarantine")
+	if !forceQuarantine {
+		if userLite, errLite := cache_service.GetUserLite(c.Request.Context(), callerID); errLite == nil {
+			if userLite.TrustScore > 0 && userLite.TrustScore < variables.TrustThresholdStandard {
+				forceQuarantine = true
+			}
+		}
+	}
+
+	initialStatus := variables.MediaVisibilityPending
+	if forceQuarantine {
+		initialStatus = variables.MediaVisibilityQuarantine
+	}
+
+	var iaScore float64
+	if rawIAScore := strings.TrimSpace(c.PostForm("ia_score")); rawIAScore != "" {
+		parsedScore, errParse := strconv.ParseFloat(rawIAScore, 64)
+		if errParse != nil || parsedScore < 0.0 || parsedScore > 1.0 {
+			numan_error.RespondWithError(c, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le paramètre ia_score doit être un nombre compris entre 0.0 et 1.0.", errParse))
+			return
+		}
+		iaScore = parsedScore
+	}
+
+	if err := media_service.UploadMediaWithStatusAndIAScore(file, callerID, mediaID, initialStatus, iaScore); err != nil {
 		numan_error.RespondWithError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusAccepted, media_models.UploadMediaOutput{
-		MediaID: mediaID,
-	})
+	output := media_models.UploadMediaOutput{
+		MediaID:            mediaID,
+		Status:             initialStatus,
+		IAScore:            iaScore,
+		RequiresModeration: forceQuarantine,
+	}
+	if forceQuarantine {
+		output.Message = "Compte tenu du fait que votre compte est récent, l'image envoyée va être vérifiée par un modérateur avant d'être rendue accessible."
+	}
+
+	c.JSON(http.StatusAccepted, output)
 }

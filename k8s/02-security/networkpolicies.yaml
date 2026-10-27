@@ -358,6 +358,7 @@ spec:
         - {protocol: TCP, port: 25}
         - {protocol: TCP, port: 465}
         - {protocol: TCP, port: 587}
+---
 # Outbound HTTPS (push providers, off-site backup target, ...) for labelled pods only.
 # Private/link-local ranges are excluded so this cannot be used to reach the cluster or node network.
 apiVersion: networking.k8s.io/v1

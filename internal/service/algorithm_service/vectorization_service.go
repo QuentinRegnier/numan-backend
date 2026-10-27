@@ -147,7 +147,7 @@ func computeCategoricalBlock(ctx context.Context, hashtags []string, embeddings 
 
 // computeTemporalBlock calcule le bloc temporel c_p^(temp) ∈ R^24.
 func computeTemporalBlock(publicationHour int, targetBlock []float32) {
-	const varianceDenominator = 2.0 * variables.TDDSigmaHours * variables.TDDSigmaHours
+	varianceDenominator := 2.0 * variables.TDDSigmaHours * variables.TDDSigmaHours
 
 	var sumProbabilities float64
 	for hourIndex := 0; hourIndex < 24; hourIndex++ {

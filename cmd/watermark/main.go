@@ -71,7 +71,10 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	key := q.Get("key")
 	author := q.Get("author")
-	post := q.Get("post_service")
+	post := q.Get("post")
+	if post == "" {
+		post = q.Get("post_service")
+	}
 	reader := q.Get("reader")
 	ts := q.Get("ts")
 	clientSig := q.Get("sig")
@@ -82,8 +85,8 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// --- B. VÉRIFICATION DE LA SIGNATURE (SÉCURITÉ) ---
-	// On reconstruit exactement la même chaîne que dans GenerateWatermarkedURL
-	payload := fmt.Sprintf("key=%s&author=%s&post_service=%s&reader=%s&ts=%s", key, author, post, reader, ts)
+	// On reconstruit exactement la même chaîne que dans generateWatermarkedURL (helpers.go)
+	payload := fmt.Sprintf("key=%s&author=%s&post=%s&reader=%s&ts=%s", key, author, post, reader, ts)
 	h := hmac.New(sha256.New, []byte(secretKey))
 	h.Write([]byte(payload))
 	expectedSig := hex.EncodeToString(h.Sum(nil))

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
+	"github.com/QuentinRegnier/numan-backend/internal/service/moderation_service"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/post_models"
@@ -103,15 +104,18 @@ func CreatePost(ctx context.Context, callerID int64, input post_models.CreatePos
 	currentTime := time.Now().UTC()
 	newPostID := pkg.GenerateID()
 
-	// ── ÉTAPE 2 : DÉLÉGATION - ACTIVATION DES MÉDIAS FANTÔMES ───────────────
-
-	if errMedia := media_service.ActivateMediaBatch(ctx, input.MediaIDs, callerID); errMedia != nil {
-		return -1, errMedia // ActivateMediaBatch gère déjà ses propres numan_error
+	// ── ÉTAPE 2 : DÉLÉGATION - ACTIVATION DES MÉDIAS & SCORE IA MAX ─────────
+	maxMediaIAScore, errMedia := media_service.ActivateMediaBatchWithMaxIAScore(ctx, input.MediaIDs, callerID)
+	if errMedia != nil {
+		return -1, errMedia
 	}
+	allIAScores := append([]float64{maxMediaIAScore}, input.IAScores...)
+	postIAScoreMax := moderation_service.AggregateMaxIAScore(allIAScores...)
 
-	// ── ÉTAPE 3 : ÉVALUATION DYNAMIQUE DE LA PRIORITÉ ───────────────────────
-
+	// ── ÉTAPE 3 : ÉVALUATION DYNAMIQUE DE LA PRIORITÉ, TRUST SCORE & AUTO-REPORT IA ─
 	authorPriorityLevel := 0
+	callerTrustScore := variables.TrustScoreInitial
+	effectiveVisibility := input.Visibility
 	if callerUserLite, errLite := cache_service.GetUserLite(ctx, callerID); errLite == nil {
 		gradeToPriorityMap := map[int]int{
 			0: 0, 1: 1, 2: 2, 3: 3, 4: 4,
@@ -119,27 +123,37 @@ func CreatePost(ctx context.Context, callerID int64, input post_models.CreatePos
 		if priorityValue, exists := gradeToPriorityMap[callerUserLite.Grade]; exists {
 			authorPriorityLevel = priorityValue
 		}
+		if callerUserLite.TrustScore > 0 {
+			callerTrustScore = callerUserLite.TrustScore
+		}
+		if callerTrustScore < variables.TrustThresholdStandard {
+			effectiveVisibility = variables.PostVisibilityQuarantine
+		}
+	}
+
+	// Évaluation combinée (P_ia_max, T_auteur) : déclenche un signalement automatique Robot si R_auto >= seuil
+	_, shouldQuarantineAI, _ := moderation_service.EvaluateAndTriggerAutoReport(
+		ctx, callerID, callerTrustScore, variables.ReportTargetPost, newPostID, postIAScoreMax,
+	)
+	if shouldQuarantineAI {
+		effectiveVisibility = variables.PostVisibilityQuarantine
 	}
 
 	// ── ÉTAPE 4 : OPTIMISATION ALGORITHMIQUE (AUTO-TAG AUTEUR) ──────────────
-
 	authorHashtag := fmt.Sprintf("%s%d", variables.AuthorTagPrefix, callerID)
 	isAuthorAlreadyTagged := false
-
 	for _, hashtag := range input.Hashtags {
 		if hashtag == authorHashtag {
 			isAuthorAlreadyTagged = true
 			break
 		}
 	}
-
 	finalHashtagsList := input.Hashtags
 	if !isAuthorAlreadyTagged {
 		finalHashtagsList = append(finalHashtagsList, authorHashtag)
 	}
 
 	// ── ÉTAPE 5 : ASSEMBLAGE DE L'OBJET POST ────────────────────────────────
-
 	postPayload := post_models.PostPayload{
 		ID:                newPostID,
 		UserID:            callerID,
@@ -148,7 +162,7 @@ func CreatePost(ctx context.Context, callerID int64, input post_models.CreatePos
 		IndirectHashtags:  nil,
 		Identifiers:       pkg.SliceUniqueInt64(input.Identifiers),
 		MediaIDs:          pkg.SliceUniqueInt64(input.MediaIDs),
-		Visibility:        input.Visibility,
+		Visibility:        effectiveVisibility,
 		PriorityLevel:     authorPriorityLevel,
 		Location:          pkg.CleanStr(input.Location),
 		CreatedAt:         domain.TimeToMillis(currentTime),
@@ -158,6 +172,7 @@ func CreatePost(ctx context.Context, callerID int64, input post_models.CreatePos
 		ViewCount:         0,
 		ReportCount:       0,
 		HasMedia:          len(input.MediaIDs) > 0,
+		IAScoreMax:        postIAScoreMax,
 		VectorVersion:     1,
 		TelemetryDwellSum: 0.0,
 		TelemetryDwellSq:  0.0,
@@ -165,16 +180,17 @@ func CreatePost(ctx context.Context, callerID int64, input post_models.CreatePos
 	}
 
 	// ── ÉTAPE 6 : VECTORISATION SÉMANTIQUE SYNCHRONE (O(1)) ─────────────────
-
 	postPayload.Vector = algorithm_service.ComputeContentVectorFull(ctx, postPayload, nil)
 
 	// ── ÉTAPE 7 : CACHE REDIS L1 ET INDEXATION TIMELINE ─────────────────────
-
 	if errCache := object_cache_service.SetPostInObjectCache(ctx, postPayload); errCache != nil {
 		numan_log.Warn(context.Background()).Err(errCache).Int64("post_id", newPostID).Msg("Échec de la mise en cache de la publication")
 	}
 
-	_ = cache_service.AddPostToUserProfile(ctx, callerID, newPostID, float64(currentTime.UnixMilli()))
+	// Un post en quarantaine (Shadowban) n'apparaît pas dans la timeline publique avant sa validation
+	if effectiveVisibility != variables.PostVisibilityQuarantine {
+		_ = cache_service.AddPostToUserProfile(ctx, callerID, newPostID, float64(currentTime.UnixMilli()))
+	}
 
 	// ── ÉTAPE 8 : PERSISTANCE ASYNCHRONE (WRITE-BEHIND) ─────────────────────
 

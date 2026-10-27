@@ -230,6 +230,11 @@ func updateTrendZSETs(ctx context.Context, postID int64, score float64, directTa
 
 // UpdateScoreWithMetrics orchestre le calcul mathématique et la distribution des scores.
 func UpdateScoreWithMetrics(ctx context.Context, postID int64, likesCount int, commentsCount int, viewsCount int, mediaCount int, createdAt time.Time, directTags []string, indirectTags []string, visibility int, reportCount int, priorityLevel int) {
+	// BOUCLIER SHADOWBAN / QUARANTAINE :
+	// Un post supprimé (< 0) ou en quarantaine (visibility == 3) ne doit jamais entrer dans les classements publics.
+	if visibility < 0 || visibility == variables.PostVisibilityQuarantine {
+		return
+	}
 
 	ageInSeconds := time.Since(createdAt).Seconds()
 
@@ -240,7 +245,7 @@ func UpdateScoreWithMetrics(ctx context.Context, postID int64, likesCount int, c
 		MediaCount:    mediaCount,
 		ReportCount:   reportCount,
 		AgeSeconds:    ageInSeconds,
-		IsDeleted:     visibility == 0,
+		IsDeleted:     visibility < 0,
 	}
 
 	globalScore := service.CalculateRecommendationScore(baseOptions)

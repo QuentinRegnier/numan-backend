@@ -73,13 +73,12 @@ func FuncLoadUser(ctx context.Context, ID int64, Username string, Email string, 
 	var createdAt, updatedAt time.Time
 
 	dest := []any{
-		&res.ID, &res.Username, &res.Email, &res.EmailVerified,
-		&res.Phone, &res.PhoneVerified, &res.PasswordHash,
-		&firstName, &lastName, &birthdateRaw, &res.Sex,
-		&bio, &profilePicID, &res.Grade, &location,
-		&school, &work, &res.Badges, &res.Desactivated,
-		&res.Banned, &banReason, &banExpiresAt,
-		&createdAt, &updatedAt, &res.TwoFactorEnabled, &res.TwoFactorMethod, &totpSecret,
+		&res.ID, &res.Username, &res.Email, &res.EmailVerified, &res.Phone, &res.PhoneVerified,
+		&res.PasswordHash, &firstName, &lastName, &birthdateRaw, &res.Sex, &bio,
+		&profilePicID, &res.Grade, &location, &school, &work, &res.Badges,
+		&res.Desactivated, &res.Banned, &banReason, &banExpiresAt, &createdAt, &updatedAt,
+		&res.TwoFactorEnabled, &res.TwoFactorMethod, &totpSecret,
+		&res.TrustScore, &res.LastInfractionAt,
 	}
 
 	if err := rows.Scan(dest...); err != nil {

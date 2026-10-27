@@ -14,6 +14,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/media_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/member_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/message_handlers"
+	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/moderation_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/notification_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/post_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/profile_handlers"
@@ -118,10 +119,10 @@ func SetupRoutes(r *gin.Engine) {
 	// --- Posts ---
 	secured.POST("/feed/get", feed_handlers.GetFeedHandler) //
 	secured.POST("/posts/get", post_handlers.GetPostHandler)
-	secured.POST("/posts/user/get", post_handlers.GetUserPostsHandler) // Profil d'un utilisateur (non)
-	secured.POST("/posts/set", post_handlers.CreatePostHandler)        //
-	secured.PUT("/posts/update", post_handlers.UpdatePostHandler)      //
-	secured.DELETE("/posts/delete", post_handlers.DeletePostHandler)   //
+	secured.POST("/posts/user/get", post_handlers.GetUserPostsHandler)                             // Profil d'un utilisateur (non)
+	secured.POST("/posts/set", middleware.TrustScoreMiddleware(), post_handlers.CreatePostHandler) // Vérifie le TrustScore (<0.40 -> Quarantaine)
+	secured.PUT("/posts/update", post_handlers.UpdatePostHandler)                                  //
+	secured.DELETE("/posts/delete", post_handlers.DeletePostHandler)                               //
 
 	// --- Notifications ---
 	secured.POST("/notifications/get", notification_handlers.GetNotificationsHandler) //
@@ -209,16 +210,17 @@ func SetupRoutes(r *gin.Engine) {
 	secured.POST("/group/join", conversation_handlers.JoinGroupHandler)          //
 
 	// --- Media ---
-	secured.POST("/media/upload", media_handlers.UploadMediaHandler) //
-	secured.POST("/media/sign", media_handlers.SignMediaHandler)     //
+	secured.POST("/media/upload", middleware.TrustScoreMiddleware(), media_handlers.UploadMediaHandler) // Vérifie le TrustScore (<0.40 -> Quarantaine S3)
+	secured.POST("/media/sign", media_handlers.SignMediaHandler)                                        //
 
 	// --- Recherche ---
 	secured.POST("/search/autocomplete/text", search_handlers.AutocompleteTextHandler) //
 	secured.POST("/search/autocomplete/tags", search_handlers.AutocompleteTagHandler)  //
 	secured.POST("/search/post", search_handlers.SearchPostHandler)                    //
 
-	// --- Report ---
-	secured.POST("/report", report_handlers.CreateReportHandler) //
+	// --- Report & Moderation Client ---
+	secured.POST("/report", middleware.TrustScoreMiddleware(), report_handlers.CreateReportHandler) //
+	secured.POST("/moderation/tickets/info/reply", moderation_handlers.ReplyTicketInfoHandler)
 
 	// =========================================================================
 	// 3. ROUTES ADMIN (JWT + HMAC + RATCHET + WireGuard + Rôle Admin)
@@ -234,6 +236,30 @@ func SetupRoutes(r *gin.Engine) {
 	// L'équivalent de ton "Admin.PATCH" devient simplement l'utilisation de ce groupe
 	adminGroup.PATCH("/variables/update", variables_handlers.UpdateVariablesHandler)
 	adminGroup.GET("/variables/get", variables_handlers.GetVariablesHandler)
+	adminGroup.POST("/moderation/audit/resolve", moderation_handlers.ResolveAdminAuditHandler)
+	adminGroup.POST("/moderation/hard-ban", moderation_handlers.AdminHardBanHandler)
+	adminGroup.GET("/moderation/delegation-switch", moderation_handlers.GetDelegationSwitchHandler)
+	adminGroup.POST("/moderation/delegation-switch", moderation_handlers.SetDelegationSwitchHandler)
+
+	// =========================================================================
+	// 4. ROUTES MODÉRATION (JWT + HMAC + Rôle Modérateur Grade >= 3 ou Admin)
+	// =========================================================================
+	modGroup := r.Group("/admin/moderation")
+	modGroup.Use(middleware.JWTMiddleware())
+	modGroup.Use(middleware.HMACMiddleware())
+	modGroup.Use(middleware.ModeratorGuard())
+
+	modGroup.POST("/queue", moderation_handlers.GetModerationQueueHandler)
+	modGroup.POST("/quarantine/review", moderation_handlers.ReviewQuarantineHandler)
+	modGroup.POST("/tickets/claim", moderation_handlers.ClaimTicketHandler)
+	modGroup.POST("/tickets/release", moderation_handlers.ReleaseTicketHandler)
+	modGroup.POST("/tickets/close", moderation_handlers.CloseTicketHandler)
+	modGroup.POST("/tickets/info/request", moderation_handlers.RequestTicketInfoHandler)
+	modGroup.POST("/tickets/blame/propose", moderation_handlers.ProposeBlameHandler)
+	modGroup.POST("/tickets/blame/review", moderation_handlers.ReviewBlameHandler)
+	modGroup.POST("/tickets/blame/final-vote", moderation_handlers.FinalVoteBlameHandler)
+	modGroup.POST("/tickets/escalate", moderation_handlers.EscalateTicketHandler)
+	modGroup.POST("/batch-like", moderation_handlers.ModBatchLikeHandler)
 }
 
 // BanHandler godoc

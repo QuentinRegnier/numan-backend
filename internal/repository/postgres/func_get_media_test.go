@@ -35,7 +35,7 @@ func TestFuncGetMedia(t *testing.T) {
 			require.Len(t, args, 1)
 			assert.Equal(t, int64(42), args[0].Value)
 			return test.NewMockRows(cols, [][]driver.Value{
-				{int64(42), int64(10), "uploads/photo.jpg", true, now, now},
+				{int64(42), int64(10), "uploads/photo.jpg", int64(1), now, now},
 			}), nil
 		}, nil)
 
@@ -44,19 +44,43 @@ func TestFuncGetMedia(t *testing.T) {
 		assert.Equal(t, int64(42), m.ID)
 		assert.Equal(t, int64(10), m.OwnerID)
 		assert.Equal(t, "uploads/photo.jpg", m.StoragePath)
-		assert.True(t, m.Visibility)
+		assert.Equal(t, 1, int(m.Visibility))
+	})
+
+	t.Run("returns_quarantined_media_for_service_inspection", func(t *testing.T) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{
+				{int64(42), int64(10), "uploads/photo.jpg", int64(2), now, now},
+			}), nil
+		}, nil)
+
+		m, err := FuncGetMedia(ctx, 42)
+		require.NoError(t, err)
+		assert.Equal(t, 2, int(m.Visibility))
 	})
 
 	t.Run("handles_soft_deleted_media", func(t *testing.T) {
 		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return test.NewMockRows(cols, [][]driver.Value{
-				{int64(42), int64(10), "uploads/photo.jpg", false, now, now},
+				{int64(42), int64(10), "uploads/photo.jpg", int64(-1), now, now},
 			}), nil
 		}, nil)
 
 		m, err := FuncGetMedia(ctx, 42)
-		assert.False(t, m.Visibility)
+		assert.Equal(t, -1, int(m.Visibility))
 		test.AssertNotFoundError_Postgres(t, err, "MEDIA_DELETED")
+	})
+
+	t.Run("handles_rejected_moderated_media", func(t *testing.T) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{
+				{int64(42), int64(10), "uploads/photo.jpg", int64(-2), now, now},
+			}), nil
+		}, nil)
+
+		m, err := FuncGetMedia(ctx, 42)
+		assert.Equal(t, -2, int(m.Visibility))
+		require.Error(t, err)
 	})
 
 	t.Run("handles_media_not_found", func(t *testing.T) {

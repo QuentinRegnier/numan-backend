@@ -35,12 +35,19 @@ var hashtagRegex = regexp.MustCompile(`#([\p{L}\p{N}_]+)`)
 func updateMostCache(ctx context.Context, events []redis.AsyncEvent) {
 	for _, e := range events {
 
-		// ── ÉTAPE 1 : CRÉATION OU MISE À JOUR D'UN POST ─────────────────────────
+		// ÉTAPE 1 : CRÉATION OU MISE À JOUR D'UN POST
 		if e.Type == redis.EntityPost && (e.Action == redis.ActionCreate || e.Action == redis.ActionUpdate) {
 			jsonBytes, errMarshal := json.Marshal(e.Payload)
 			if errMarshal == nil {
 				var post post_models.PostPayload
 				if errUnmarshal := json.Unmarshal(jsonBytes, &post); errUnmarshal == nil {
+					// BOUCLIER SHADOWBAN / QUARANTAINE :
+					// Si le post est en quarantaine (Visibility == 3) ou supprimé (< 0),
+					// on l'évince des classements publics au lieu de l'indexer.
+					if post.Visibility < 0 || post.Visibility > 2 {
+						evictPostFromPublicTrends(ctx, post)
+						continue
+					}
 					// L'algorithme a besoin du post pour initialiser son score et son vecteur ML
 					cache_service.UpdatePostRecommendationScore(ctx, post)
 					algorithm_service.StoreContentVector(ctx, post)
@@ -49,36 +56,13 @@ func updateMostCache(ctx context.Context, events []redis.AsyncEvent) {
 			continue
 		}
 
-		// ── ÉTAPE 2 : SUPPRESSION D'UN POST (NETTOYAGE DES ZSETS TENDANCES) ────
+		// ÉTAPE 2 : SUPPRESSION D'UN POST (NETTOYAGE DES ZSETS TENDANCES)
 		if e.Type == redis.EntityPost && e.Action == redis.ActionDelete {
 			jsonBytes, errMarshal := json.Marshal(e.Payload)
 			if errMarshal == nil {
 				var post post_models.PostPayload
 				if errUnmarshal := json.Unmarshal(jsonBytes, &post); errUnmarshal == nil {
-					pipe := redis.TrendGlobalDaily.Pipeline()
-					dateKey := domain.MillisToTime(post.CreatedAt).UTC().Format("20060102")
-
-					// 1. Retrait du classement global mondial
-					pipe.ZRem(ctx, redis.TrendGlobalDaily.Key(dateKey), post.ID)
-
-					// 2. Désérialisation et retrait des tags directs
-					for _, tag := range post.Hashtags {
-						item := lite_models.TagPostItem{PostID: post.ID, IsIndirect: false}
-						b, _ := msgpack.Marshal(item)
-						pipe.ZRem(ctx, redis.TrendTagDaily.Key(fmt.Sprintf("%s:daily", tag)), string(b))
-					}
-
-					// 3. Désérialisation et retrait des tags indirects
-					for _, tag := range post.IndirectHashtags {
-						item := lite_models.TagPostItem{PostID: post.ID, IsIndirect: true}
-						b, _ := msgpack.Marshal(item)
-						pipe.ZRem(ctx, redis.TrendTagDaily.Key(fmt.Sprintf("%s:daily", tag)), string(b))
-					}
-
-					_, errPipe := pipe.Exec(ctx)
-					if errPipe != nil {
-						numan_log.Error(ctx).Err(errPipe).Int64("post_id", post.ID).Msg("Most Cache Worker : Échec nettoyage ZSET Trends")
-					}
+					evictPostFromPublicTrends(ctx, post)
 				}
 			}
 			continue
@@ -246,4 +230,27 @@ func getPostWithFallback(ctx context.Context, postID int64) (post_models.PostPay
 
 	// Échec total : le post n'existe dans aucune couche. Utilisation du code d'erreur standard.
 	return post_models.PostPayload{}, numan_error.NewNotFound(numan_error.CodeNotFound, "Publication introuvable.", nil)
+}
+
+func evictPostFromPublicTrends(ctx context.Context, post post_models.PostPayload) {
+	pipe := redis.TrendGlobalDaily.Pipeline()
+	dateKey := domain.MillisToTime(post.CreatedAt).UTC().Format("20060102")
+
+	pipe.ZRem(ctx, redis.TrendGlobalDaily.Key(dateKey), post.ID)
+
+	for _, tag := range post.Hashtags {
+		item := lite_models.TagPostItem{PostID: post.ID, IsIndirect: false}
+		b, _ := msgpack.Marshal(item)
+		pipe.ZRem(ctx, redis.TrendTagDaily.Key(fmt.Sprintf("%s:daily", tag)), string(b))
+	}
+
+	for _, tag := range post.IndirectHashtags {
+		item := lite_models.TagPostItem{PostID: post.ID, IsIndirect: true}
+		b, _ := msgpack.Marshal(item)
+		pipe.ZRem(ctx, redis.TrendTagDaily.Key(fmt.Sprintf("%s:daily", tag)), string(b))
+	}
+
+	if _, errPipe := pipe.Exec(ctx); errPipe != nil {
+		numan_log.Error(ctx).Err(errPipe).Int64("post_id", post.ID).Msg("Most Cache Worker : Échec nettoyage ZSET Trends")
+	}
 }

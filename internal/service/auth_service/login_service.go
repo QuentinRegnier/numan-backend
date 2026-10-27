@@ -67,12 +67,12 @@ func Login(ctx context.Context, input auth_models.LoginInput, ipAddresses []stri
 		return auth_models.LoginResponse{}, numan_error.NewUnauthorized(numan_error.CodeUnauthorized, "L'email ou le mot de passe est incorrect.", nil)
 	}
 
-	// Vérification des suspensions
-	if userPayload.Desactivated || userPayload.Banned {
+	// Vérification des suspensions et du Hard Ban (Trust Score == 0.00)
+	if userPayload.Desactivated || userPayload.Banned || (userPayload.TrustScore <= variables.TrustScoreHardBan && userPayload.LastInfractionAt > 0) {
 		if userPayload.Desactivated {
 			return auth_models.LoginResponse{}, numan_error.NewForbidden(numan_error.CodeForbidden, "Ce compte est actuellement désactivé.", nil)
 		}
-		return auth_models.LoginResponse{}, numan_error.NewForbidden(numan_error.CodeForbidden, "Accès refusé : Ce compte a été banni.", nil)
+		return auth_models.LoginResponse{}, numan_error.NewForbidden(numan_error.CodeUserBanned, "Accès refusé : Ce compte a été banni définitivement.", nil)
 	}
 
 	// Interception Double Authentification (2FA)

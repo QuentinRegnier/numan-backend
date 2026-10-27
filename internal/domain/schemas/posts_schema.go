@@ -19,6 +19,7 @@ var PostsSchema = map[string]reflect.Kind{
 	"view_count":          reflect.Int,
 	"report_count":        reflect.Int,
 	"has_media":           reflect.Bool,
+	"ia_score_max":        reflect.Float64,
 	"vector":              reflect.Slice,   // REAL[] -> []float32
 	"vector_version":      reflect.Int,     // Integer
 	"telemetry_dwell_sum": reflect.Float64, // Somme des temps de lecture

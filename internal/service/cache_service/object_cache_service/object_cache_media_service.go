@@ -8,6 +8,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/media_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
 	goredis "github.com/go-redis/redis/v8"
 )
 
@@ -38,8 +39,8 @@ func GetMediaFromObjectCache(ctx context.Context, mediaID int64) (media_models.M
 		return media_models.MediaPayload{}, numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeCacheError, "Impossible de récupérer le média depuis l'Object Cache.", errRedis)
 	}
 
-	// Rejet immédiat si le média est soft-deleted
-	if !mediaPayload.Visibility {
+	// Rejet immédiat si le média est soft-deleted (-1)
+	if mediaPayload.Visibility == variables.MediaVisibilitySoftDeleted {
 		return media_models.MediaPayload{}, numan_error.NewNotFound(numan_error.CodeNotFound, "Ce média a été supprimé.", nil)
 	}
 

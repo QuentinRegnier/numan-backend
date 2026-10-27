@@ -172,5 +172,6 @@ func TestGetMessagesView_HybridCascadeAndVisibilityFilter(t *testing.T) {
 		if err != nil || len(resFallback) != 1 || resFallback[0].ID != 2 {
 			mt.Errorf("expected L2 fallback on MGET failure to return message 2, got %+v (err=%v)", resFallback, err)
 		}
+		time.Sleep(30 * time.Millisecond)
 	})
 }

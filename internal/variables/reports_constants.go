@@ -21,11 +21,26 @@ const (
 	ReportCatIllegalContent   = 8  // Contenu illégal (Drogue, Armes, etc.)
 	ReportCatSelfHarm         = 9  // Automutilation / Suicide
 	ReportCatOther            = 99 // Autre (se référer au champ "reason")
+	ReportCatAIPornography    = 10 // Détection automatique IA NSFWJS (Classe Porn)
 
-	ReportStatePending    = 0  // En attente de traitement
-	ReportStateInProgress = 1  // En cours de traitement par un modérateur
-	ReportStateEscalated  = 2  // Escaladé à un supérieur
-	ReportStateClosed     = -1 // Fermé / Traité
+	// Origine du signalement (Utilisateur vs Robot IA vs Hybride vs Système)
+	ReportOriginUser   = 0 // Signalement effectué manuellement par un utilisateur
+	ReportOriginAutoAI = 1 // Signalement généré automatiquement par le serveur (Scoring IA + TrustScore)
+	ReportOriginHybrid = 2 // Signalement initié par l'IA et confirmé par un ou plusieurs utilisateurs
+	ReportOriginSystem = 3 // Super-signalement généré automatiquement par le système (ex: Quota de 3 blâmes atteint)
+
+	ReportOriginLabelUser   = "user"
+	ReportOriginLabelAutoAI = "auto_ai"
+	ReportOriginLabelHybrid = "hybrid"
+	ReportOriginLabelSystem = "system"
+
+	ReportStatePending           = 0  // En attente de traitement dans la file active
+	ReportStateInProgress        = 1  // En cours de traitement par un modérateur (verrou exclusif 48h)
+	ReportStateWaitingForInfo    = 2  // En attente de complément d'information du plaignant (gel 7j)
+	ReportStatePendingPeerReview = 3  // Proposition de blâme en attente de validation croisée (Four-Eyes)
+	ReportStateEscalated         = 4  // Escaladé au niveau Administrateur (Grade 4)
+	ReportStatePendingFinalVote  = 5  // Contradiction entre modérateurs soumise à un Super-Modérateur (T_mod > 0.90)
+	ReportStateClosed            = -1 // Fermé / Traité et archivé en base froide PostgreSQL
 )
 
 // ############################################################################

@@ -39,7 +39,7 @@ func GetUserConversationsPaginated(ctx context.Context, callerID int64, input co
 
 	// ── ÉTAPE 1 : TENTATIVE L1 (SPEED CACHE) ────────────────────────────────
 	// Réservé aux premiers éléments (< 100) et hors mode Forcé pour protéger la RAM.
-	if input.Offset < variables.MaxZsetInbox && !input.Force {
+	if input.Offset < int64(variables.MaxZsetInbox) && !input.Force {
 		cachedItems, errCache := cache_service.GetInboxView(ctx, callerID, input.Limit, input.Offset)
 		if errCache == nil && len(cachedItems) > 0 {
 			rawInboxItems = cachedItems

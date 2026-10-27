@@ -236,7 +236,11 @@ func updateCountersMongo(ctx context.Context, events []redis.AsyncEvent) {
 	commentLikeDeltas := make(map[int64]int)
 	commentDeltas := make(map[int64]int)
 	viewDeltas := make(map[int64]int)
-	reportDeltas := make(map[int64]int)
+
+	// ISOLATION DES MÉTRIQUES DE MODÉRATION
+	postReportDeltas := make(map[int64]int)
+	commentReportDeltas := make(map[int64]int)
+
 	messageReactionDeltas := make(map[int64]map[string]int)
 
 	telemetryDwellSum := make(map[int64]float64)
@@ -290,9 +294,19 @@ func updateCountersMongo(ctx context.Context, events []redis.AsyncEvent) {
 				TargetType int     `json:"target_type"`
 				TargetIDs  []int64 `json:"target_ids"`
 			}
-			if err := json.Unmarshal(jsonBytes, &r); err == nil && r.TargetType == 1 {
+			if err := json.Unmarshal(jsonBytes, &r); err == nil {
 				for _, id := range r.TargetIDs {
-					reportDeltas[id] += delta
+					// ROUTAGE SÉMANTIQUE STRICT
+					switch r.TargetType {
+					case variables.ReportTargetPost:
+						postReportDeltas[id] += delta
+					case variables.ReportTargetComment:
+						commentReportDeltas[id] += delta
+					case variables.ReportTargetMessage, variables.ReportTargetConversation, variables.ReportTargetUser:
+						// Évolution future : Prêt pour incrémenter les métriques sur les autres entités
+					default:
+						numan_log.Warn(ctx).Int("target_type", r.TargetType).Msg("Worker Mongo : Type de signalement non géré pour les compteurs")
+					}
 				}
 			}
 		} else if e.Type == redis.EntityTelemetry {
@@ -346,20 +360,38 @@ func updateCountersMongo(ctx context.Context, events []redis.AsyncEvent) {
 
 	// Application des deltas aggrégés
 	for id, delta := range postLikeDeltas {
-		postModels = append(postModels, libMongo.NewUpdateOneModel().SetFilter(bson.M{"id": id}).SetUpdate(bson.M{"$inc": bson.M{"like_count": delta}, "$set": bson.M{"last_use": now}}))
+		if delta != 0 {
+			postModels = append(postModels, libMongo.NewUpdateOneModel().SetFilter(bson.M{"id": id}).SetUpdate(bson.M{"$inc": bson.M{"like_count": delta}, "$set": bson.M{"last_use": now}}))
+		}
 	}
 	for id, delta := range commentLikeDeltas {
-		commentModels = append(commentModels, libMongo.NewUpdateOneModel().SetFilter(bson.M{"id": id}).SetUpdate(bson.M{"$inc": bson.M{"like_count": delta, "score": delta}, "$set": bson.M{"last_use": now}}))
+		if delta != 0 {
+			commentModels = append(commentModels, libMongo.NewUpdateOneModel().SetFilter(bson.M{"id": id}).SetUpdate(bson.M{"$inc": bson.M{"like_count": delta, "score": delta}, "$set": bson.M{"last_use": now}}))
+		}
 	}
 	for id, delta := range commentDeltas {
-		postModels = append(postModels, libMongo.NewUpdateOneModel().SetFilter(bson.M{"id": id}).SetUpdate(bson.M{"$inc": bson.M{"comment_count": delta}, "$set": bson.M{"last_use": now}}))
+		if delta != 0 {
+			postModels = append(postModels, libMongo.NewUpdateOneModel().SetFilter(bson.M{"id": id}).SetUpdate(bson.M{"$inc": bson.M{"comment_count": delta}, "$set": bson.M{"last_use": now}}))
+		}
 	}
 	for id, delta := range viewDeltas {
-		postModels = append(postModels, libMongo.NewUpdateOneModel().SetFilter(bson.M{"id": id}).SetUpdate(bson.M{"$inc": bson.M{"view_count": delta}, "$set": bson.M{"last_use": now}}))
+		if delta != 0 {
+			postModels = append(postModels, libMongo.NewUpdateOneModel().SetFilter(bson.M{"id": id}).SetUpdate(bson.M{"$inc": bson.M{"view_count": delta}, "$set": bson.M{"last_use": now}}))
+		}
 	}
-	for id, delta := range reportDeltas {
-		postModels = append(postModels, libMongo.NewUpdateOneModel().SetFilter(bson.M{"id": id}).SetUpdate(bson.M{"$inc": bson.M{"report_count": delta}, "$set": bson.M{"last_use": now}}))
+
+	// APPLICATION SÉPARÉE DES COMPTEURS DE SIGNALEMENT (L2)
+	for id, delta := range postReportDeltas {
+		if delta != 0 {
+			postModels = append(postModels, libMongo.NewUpdateOneModel().SetFilter(bson.M{"id": id}).SetUpdate(bson.M{"$inc": bson.M{"report_count": delta}, "$set": bson.M{"last_use": now}}))
+		}
 	}
+	for id, delta := range commentReportDeltas {
+		if delta != 0 {
+			commentModels = append(commentModels, libMongo.NewUpdateOneModel().SetFilter(bson.M{"id": id}).SetUpdate(bson.M{"$inc": bson.M{"report_count": delta}, "$set": bson.M{"last_use": now}}))
+		}
+	}
+
 	for id, sum := range telemetryDwellSum {
 		postModels = append(postModels, libMongo.NewUpdateOneModel().SetFilter(bson.M{"id": id}).SetUpdate(bson.M{
 			"$inc": bson.M{
@@ -382,7 +414,7 @@ func updateCountersMongo(ctx context.Context, events []redis.AsyncEvent) {
 		}
 	}
 
-	// Exécution des BulkWrite
+	// Exécution des BulkWrite (Moteur L2)
 	opts := options.BulkWrite().SetOrdered(variables.MongoBulkWriteOrdered)
 	if len(postModels) > 0 && mongo.Posts != nil {
 		if _, err := mongo.Posts.DB.Collection(mongo.Posts.Name).BulkWrite(ctx, postModels, opts); err != nil {

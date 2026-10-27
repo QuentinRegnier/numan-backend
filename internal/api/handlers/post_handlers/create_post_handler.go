@@ -81,7 +81,20 @@ func CreatePostHandler(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, post_models.CreatePostResponse{
-		PostID: postID,
-	})
+	forceQuarantine := c.GetBool("force_quarantine")
+	effectiveVis := input.Visibility
+	if forceQuarantine {
+		effectiveVis = 3 // variables.PostVisibilityQuarantine
+	}
+
+	resp := post_models.CreatePostResponse{
+		PostID:             postID,
+		Visibility:         effectiveVis,
+		RequiresModeration: forceQuarantine,
+	}
+	if forceQuarantine {
+		resp.Message = "Compte tenu du fait que votre compte est récent, votre publication a été placée en file de vérification avant d'apparaître dans le flux public."
+	}
+
+	c.JSON(http.StatusCreated, resp)
 }

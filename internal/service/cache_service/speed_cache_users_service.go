@@ -51,6 +51,11 @@ func storeUserLiteInSpeedCache(ctx context.Context, userLitePayload lite_models.
 	return nil
 }
 
+// UpdateUserLiteInSpeedCache met à jour le profil UserLite dans le SPEED cache L1.
+func UpdateUserLiteInSpeedCache(ctx context.Context, userLitePayload lite_models.UserLiteRequest) error {
+	return storeUserLiteInSpeedCache(ctx, userLitePayload)
+}
+
 // AddUserToSpeedCache insère un nouvel utilisateur (à la création de compte) dans
 // l'index de recherche et le store SPEED cache L1.
 func AddUserToSpeedCache(ctx context.Context, userPayload auth_models.UserPayload, settingsPayload user_settings_models.UserSettingsPayload) error {
@@ -65,21 +70,29 @@ func AddUserToSpeedCache(ctx context.Context, userPayload auth_models.UserPayloa
 		userBadges = lite_models.UserBadges{}
 	}
 
+	trustScore := userPayload.TrustScore
+	if trustScore == 0 && !userPayload.Banned {
+		trustScore = variables.TrustScoreInitial
+	}
 	constructedUserLite := lite_models.UserLiteRequest{
-		ID:                     userPayload.ID,
-		Username:               userPayload.Username,
-		FirstName:              userPayload.FirstName,
-		LastName:               userPayload.LastName,
-		ProfilePictureID:       userPayload.ProfilePictureID,
-		Bio:                    userPayload.Bio,
-		Grade:                  userPayload.Grade,
-		Badges:                 userBadges,
-		ConversationPermission: settingsPayload.Privacy.ConversationPermission,
-		AddGroupPermission:     settingsPayload.Privacy.AddGroupPermission,
-		HideConnections:        settingsPayload.Privacy.HideConnections,
-		ShowOnlineStatus:       settingsPayload.Privacy.ShowOnlineStatus,
-		AllowTagging:           settingsPayload.Privacy.AllowTagging,
-		AllowMentions:          settingsPayload.Privacy.AllowMentions,
+		ID:                      userPayload.ID,
+		Username:                userPayload.Username,
+		FirstName:               userPayload.FirstName,
+		LastName:                userPayload.LastName,
+		ProfilePictureID:        userPayload.ProfilePictureID,
+		Bio:                     userPayload.Bio,
+		Grade:                   userPayload.Grade,
+		TrustScore:              trustScore,
+		ModeratorTrustScore:     userPayload.ModeratorTrustScore,
+		BlameCount:              userPayload.BlameCount,
+		QuarantinePostsApproved: userPayload.QuarantinePostsApproved,
+		Badges:                  userBadges,
+		ConversationPermission:  settingsPayload.Privacy.ConversationPermission,
+		AddGroupPermission:      settingsPayload.Privacy.AddGroupPermission,
+		HideConnections:         settingsPayload.Privacy.HideConnections,
+		ShowOnlineStatus:        settingsPayload.Privacy.ShowOnlineStatus,
+		AllowTagging:            settingsPayload.Privacy.AllowTagging,
+		AllowMentions:           settingsPayload.Privacy.AllowMentions,
 	}
 
 	errSet := redis.UsersLite.SetObject(ctx, userPayload.ID, constructedUserLite)
@@ -220,6 +233,7 @@ func GetUserLite(ctx context.Context, userID int64) (lite_models.UserLiteRequest
 			ProfilePictureID:       userFromMongo.ProfilePictureID,
 			Bio:                    userFromMongo.Bio,
 			Grade:                  userFromMongo.Grade,
+			TrustScore:             userFromMongo.TrustScore,
 			Badges:                 userBadges,
 			ConversationPermission: settingsPayload.Privacy.ConversationPermission,
 			AddGroupPermission:     settingsPayload.Privacy.AddGroupPermission,
@@ -268,6 +282,7 @@ func GetUserLite(ctx context.Context, userID int64) (lite_models.UserLiteRequest
 			ProfilePictureID:       userFromPg.ProfilePictureID,
 			Bio:                    userFromPg.Bio,
 			Grade:                  userFromPg.Grade,
+			TrustScore:             userFromPg.TrustScore,
 			Badges:                 pgBadges,
 			ConversationPermission: settingsPayload.Privacy.ConversationPermission,
 			AddGroupPermission:     settingsPayload.Privacy.AddGroupPermission,

@@ -2,6 +2,7 @@ package telemetry_service
 
 import (
 	"context"
+	"math"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
@@ -16,44 +17,53 @@ import (
 )
 
 // ############################################################################
-// # SERVICE : SYNCHRONISATION DE LA TÉLÉMÉTRIE (EDGE TO CLOUD)
+// # SERVICE : SYNCHRONISATION DE LA TÉLÉMÉTRIE & TRUST SCORE (EDGE TO CLOUD)
 // ############################################################################
 
 // ProcessSyncTelemetry orchestre la synchronisation bidirectionnelle du vecteur
-// comportemental et l'envoi asynchrone des Analytics aux Workers.
+// comportemental, du Trust Score (ConfidenceScore serveur) et l'envoi asynchrone des Analytics aux Workers.
 func ProcessSyncTelemetry(ctx context.Context, callerID int64, input telemetry_models.SyncTelemetryInput) (telemetry_models.SyncTelemetryOutput, error) {
+	// Résolution en O(1) RAM du Trust Score faisant autorité côté serveur
+	authoritativeTrustScore := variables.TrustScoreInitial
+	if callerLite, errLite := cache_service.GetUserLite(ctx, callerID); errLite == nil && callerLite.TrustScore > 0 {
+		authoritativeTrustScore = callerLite.TrustScore
+	}
 
 	syncOutput := telemetry_models.SyncTelemetryOutput{
-		NeedUpdate: false,
-		Status:     "accepted",
+		NeedUpdate:       false,
+		Status:           "accepted",
+		ServerTrustScore: authoritativeTrustScore,
+		TrustTier:        computeTrustTier(authoritativeTrustScore),
+	}
+
+	// Si le score de confiance connu par le client diffère du Trust Score serveur, on signale une mise à jour requise
+	if math.Abs(input.Payload.Meta.ConfidenceScore-authoritativeTrustScore) > 0.0001 {
+		syncOutput.NeedUpdate = true
 	}
 
 	// ── ÉTAPE 1 : EXTRACTION DES TIMESTAMPS DE VERSIONNING ──────────────────
-
 	clientTelemetryTimestamp := input.Payload.Meta.ClientUpdatedAt
 	profile, _ := cache_service.GetTelemetryProfile(ctx, callerID)
 	serverTelemetryTimestamp := profile.TimestampMs
 
 	// ── ÉTAPE 2 : RÉSOLUTION DES CONFLITS (VECTEUR ET TAGS LSH) ─────────────
-
 	if clientTelemetryTimestamp >= serverTelemetryTimestamp {
-		// -> LE CLIENT EST L'AUTORITÉ (On sauvegarde en RAM L1)
-
+		// -> LE CLIENT EST L'AUTORITÉ POUR LE VECTEUR (Mais le serveur reste l'autorité pour ConfidenceScore / TrustScore)
 		if len(input.Payload.Vector.Values) == variables.VectorDimTotal {
 			oldVectorValues := profile.Vector
 			if len(oldVectorValues) > 0 {
 				// Invalidation ciblée si les clusters sémantiques changent radicalement
 				algorithm_service.InvalidatePersonalizedFeedCache(ctx, callerID, oldVectorValues, input.Payload.Vector.Values)
 			}
-		}
 
-		newProfile := lite_models.TelemetryProfileLite{
-			Vector:          input.Payload.Vector.Values,
-			TopTags:         input.Payload.TopTags,
-			ConfidenceScore: input.Payload.Meta.ConfidenceScore,
-			TimestampMs:     clientTelemetryTimestamp,
+			newProfile := lite_models.TelemetryProfileLite{
+				Vector:          input.Payload.Vector.Values,
+				TopTags:         input.Payload.TopTags,
+				ConfidenceScore: authoritativeTrustScore,
+				TimestampMs:     clientTelemetryTimestamp,
+			}
+			_ = cache_service.SetTelemetryProfile(ctx, callerID, newProfile)
 		}
-		_ = cache_service.SetTelemetryProfile(ctx, callerID, newProfile)
 
 		// SAUVEGARDE ASYNCHRONE DE L'ADN (EDGE-TO-CLOUD BACKUP)
 		// On charge l'objet complet `UserSettings` pour ne pas écraser la confidentialité (L1)

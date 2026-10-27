@@ -1,6 +1,7 @@
-package mongo
+package mongo_test
 
 import (
+	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"testing"
 
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
@@ -13,9 +14,9 @@ import (
 func TestMongoLoadMembersByRolePaginated(t *testing.T) {
 	defer test.ResetCollections()
 
-	// 1. Members is nil
-	Members = nil
-	members, err := MongoLoadMembersByRolePaginated(10, 1, 10, 0)
+	// 1. mongo.Members is nil
+	mongo.Members = nil
+	members, err := mongo.MongoLoadMembersByRolePaginated(10, 1, 10, 0)
 	assert.Nil(t, members)
 	test.AssertDatabaseError_Mongo(t, err)
 
@@ -23,20 +24,20 @@ func TestMongoLoadMembersByRolePaginated(t *testing.T) {
 
 	// 2. DB error
 	mt.Run("DB error", func(mt *mtest.T) {
-		Members = test.NewMockCollection(mt, "members", nil)
+		mongo.Members = test.NewMockCollection(mt, "members", nil)
 		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 96, Message: "failed"}))
 
-		members, err := MongoLoadMembersByRolePaginated(10, 1, 10, 0)
+		members, err := mongo.MongoLoadMembersByRolePaginated(10, 1, 10, 0)
 		assert.Nil(mt, members)
 		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 3. Empty result
 	mt.Run("Empty result", func(mt *mtest.T) {
-		Members = test.NewMockCollection(mt, "members", nil)
+		mongo.Members = test.NewMockCollection(mt, "members", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.members", mtest.FirstBatch))
 
-		members, err := MongoLoadMembersByRolePaginated(10, 1, 10, 0)
+		members, err := mongo.MongoLoadMembersByRolePaginated(10, 1, 10, 0)
 		require.NoError(mt, err)
 		assert.NotNil(mt, members)
 		assert.Empty(mt, members)
@@ -44,19 +45,19 @@ func TestMongoLoadMembersByRolePaginated(t *testing.T) {
 
 	// 4. Deserialization error
 	mt.Run("Deserialization error", func(mt *mtest.T) {
-		Members = test.NewMockCollection(mt, "members", nil)
+		mongo.Members = test.NewMockCollection(mt, "members", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.members", mtest.FirstBatch, bson.D{
 			{Key: "id", Value: "invalid_id"},
 		}))
 
-		members, err := MongoLoadMembersByRolePaginated(10, 1, 10, 0)
+		members, err := mongo.MongoLoadMembersByRolePaginated(10, 1, 10, 0)
 		assert.Nil(mt, members)
 		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 5. Success
 	mt.Run("Success", func(mt *mtest.T) {
-		Members = test.NewMockCollection(mt, "members", nil)
+		mongo.Members = test.NewMockCollection(mt, "members", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.members", mtest.FirstBatch, bson.D{
 			{Key: "id", Value: int64(101)},
 			{Key: "conversation_id", Value: int64(10)},
@@ -64,7 +65,7 @@ func TestMongoLoadMembersByRolePaginated(t *testing.T) {
 			{Key: "role", Value: int32(1)},
 		}))
 
-		members, err := MongoLoadMembersByRolePaginated(10, 1, 10, 0)
+		members, err := mongo.MongoLoadMembersByRolePaginated(10, 1, 10, 0)
 		require.NoError(mt, err)
 		require.Len(mt, members, 1)
 		assert.Equal(mt, int64(101), members[0].ID)

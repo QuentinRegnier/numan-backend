@@ -1,7 +1,8 @@
-package mongo
+package mongo_test
 
 import (
 	"context"
+	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"testing"
 
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
@@ -16,9 +17,9 @@ func TestMongoLoadSession(t *testing.T) {
 
 	ctx := context.Background()
 
-	// 1. Sessions is nil
-	Sessions = nil
-	s, err := MongoLoadSession(ctx, 10, "firebase-123", "", "")
+	// 1. mongo.Sessions is nil
+	mongo.Sessions = nil
+	s, err := mongo.MongoLoadSession(ctx, 10, "firebase-123", "", "")
 	assert.Empty(t, s.ID)
 	test.AssertDatabaseError_Mongo(t, err)
 
@@ -26,54 +27,54 @@ func TestMongoLoadSession(t *testing.T) {
 
 	// 2. No search criteria provided
 	mt.Run("No search criteria provided", func(mt *mtest.T) {
-		Sessions = test.NewMockCollection(mt, "sessions", nil)
-		s, err := MongoLoadSession(ctx, -1, "", "", "")
+		mongo.Sessions = test.NewMockCollection(mt, "sessions", nil)
+		s, err := mongo.MongoLoadSession(ctx, -1, "", "", "")
 		assert.Empty(mt, s.ID)
 		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 3. DB error
 	mt.Run("DB error", func(mt *mtest.T) {
-		Sessions = test.NewMockCollection(mt, "sessions", nil)
+		mongo.Sessions = test.NewMockCollection(mt, "sessions", nil)
 		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 96, Message: "failed"}))
 
-		s, err := MongoLoadSession(ctx, 10, "", "", "")
+		s, err := mongo.MongoLoadSession(ctx, 10, "", "", "")
 		assert.Empty(mt, s.ID)
 		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 4. Not found
 	mt.Run("Not found", func(mt *mtest.T) {
-		Sessions = test.NewMockCollection(mt, "sessions", nil)
+		mongo.Sessions = test.NewMockCollection(mt, "sessions", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.sessions", mtest.FirstBatch))
 
-		s, err := MongoLoadSession(ctx, 10, "", "", "")
+		s, err := mongo.MongoLoadSession(ctx, 10, "", "", "")
 		assert.Empty(mt, s.ID)
 		test.AssertNotFoundError_Mongo(mt, err, "SESSION_NOT_FOUND")
 	})
 
 	// 5. Deserialization error
 	mt.Run("Deserialization error", func(mt *mtest.T) {
-		Sessions = test.NewMockCollection(mt, "sessions", nil)
+		mongo.Sessions = test.NewMockCollection(mt, "sessions", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.sessions", mtest.FirstBatch, bson.D{
 			{Key: "id", Value: "invalid_id_not_int64"},
 		}))
 
-		s, err := MongoLoadSession(ctx, 10, "", "", "")
+		s, err := mongo.MongoLoadSession(ctx, 10, "", "", "")
 		assert.Empty(mt, s.ID)
 		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 6. Success
 	mt.Run("Success", func(mt *mtest.T) {
-		Sessions = test.NewMockCollection(mt, "sessions", nil)
+		mongo.Sessions = test.NewMockCollection(mt, "sessions", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.sessions", mtest.FirstBatch, bson.D{
 			{Key: "id", Value: int64(101)},
 			{Key: "user_id", Value: int64(10)},
 			{Key: "firebase_installation_id", Value: "firebase-xyz"},
 		}))
 
-		s, err := MongoLoadSession(ctx, 10, "", "", "")
+		s, err := mongo.MongoLoadSession(ctx, 10, "", "", "")
 		require.NoError(mt, err)
 		assert.Equal(mt, int64(101), s.ID)
 		assert.Equal(mt, int64(10), s.UserID)

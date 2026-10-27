@@ -6,7 +6,10 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
+	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
+	"github.com/QuentinRegnier/numan-backend/internal/service/moderation_service"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
 	"github.com/gin-gonic/gin"
 )
 
@@ -43,6 +46,17 @@ func RateLimiter() gin.HandlerFunc {
 
 		// Si on dépasse la limite
 		if count > rateLimitMaxRequests {
+			// Pénalité Trust Score anti-flood automatique si utilisateur authentifié (§C.13 : -0.05)
+			if callerID, errUser := pkg.GetUserIDFromContext(c); errUser == nil && callerID > 0 {
+				_ = moderation_service.PublishTrustScoreEvent(
+					ctx,
+					callerID,
+					variables.TrustTriggerSpamDetectedAuto,
+					callerID,
+					"Blocage automatique anti-flood / spam applicatif",
+				)
+			}
+
 			errLimit := numan_error.NewAppError(http.StatusTooManyRequests, "TOO_MANY_REQUESTS", "Too many requests. Please calm down.", nil)
 			numan_error.RespondWithError(c, errLimit)
 			c.Abort()

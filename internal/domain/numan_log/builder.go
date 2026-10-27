@@ -69,6 +69,11 @@ func (b *LogBuilder) Int64(key string, val int64) *LogBuilder {
 	return b
 }
 
+func (b *LogBuilder) Float64(key string, val float64) *LogBuilder {
+	b.event.Float64(key, val)
+	return b
+}
+
 func (b *LogBuilder) float64(key string, val float64) *LogBuilder {
 	b.event.Float64(key, val)
 	return b

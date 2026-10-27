@@ -1,7 +1,9 @@
-package mongo
+package mongo_test
 
 import (
 	"context"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
+	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"testing"
 
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
@@ -11,26 +13,26 @@ import (
 )
 
 func TestRedis2Mongo(t *testing.T) {
-	defer resetCollections()()
+	defer test.ResetCollections()
 
 	ctx := context.Background()
 
 	// 1. All collections nil -> returns database initialization error
-	Users = nil
-	UserSettings = nil
-	Sessions = nil
-	Relations = nil
-	Posts = nil
-	Comments = nil
-	Likes = nil
-	Media = nil
-	Conversations = nil
-	Members = nil
-	Messages = nil
-	MessageReactions = nil
-	Saved = nil
-	Passkeys = nil
-	Notifications = nil
+	mongo.Users = nil
+	mongo.UserSettings = nil
+	mongo.Sessions = nil
+	mongo.Relations = nil
+	mongo.Posts = nil
+	mongo.Comments = nil
+	mongo.Likes = nil
+	mongo.Media = nil
+	mongo.Conversations = nil
+	mongo.Members = nil
+	mongo.Messages = nil
+	mongo.MessageReactions = nil
+	mongo.Saved = nil
+	mongo.Passkeys = nil
+	mongo.Notifications = nil
 
 	supportedEntities := []redis.EntityType{
 		redis.EntityUser,
@@ -51,38 +53,38 @@ func TestRedis2Mongo(t *testing.T) {
 	}
 
 	for _, entity := range supportedEntities {
-		coll, err := redis2Mongo(ctx, entity)
+		coll, err := mongo.Redis2MongoForTest(ctx, entity)
 		assert.Nil(t, coll)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Mongo(t, err)
 	}
 
 	// 2. Unsupported entity
-	coll, err := redis2Mongo(ctx, redis.EntityType("unsupported_type"))
+	coll, err := mongo.Redis2MongoForTest(ctx, redis.EntityType("unsupported_type"))
 	assert.Nil(t, coll)
-	assertDatabaseError(t, err)
+	test.AssertDatabaseError_Mongo(t, err)
 
 	// 3. Supported entities resolve properly when initialized
 	mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
 	mt.Run("resolves collections", func(mt *mtest.T) {
-		mockColl := newMockCollection(mt, "test", nil)
-		Users = mockColl
-		UserSettings = mockColl
-		Sessions = mockColl
-		Relations = mockColl
-		Posts = mockColl
-		Comments = mockColl
-		Likes = mockColl
-		Media = mockColl
-		Conversations = mockColl
-		Members = mockColl
-		Messages = mockColl
-		MessageReactions = mockColl
-		Saved = mockColl
-		Passkeys = mockColl
-		Notifications = mockColl
+		mockColl := test.NewMockCollection(mt, "test", nil)
+		mongo.Users = mockColl
+		mongo.UserSettings = mockColl
+		mongo.Sessions = mockColl
+		mongo.Relations = mockColl
+		mongo.Posts = mockColl
+		mongo.Comments = mockColl
+		mongo.Likes = mockColl
+		mongo.Media = mockColl
+		mongo.Conversations = mockColl
+		mongo.Members = mockColl
+		mongo.Messages = mockColl
+		mongo.MessageReactions = mockColl
+		mongo.Saved = mockColl
+		mongo.Passkeys = mockColl
+		mongo.Notifications = mockColl
 
 		for _, entity := range supportedEntities {
-			c, err := redis2Mongo(ctx, entity)
+			c, err := mongo.Redis2MongoForTest(ctx, entity)
 			require.NoError(mt, err)
 			assert.Equal(mt, mockColl, c)
 		}

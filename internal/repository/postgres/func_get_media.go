@@ -50,12 +50,19 @@ func FuncGetMedia(ctx context.Context, mediaID int64) (media_models.MediaPayload
 		)
 	}
 
-	// ✅ Rejet si le média a été supprimé (Soft-Delete)
-	if !m.Visibility {
-		return media_models.MediaPayload{}, numan_error.NewNotFound(
+	// 🛑 Rejet si le média a été supprimé (Soft-Delete = -1) ou rejeté par la modération (-2)
+	if m.Visibility == -1 {
+		return m, numan_error.NewNotFound(
 			"MEDIA_DELETED",
 			"Ce média a été supprimé.",
 			errors.New("media is soft-deleted"),
+		)
+	}
+	if m.Visibility == -2 {
+		return m, numan_error.NewForbidden(
+			numan_error.CodeMediaRejected,
+			"Ce média a été retiré suite à une infraction aux règles de la communauté.",
+			errors.New("media was rejected by moderation"),
 		)
 	}
 

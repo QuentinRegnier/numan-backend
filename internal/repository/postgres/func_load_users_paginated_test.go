@@ -27,7 +27,7 @@ func TestFuncLoadUsersPaginated(t *testing.T) {
 
 	cols := []string{
 		"id", "username", "first_name", "last_name", "profile_picture_id",
-		"bio", "grade", "conversation_permission", "add_group_permission",
+		"bio", "grade", "trust_score", "conversation_permission", "add_group_permission",
 	}
 
 	t.Run("returns_users_paginated_successfully", func(t *testing.T) {
@@ -37,8 +37,8 @@ func TestFuncLoadUsersPaginated(t *testing.T) {
 			assert.Equal(t, int64(10), args[0].Value)
 			assert.Equal(t, int64(0), args[1].Value)
 			return test.NewMockRows(cols, [][]driver.Value{
-				{int64(1), "alice", "Alice", "Dupont", int64(50), "Dev", 1, 0, 1},
-				{int64(2), "bob", "Bob", "Martin", nil, nil, 0, 1, 0},
+				{int64(1), "alice", "Alice", "Dupont", int64(50), "Dev", 1, float64(0.85), 0, 1},
+				{int64(2), "bob", "Bob", "Martin", nil, nil, 0, float64(0.20), 1, 0},
 			}), nil
 		}, nil)
 
@@ -49,10 +49,11 @@ func TestFuncLoadUsersPaginated(t *testing.T) {
 		assert.Equal(t, "alice", users[0].Username)
 		assert.Equal(t, int64(50), users[0].ProfilePictureID)
 		assert.Equal(t, "Dev", users[0].Bio)
-
+		assert.Equal(t, 0.85, users[0].TrustScore)
 		assert.Equal(t, int64(2), users[1].ID)
 		assert.Equal(t, int64(0), users[1].ProfilePictureID)
 		assert.Equal(t, "", users[1].Bio)
+		assert.Equal(t, 0.20, users[1].TrustScore)
 	})
 
 	t.Run("handles_empty_users", func(t *testing.T) {
@@ -79,7 +80,7 @@ func TestFuncLoadUsersPaginated(t *testing.T) {
 	t.Run("handles_row_iteration_error", func(t *testing.T) {
 		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return test.NewMockRowsWithErr(cols, [][]driver.Value{
-				{int64(1), "alice", "Alice", "Dupont", nil, nil, 1, 0, 0},
+				{int64(1), "alice", "Alice", "Dupont", nil, nil, 1, float64(0.20), 0, 0},
 			}, errors.New("iter err")), nil
 		}, nil)
 

@@ -40,6 +40,7 @@ type SignUpResponse struct {
 	ExpiresAt          int64                  `json:"expires_at,omitempty"`
 	Message            string                 `json:"message" example:"User created successfully"`
 	Avatar             media_models.MediaView `json:"avatar"`
+	TrustScore         float64                `json:"trust_score"`
 	TelemetryVector    []float32              `json:"telemetry_vector,omitempty"`
 	TelemetryTopTags   []string               `json:"telemetry_top_tags,omitempty"`
 	TelemetryTimestamp int64                  `json:"telemetry_timestamp,omitempty"`

@@ -1,7 +1,8 @@
-package mongo
+package mongo_test
 
 import (
 	"context"
+	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"testing"
 
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
@@ -16,9 +17,9 @@ func TestMongoLoadNotificationsPaginated(t *testing.T) {
 
 	ctx := context.Background()
 
-	// 1. Notifications is nil
-	Notifications = nil
-	notifs, err := MongoLoadNotificationsPaginated(ctx, 42, 10, 0)
+	// 1. mongo.Notifications is nil
+	mongo.Notifications = nil
+	notifs, err := mongo.MongoLoadNotificationsPaginated(ctx, 42, 10, 0)
 	assert.Nil(t, notifs)
 	test.AssertDatabaseError_Mongo(t, err)
 
@@ -26,20 +27,20 @@ func TestMongoLoadNotificationsPaginated(t *testing.T) {
 
 	// 2. DB error
 	mt.Run("DB error", func(mt *mtest.T) {
-		Notifications = test.NewMockCollection(mt, "notifications", nil)
+		mongo.Notifications = test.NewMockCollection(mt, "notifications", nil)
 		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 96, Message: "failed"}))
 
-		notifs, err := MongoLoadNotificationsPaginated(ctx, 42, 10, 0)
+		notifs, err := mongo.MongoLoadNotificationsPaginated(ctx, 42, 10, 0)
 		assert.Nil(mt, notifs)
 		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 3. Empty result
 	mt.Run("Empty result", func(mt *mtest.T) {
-		Notifications = test.NewMockCollection(mt, "notifications", nil)
+		mongo.Notifications = test.NewMockCollection(mt, "notifications", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.notifications", mtest.FirstBatch))
 
-		notifs, err := MongoLoadNotificationsPaginated(ctx, 42, 10, 0)
+		notifs, err := mongo.MongoLoadNotificationsPaginated(ctx, 42, 10, 0)
 		require.NoError(mt, err)
 		assert.NotNil(mt, notifs)
 		assert.Empty(mt, notifs)
@@ -47,19 +48,19 @@ func TestMongoLoadNotificationsPaginated(t *testing.T) {
 
 	// 4. Deserialization error
 	mt.Run("Deserialization error", func(mt *mtest.T) {
-		Notifications = test.NewMockCollection(mt, "notifications", nil)
+		mongo.Notifications = test.NewMockCollection(mt, "notifications", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.notifications", mtest.FirstBatch, bson.D{
 			{Key: "id", Value: "invalid_id"},
 		}))
 
-		notifs, err := MongoLoadNotificationsPaginated(ctx, 42, 10, 0)
+		notifs, err := mongo.MongoLoadNotificationsPaginated(ctx, 42, 10, 0)
 		assert.Nil(mt, notifs)
 		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 5. Success
 	mt.Run("Success", func(mt *mtest.T) {
-		Notifications = test.NewMockCollection(mt, "notifications", nil)
+		mongo.Notifications = test.NewMockCollection(mt, "notifications", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.notifications", mtest.FirstBatch, bson.D{
 			{Key: "id", Value: int64(1)},
 			{Key: "user_id", Value: int64(42)},
@@ -67,7 +68,7 @@ func TestMongoLoadNotificationsPaginated(t *testing.T) {
 			{Key: "is_read", Value: true},
 		}))
 
-		notifs, err := MongoLoadNotificationsPaginated(ctx, 42, 10, 0)
+		notifs, err := mongo.MongoLoadNotificationsPaginated(ctx, 42, 10, 0)
 		require.NoError(mt, err)
 		require.Len(mt, notifs, 1)
 		assert.Equal(mt, int64(1), notifs[0].ID)

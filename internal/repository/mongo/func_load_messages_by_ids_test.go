@@ -1,7 +1,8 @@
-package mongo
+package mongo_test
 
 import (
 	"context"
+	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"testing"
 
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
@@ -16,9 +17,9 @@ func TestMongoLoadMessagesByIDs(t *testing.T) {
 
 	ctx := context.Background()
 
-	// 1. Messages is nil
-	Messages = nil
-	messages, err := MongoLoadMessagesByIDs(ctx, []int64{1, 2})
+	// 1. mongo.Messages is nil
+	mongo.Messages = nil
+	messages, err := mongo.MongoLoadMessagesByIDs(ctx, []int64{1, 2})
 	assert.Nil(t, messages)
 	test.AssertDatabaseError_Mongo(t, err)
 
@@ -26,8 +27,8 @@ func TestMongoLoadMessagesByIDs(t *testing.T) {
 
 	// 2. Empty input
 	mt.Run("Empty messageIDs returns non-nil slice", func(mt *mtest.T) {
-		Messages = test.NewMockCollection(mt, "messages", nil)
-		messages, err := MongoLoadMessagesByIDs(ctx, []int64{})
+		mongo.Messages = test.NewMockCollection(mt, "messages", nil)
+		messages, err := mongo.MongoLoadMessagesByIDs(ctx, []int64{})
 		require.NoError(mt, err)
 		assert.NotNil(mt, messages)
 		assert.Empty(mt, messages)
@@ -35,29 +36,29 @@ func TestMongoLoadMessagesByIDs(t *testing.T) {
 
 	// 3. DB error
 	mt.Run("DB error", func(mt *mtest.T) {
-		Messages = test.NewMockCollection(mt, "messages", nil)
+		mongo.Messages = test.NewMockCollection(mt, "messages", nil)
 		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 96, Message: "failed"}))
 
-		messages, err := MongoLoadMessagesByIDs(ctx, []int64{10})
+		messages, err := mongo.MongoLoadMessagesByIDs(ctx, []int64{10})
 		assert.Nil(mt, messages)
 		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 4. Deserialization error
 	mt.Run("Deserialization error", func(mt *mtest.T) {
-		Messages = test.NewMockCollection(mt, "messages", nil)
+		mongo.Messages = test.NewMockCollection(mt, "messages", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.messages", mtest.FirstBatch, bson.D{
 			{Key: "id", Value: "invalid_id_not_int64"},
 		}))
 
-		messages, err := MongoLoadMessagesByIDs(ctx, []int64{10})
+		messages, err := mongo.MongoLoadMessagesByIDs(ctx, []int64{10})
 		assert.Nil(mt, messages)
 		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 5. Success
 	mt.Run("Success", func(mt *mtest.T) {
-		Messages = test.NewMockCollection(mt, "messages", nil)
+		mongo.Messages = test.NewMockCollection(mt, "messages", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.messages", mtest.FirstBatch,
 			bson.D{
 				{Key: "id", Value: int64(1)},
@@ -73,7 +74,7 @@ func TestMongoLoadMessagesByIDs(t *testing.T) {
 			},
 		))
 
-		messages, err := MongoLoadMessagesByIDs(ctx, []int64{1, 2})
+		messages, err := mongo.MongoLoadMessagesByIDs(ctx, []int64{1, 2})
 		require.NoError(mt, err)
 		require.Len(mt, messages, 2)
 		assert.Equal(mt, int64(1), messages[0].ID)

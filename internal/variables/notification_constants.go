@@ -15,9 +15,10 @@ const (
 	EventFriendshipEst    = "friendship_established"
 	EventGroupInvited     = "group_invited"
 
-	// Noms des files d'attente asynchrones Redis pour les Push Firebase
-	WorkerQueueFirebase = "firebase"
-	PushWorkerQueueName = "worker:queue:firebase"
+	// Noms des files d'attente asynchrones Redis pour les Push Firebase et la Réputation
+	WorkerQueueFirebase   = "firebase"
+	PushWorkerQueueName   = "worker:queue:firebase"
+	WorkerQueueTrustScore = "trust_score"
 )
 
 // ############################################################################

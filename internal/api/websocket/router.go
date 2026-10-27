@@ -37,7 +37,7 @@ func (c *client) route(message []byte) {
 		return
 	}
 	now := time.Now().Unix()
-	if math.Abs(float64(now-tsInt)) > variables.ToleranceTimeSeconds {
+	if math.Abs(float64(now-tsInt)) > float64(variables.ToleranceTimeSeconds) {
 		c.sendError(req.RequestID, "Trame expirée (Anti-Rejeu)")
 		return
 	}

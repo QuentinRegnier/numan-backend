@@ -206,3 +206,52 @@ func TestRegistry_ConcurrentReadsAndWrites(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestRegistry_TrustScoreVariablesValidation(t *testing.T) {
+	resetAllVariablesForTest()
+	defer resetAllVariablesForTest()
+
+	if TrustScoreInitial != 0.20 || TrustThresholdStandard != 0.40 || TrustThresholdVIP != 0.80 {
+		t.Fatalf("valeurs initiales TrustScore inattendues: init=%v, std=%v, vip=%v", TrustScoreInitial, TrustThresholdStandard, TrustThresholdVIP)
+	}
+
+	// Patch valide
+	prep, err := ValidateAndPreparePatch(map[string]json.RawMessage{
+		"TrustThresholdStandard": json.RawMessage(`0.45`),
+	})
+	if err != nil {
+		t.Fatalf("attendu patch valide, erreur: %v", err)
+	}
+	ApplyPreparedPatchInMemory(prep, 10)
+	if TrustThresholdStandard != 0.45 {
+		t.Fatalf("patch TrustScore mal appliqué")
+	}
+
+	// Patch valide sur les poids IA, signalement, gouvernance et ELO
+	prepAI, errAI := ValidateAndPreparePatch(map[string]json.RawMessage{
+		"ModerationWeightIA":               json.RawMessage(`2.5`),
+		"ModerationWeightSignalMsg":        json.RawMessage(`3.5`),
+		"AIAutoReportThreshold":            json.RawMessage(`0.60`),
+		"AIAutoReportMessageThreshold":     json.RawMessage(`0.68`),
+		"ModerationAdminDelegationEnabled": json.RawMessage(`true`),
+		"SuperModeratorTrustThreshold":     json.RawMessage(`0.92`),
+		"BlameQuotaForAudit":               json.RawMessage(`4`),
+		"ModerationYouthBonusMax":          json.RawMessage(`6.0`),
+		"TrustScoreInitialVIP":             json.RawMessage(`0.88`),
+	})
+	if errAI != nil {
+		t.Fatalf("attendu patch IA/ gouvernance valide, erreur: %v", errAI)
+	}
+	ApplyPreparedPatchInMemory(prepAI, 11)
+	if ModerationWeightIA != 2.5 || ModerationWeightSignalMsg != 3.5 || AIAutoReportThreshold != 0.60 || !ModerationAdminDelegationEnabled || SuperModeratorTrustThreshold != 0.92 || BlameQuotaForAudit != 4 || ModerationYouthBonusMax != 6.0 || TrustScoreInitialVIP != 0.88 {
+		t.Fatalf("patch IA / gouvernance mal appliqué")
+	}
+
+	// Patch invalide (hors bornes [0.0, 1.0])
+	_, errInvalid := ValidateAndPreparePatch(map[string]json.RawMessage{
+		"TrustScoreInitial": json.RawMessage(`1.50`),
+	})
+	if errInvalid == nil {
+		t.Fatal("attendu un rejet pour TrustScoreInitial > 1.0")
+	}
+}

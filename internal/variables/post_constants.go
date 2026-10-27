@@ -14,11 +14,14 @@ const (
 	TagPermissionFriends   = 2
 	TagPermissionNobody    = 3
 
-	// Niveaux de visibilité pour les posts (0=Public, 1=Abonnés, 2=Amis, -1=Supprimé)
-	PostVisibilityDeleted   = -1
-	PostVisibilityAll       = 0
-	PostVisibilitySubcriber = 1
-	PostVisibilityFriend    = 2
+	// Niveaux de visibilité pour les posts (-2=Modéré, -1=Supprimé, 0=Public, 1=Abonnés, 2=Amis, 3=Quarantaine/Shadowban)
+	PostVisibilityModerated   = -2
+	PostVisibilityDeleted     = -1
+	PostVisibilitySoftDeleted = -1
+	PostVisibilityAll         = 0
+	PostVisibilitySubcriber   = 1
+	PostVisibilityFriend      = 2
+	PostVisibilityQuarantine  = 3
 )
 
 // ############################################################################

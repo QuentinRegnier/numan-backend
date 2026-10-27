@@ -142,16 +142,15 @@ func TestSpeedCacheUsersService(t *testing.T) {
 				}
 				return test.NewMockRows(
 					[]string{
-						"id", "username", "email", "email_verified", "phone", "phone_verified", "password_hash",
-						"first_name", "last_name", "birthdate", "sex", "bio", "profile_picture_id", "grade", "location",
-						"school", "work", "badges", "desactivated", "banned", "ban_reason", "ban_expires_at",
-						"created_at", "updated_at", "two_factor_enabled", "two_factor_method", "totp_secret",
+						"id", "username", "email", "email_verified", "phone", "phone_verified",
+						"password_hash", "first_name", "last_name", "birthdate", "sex", "bio",
+						"profile_picture_id", "grade", "location", "school", "work", "badges",
+						"desactivated", "banned", "ban_reason", "ban_expires_at", "created_at", "updated_at",
+						"two_factor_enabled", "two_factor_method", "totp_secret", "trust_score", "last_infraction_at",
 					},
 					[][]driver.Value{{
-						int64(30), "L3User", "l3@test.com", true, "", false, "hash",
-						"First", "Last", nil, 0, "Bio", int64(0), 0, "",
-						"", "", []byte(`{}`), false, false, nil, nil,
-						now, now, false, 0, nil,
+						int64(30), "L3User", "l3@test.com", true, "", false, "hash", "First", "Last", nil, 0, "Bio",
+						int64(0), 0, "", "", "", []byte(`{}`), false, false, nil, nil, now, now, false, 0, nil, float64(0.55), int64(0),
 					}},
 				), nil
 			}, nil)

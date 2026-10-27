@@ -19,8 +19,9 @@ type ScoreOptions struct {
 	MediaCount    int // Le nombre de médias attachés au post
 
 	// ── Contexte auteur ───────────────────────────────────────────────────
-	AuthorGrade         int // Niveau de confiance de l'auteur (0=Normal, 1=Certifié, etc.)
-	AuthorPostsInWindow int // Nombre de posts du même auteur dans la fenêtre temporelle actuelle
+	AuthorGrade         int     // Niveau de confiance de l'auteur (0=Normal, 1=Certifié, etc.)
+	AuthorTrustScore    float64 // Trust Score dynamique compris entre 0.00 et 1.00 (0 = non renseigné / rétrocompatibilité)
+	AuthorPostsInWindow int     // Nombre de posts du même auteur dans la fenêtre temporelle actuelle
 
 	// ── Contexte temporel ─────────────────────────────────────────────────
 	AgeSeconds float64 // Âge du post en secondes depuis sa création
@@ -36,9 +37,13 @@ type ScoreOptions struct {
 // Formule composite complète :
 // S(p, t) = BaseScore(p, t) · ExponentialDecay(p, t) · QualityFactor(p) · DiversityFactor(p)
 func CalculateRecommendationScore(options ScoreOptions) float64 {
-
-	// 1. FACTEUR DE MODÉRATION (phi_mod)
+	// 1. FACTEUR DE MODÉRATION (phi_mod) & BOUCLIER QUARANTAINE
 	if options.IsDeleted {
+		return 0.0
+	}
+	// Si le TrustScore est explicitement fourni (> 0) et inférieur au seuil Standard (0.40),
+	// le contenu est en Zone de Quarantaine (Shadowban) et ne doit pas remonter dans le flux public.
+	if options.AuthorTrustScore > 0.0 && options.AuthorTrustScore < 0.40 {
 		return 0.0
 	}
 

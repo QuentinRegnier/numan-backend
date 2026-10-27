@@ -95,8 +95,8 @@ func (m *userMapper) Columns() []string {
 		"id", "username", "email", "email_verified", "phone", "phone_verified",
 		"password_hash", "first_name", "last_name", "birthdate", "sex", "bio",
 		"profile_picture_id", "grade", "location", "school", "work", "badges",
-		"desactivated", "banned", "ban_reason", "ban_expires_at", "created_at", "updated_at",
-		"two_factor_enabled", "two_factor_method", "totp_secret",
+		"desactivated", "banned", "ban_reason", "ban_expires_at", "trust_score", "last_infraction_at",
+		"created_at", "updated_at", "two_factor_enabled", "two_factor_method", "totp_secret",
 	}
 }
 
@@ -152,6 +152,16 @@ func (m *userMapper) ToRow(data any) ([]any, error) {
 	if u.TOTPSecret == "" {
 		totpSecretDB = nil
 	}
+	var lastInfractionDB any = u.LastInfractionAt
+	if u.LastInfractionAt == 0 {
+		lastInfractionDB = nil
+	}
+	trustScore := u.TrustScore
+	if trustScore < 0.0 {
+		trustScore = 0.0
+	} else if trustScore > 1.0 {
+		trustScore = 1.0
+	}
 
 	badgesJSON, _ := json.Marshal(u.Badges)
 	var badgesDB any = string(badgesJSON)
@@ -159,13 +169,13 @@ func (m *userMapper) ToRow(data any) ([]any, error) {
 		badgesDB = "{}"
 	}
 
-	// ── ÉTAPE 3 : FORMATAGE DE LA LIGNE SQL ──
+	// ÉTAPE 3 : FORMATAGE DE LA LIGNE SQL
 	return []any{
 		u.ID, u.Username, u.Email, u.EmailVerified, phoneDB, u.PhoneVerified,
 		u.PasswordHash, u.FirstName, u.LastName, birthdateDB, u.Sex, bioDB,
 		ppDB, u.Grade, locDB, schoolDB, workDB, badgesDB,
-		u.Desactivated, u.Banned, banReasonDB, banExpiresDB, u.CreatedAt, u.UpdatedAt,
-		u.TwoFactorEnabled, u.TwoFactorMethod, totpSecretDB,
+		u.Desactivated, u.Banned, banReasonDB, banExpiresDB, trustScore, lastInfractionDB,
+		u.CreatedAt, u.UpdatedAt, u.TwoFactorEnabled, u.TwoFactorMethod, totpSecretDB,
 	}, nil
 }
 
@@ -440,7 +450,7 @@ type mediaMapper struct{}
 func (m *mediaMapper) TableName() string { return "content.media" }
 
 func (m *mediaMapper) Columns() []string {
-	return []string{"id", "owner_id", "storage_path", "visibility", "created_at", "updated_at"}
+	return []string{"id", "owner_id", "storage_path", "visibility", "ia_score", "created_at", "updated_at"}
 }
 
 func (m *mediaMapper) ToRow(data any) ([]any, error) {
@@ -463,7 +473,7 @@ func (m *mediaMapper) ToRow(data any) ([]any, error) {
 
 	// ── ÉTAPE 3 : FORMATAGE DE LA LIGNE SQL ─────────────────────────────────
 	return []any{
-		med.ID, med.OwnerID, storageDB, med.Visibility, med.CreatedAt, med.UpdatedAt,
+		med.ID, med.OwnerID, storageDB, med.Visibility, med.IAScore, med.CreatedAt, med.UpdatedAt,
 	}, nil
 }
 
@@ -787,8 +797,9 @@ func (m *reportMapper) TableName() string { return "moderation.reports" }
 
 func (m *reportMapper) Columns() []string {
 	return []string{
-		"id", "reporter_id", "target_type", "target_ids", "category",
-		"reason", "rationale", "state", "importance", "created_at", "updated_at",
+		"id", "reporter_id", "report_origin", "target_type", "target_ids",
+		"target_owner_id", "author_trust_score", "ia_score_max", "accumulated_report_score", "report_count",
+		"category", "reason", "rationale", "state", "importance", "created_at", "updated_at",
 	}
 }
 
@@ -816,8 +827,17 @@ func (m *reportMapper) ToRow(data any) ([]any, error) {
 	}
 
 	// ── ÉTAPE 3 : FORMATAGE DE LA LIGNE SQL ─────────────────────────────────
+	var reporterDB any = r.ReporterID
+	if r.ReporterID <= 0 {
+		reporterDB = nil // NULL en base lorsque le signalement est émis par le robot IA (évite la FK sur auth.users)
+	}
+	reportCount := r.ReportCount
+	if reportCount <= 0 {
+		reportCount = 1
+	}
 	return []any{
-		r.ID, r.ReporterID, r.TargetType, pq.Array(r.TargetIDs),
+		r.ID, reporterDB, r.ReportOrigin, r.TargetType, pq.Array(r.TargetIDs),
+		r.TargetOwnerID, r.AuthorTrustScore, r.IAScoreMax, r.AccumulatedReportScore, reportCount,
 		r.Category, reasonDB, rationaleDB, r.State, r.Importance, r.CreatedAt, r.UpdatedAt,
 	}, nil
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
 
 // ############################################################################
@@ -29,7 +30,13 @@ func GetTelemetryProfile(ctx context.Context, userID int64) (lite_models.Telemet
 		return profile, nil
 	}
 
-	// ── L2 : MONGODB ────────────────────────────────
+	// Résolution du TrustScore actuel de l'utilisateur pour hydrater ConfidenceScore
+	resolvedTrustScore := variables.TrustScoreInitial
+	if uLite, errLite := GetUserLite(ctx, userID); errLite == nil && uLite.TrustScore > 0 {
+		resolvedTrustScore = uLite.TrustScore
+	}
+
+	// ─── L2 : MONGODB ───
 	var mongoSettings user_settings_models.UserSettingsPayload
 	mongoDocs, errMongo := mongo.UserSettings.Get(map[string]any{"user_id": userID}, nil)
 	if errMongo != nil {
@@ -39,7 +46,7 @@ func GetTelemetryProfile(ctx context.Context, userID int64) (lite_models.Telemet
 			profile = lite_models.TelemetryProfileLite{
 				Vector:          mongoSettings.TelemetryVector,
 				TopTags:         mongoSettings.TelemetryTags,
-				ConfidenceScore: 0.0,
+				ConfidenceScore: resolvedTrustScore,
 				TimestampMs:     mongoSettings.TelemetryTimestamp,
 			}
 			go func(p lite_models.TelemetryProfileLite, uID int64) {
@@ -62,7 +69,7 @@ func GetTelemetryProfile(ctx context.Context, userID int64) (lite_models.Telemet
 		profile = lite_models.TelemetryProfileLite{
 			Vector:          postgresSettings.TelemetryVector,
 			TopTags:         postgresSettings.TelemetryTags,
-			ConfidenceScore: 0.0,
+			ConfidenceScore: resolvedTrustScore,
 			TimestampMs:     postgresSettings.TelemetryTimestamp,
 		}
 		go func(p lite_models.TelemetryProfileLite, uID int64) {

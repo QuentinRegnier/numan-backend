@@ -10,6 +10,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
+	"github.com/QuentinRegnier/numan-backend/internal/service/moderation_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/notification_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
@@ -76,9 +77,20 @@ func TogglePostLike(ctx context.Context, callerID int64, input like_models.LikeP
 		return nil // Non bloquant pour l'UX
 	}
 
-	// ── ÉTAPE 4 : NOTIFICATION TEMPS RÉEL ───────────────────────────────────
+	// ── ÉTAPE 4 : NOTIFICATION TEMPS RÉEL & BONUS TRUST SCORE ──────────────
 
 	if input.Action == "like" && postAuthorID != 0 && postAuthorID != callerID {
+		// Bonus Trust Score si le contenu est aimé par un Modérateur ou Administrateur (§C.13 : +0.04)
+		if callerLite, errLite := cache_service.GetUserLite(ctx, callerID); errLite == nil && callerLite.Grade >= variables.UserGradeModerator {
+			_ = moderation_service.PublishTrustScoreEvent(
+				ctx,
+				postAuthorID,
+				variables.TrustTriggerLikedByAdmin,
+				input.PostID,
+				"Publication aimée par un modérateur ou administrateur",
+			)
+		}
+
 		go func(authorID int64) {
 			errNotif := notification_service.DispatchNotification(context.Background(), authorID, callerID, variables.EventPostLiked, input.PostID)
 			if errNotif != nil {

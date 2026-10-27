@@ -2,8 +2,12 @@ package media_service
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"math"
+	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/media_models"
@@ -15,7 +19,9 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
 	miniogo "github.com/minio/minio-go/v7"
+	"go.mongodb.org/mongo-driver/bson"
 )
 
 // ############################################################################
@@ -40,12 +46,29 @@ func generateWatermarkedURL(mediaStoragePath string, authorID int64, contextID i
 }
 
 // GenerateMediaViewCascade récupère le média (L1->L2->L3) et génère le DTO final (URL signée).
-// Fonction d'assistance massivement appelée lors de l'hydratation des vues de l'API.
+// Bloque strictement le chargement si le média est en quarantaine (Visibility = 2) ou non public.
 func GenerateMediaViewCascade(ctx context.Context, targetMediaID, authorID, contextID, readerID int64) (media_models.MediaView, error) {
 	mediaPayload, errCascade := getMediaCascade(ctx, targetMediaID)
-
-	if errCascade != nil || !mediaPayload.Visibility {
+	if errCascade != nil {
 		return media_models.MediaView{}, numan_error.NewNotFound(numan_error.CodeNotFound, "Média introuvable ou supprimé.", errCascade)
+	}
+
+	if mediaPayload.Visibility == variables.MediaVisibilityQuarantine {
+		return media_models.MediaView{}, numan_error.NewForbidden(
+			numan_error.CodeMediaUnderReview,
+			"Ce média est en attente de validation par un modérateur et ne peut pas être chargé.",
+			nil,
+		)
+	}
+	if mediaPayload.Visibility == variables.MediaVisibilityRejected {
+		return media_models.MediaView{}, numan_error.NewForbidden(
+			numan_error.CodeMediaRejected,
+			"Ce média a été retiré par la modération.",
+			nil,
+		)
+	}
+	if mediaPayload.Visibility != variables.MediaVisibilityPublic {
+		return media_models.MediaView{}, numan_error.NewNotFound(numan_error.CodeNotFound, "Média introuvable ou supprimé.", nil)
 	}
 
 	signedURL := generateWatermarkedURL(mediaPayload.StoragePath, authorID, contextID, readerID)
@@ -91,10 +114,10 @@ func getMediaCascade(ctx context.Context, mediaID int64) (media_models.MediaPayl
 	}
 
 	// ── TENTATIVE L2 (MONGODB WARM STORAGE) ───────────────────────────────────
-	mediaFromMongo, errMongo := mongo.MongoLoadMedia([]int64{mediaID})
-	if errMongo == nil && len(mediaFromMongo) > 0 {
-		_ = object_cache_service.SetMediaInObjectCache(ctx, mediaFromMongo[0])
-		return mediaFromMongo[0], nil
+	mediaFromMongo, errMongo := mongo.MongoGetMediaByID(ctx, mediaID)
+	if errMongo == nil && mediaFromMongo.ID != 0 {
+		_ = object_cache_service.SetMediaInObjectCache(ctx, mediaFromMongo)
+		return mediaFromMongo, nil
 	}
 
 	// ── TENTATIVE L3 (POSTGRESQL COLD STORAGE) ────────────────────────────────
@@ -140,4 +163,77 @@ func RemovePhysicalMedia(ctx context.Context, storagePath string) error {
 	}
 
 	return nil
+}
+
+// DecodeMediaVisibilityJSON désérialise de manière rétrocompatible une visibilité JSON (booléen legacy ou entier).
+func DecodeMediaVisibilityJSON(data []byte) (int, error) {
+	str := string(data)
+	if str == "true" {
+		return variables.MediaVisibilityPublic, nil
+	}
+	if str == "false" {
+		return variables.MediaVisibilityPending, nil
+	}
+	val, err := strconv.Atoi(str)
+	if err != nil {
+		return 0, numan_error.NewAppError(http.StatusBadRequest, numan_error.CodeInvalidPayload, "Valeur JSON invalide pour MediaVisibility", err)
+	}
+	return val, nil
+}
+
+// DecodeMediaVisibilityBSON désérialise de manière rétrocompatible une valeur BSON
+// (booléen legacy ou entier) via l'API moderne bson.RawValue.
+func DecodeMediaVisibilityBSON(raw bson.RawValue) (int, error) {
+	switch raw.Type {
+	case bson.TypeBoolean:
+		if raw.Boolean() {
+			return variables.MediaVisibilityPublic, nil
+		}
+		return variables.MediaVisibilityPending, nil
+
+	case bson.TypeInt32:
+		if len(raw.Value) != 4 {
+			return 0, numan_error.NewAppError(
+				http.StatusBadRequest,
+				numan_error.CodeInvalidPayload,
+				"Valeur BSON Int32 invalide pour MediaVisibility",
+				nil,
+			)
+		}
+		return int(int32(binary.LittleEndian.Uint32(raw.Value))), nil
+
+	case bson.TypeInt64:
+		if len(raw.Value) != 8 {
+			return 0, numan_error.NewAppError(
+				http.StatusBadRequest,
+				numan_error.CodeInvalidPayload,
+				"Valeur BSON Int64 invalide pour MediaVisibility",
+				nil,
+			)
+		}
+		return int(int64(binary.LittleEndian.Uint64(raw.Value))), nil
+
+	case bson.TypeDouble:
+		if len(raw.Value) != 8 {
+			return 0, numan_error.NewAppError(
+				http.StatusBadRequest,
+				numan_error.CodeInvalidPayload,
+				"Valeur BSON Double invalide pour MediaVisibility",
+				nil,
+			)
+		}
+		value := math.Float64frombits(binary.LittleEndian.Uint64(raw.Value))
+		return int(value), nil
+
+	default:
+		return 0, numan_error.NewAppError(
+			http.StatusBadRequest,
+			numan_error.CodeInvalidPayload,
+			fmt.Sprintf(
+				"Type BSON non supporté %v pour MediaVisibility",
+				raw.Type,
+			),
+			nil,
+		)
+	}
 }

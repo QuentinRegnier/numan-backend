@@ -109,12 +109,15 @@ CREATE TABLE auth.users (
     school              text,
     work                text,
     badges              jsonb    NOT NULL DEFAULT '{}'::jsonb,
-    desactivated        boolean  NOT NULL DEFAULT false,
-    banned              boolean  NOT NULL DEFAULT false,
+    desactivated        boolean          NOT NULL DEFAULT false,
+    banned              boolean          NOT NULL DEFAULT false,
     ban_reason          text,
     ban_expires_at      bigint,                       -- epoch ms
-    created_at          bigint   NOT NULL DEFAULT util.now_ms(),
-    updated_at          bigint   NOT NULL DEFAULT util.now_ms()
+    trust_score         double precision NOT NULL DEFAULT 0.20,
+    last_infraction_at  bigint,                       -- epoch ms (utilisé par le cron mensuel +0.02)
+    created_at          bigint           NOT NULL DEFAULT util.now_ms(),
+    updated_at          bigint           NOT NULL DEFAULT util.now_ms(),
+    CONSTRAINT users_trust_score_range CHECK (trust_score >= 0.00 AND trust_score <= 1.00)
 );
 
 /* auth.relations — directed social edge. state: 0 none, 1 follower, 2 friend, -1 blocked. */
@@ -217,15 +220,17 @@ CREATE TABLE content.comments (
     updated_at  timestamptz NOT NULL DEFAULT now()
 ) WITH (fillfactor = 85, autovacuum_vacuum_scale_factor = 0.05);
 
-/* content.media — registry only (files live in S3/MinIO). visibility=false is a
-   "pending upload" OR a soft-delete; the GC distinguishes them by age/refs. */
+/* content.media — registry only (files live in S3/MinIO).
+   visibility states: -2 rejected/moderated, -1 soft-deleted, 0 pending upload, 1 public/active, 2 quarantine (under review). */
 CREATE TABLE content.media (
-    id            bigint  NOT NULL,
-    owner_id      bigint,
-    storage_path  text,
-    visibility    boolean NOT NULL DEFAULT false,
-    created_at    bigint  NOT NULL DEFAULT util.now_ms(),
-    updated_at    bigint  NOT NULL DEFAULT util.now_ms()
+   id            bigint           NOT NULL,
+   owner_id      bigint,
+   storage_path  text,
+   visibility    smallint         NOT NULL DEFAULT 0,
+   ia_score      double precision NOT NULL DEFAULT 0.0,
+   created_at    bigint           NOT NULL DEFAULT util.now_ms(),
+   updated_at    bigint           NOT NULL DEFAULT util.now_ms(),
+   CONSTRAINT media_ia_score_range CHECK (ia_score >= 0.00 AND ia_score <= 1.00)
 );
 
 /* content.likes — polymorphic: target_type 0 = post, 1 = comment (matches the
@@ -309,27 +314,59 @@ CREATE TABLE messaging.members (
     updated_at           bigint   NOT NULL DEFAULT util.now_ms()
 ) WITH (fillfactor = 85, autovacuum_vacuum_scale_factor = 0.02);
 
-/* moderation.reports — state 0 pending, 1 in progress, 2 closed. */
+/* moderation.reports — state 0 pending, 1 in progress, -1 closed.
+   report_origin: 0 = USER (signalement humain), 1 = AUTO_AI (signalement robot serveur), 2 = HYBRID (Auto-IA + Humain). */
 CREATE TABLE moderation.reports (
-    id           bigint   NOT NULL,
-    reporter_id  bigint,
-    target_type  smallint NOT NULL,
-    target_ids   bigint[] NOT NULL,
-    category     smallint NOT NULL,
-    reason       text,
-    rationale    text,
-    state        smallint NOT NULL DEFAULT 0,
-    importance   double precision NOT NULL DEFAULT 0.0,
-    created_at   bigint   NOT NULL DEFAULT util.now_ms(),
-    updated_at   bigint   NOT NULL DEFAULT util.now_ms()
+    id                       bigint           NOT NULL,
+    reporter_id              bigint,
+    report_origin            smallint         NOT NULL DEFAULT 0,
+    target_type              smallint         NOT NULL,
+    target_ids               bigint[]         NOT NULL,
+    target_owner_id          bigint           NOT NULL DEFAULT 0,
+    author_trust_score       double precision NOT NULL DEFAULT 0.20,
+    ia_score_max             double precision NOT NULL DEFAULT 0.00,
+    accumulated_report_score double precision NOT NULL DEFAULT 0.00,
+    report_count             integer          NOT NULL DEFAULT 1,
+    category                 smallint         NOT NULL,
+    reason                   text,
+    rationale                text,
+    state                    smallint         NOT NULL DEFAULT 0,
+    importance               double precision NOT NULL DEFAULT 0.0,
+    created_at               bigint           NOT NULL DEFAULT util.now_ms(),
+    updated_at               bigint           NOT NULL DEFAULT util.now_ms()
 );
 
-/* moderation.legal_holds — blocks hard deletion of held posts (FK added in SECTION 4). */
-CREATE TABLE moderation.legal_holds (
-    post_id      bigint      NOT NULL,
-    reason       text        NOT NULL,
-    created_at   timestamptz NOT NULL DEFAULT TIMEZONE('utc'::text, NOW()),
-    assigned_by  bigint
+/* moderation.posts_moderation — Table d'indexation rapide par colonne générée STORED. */
+CREATE TABLE moderation.posts_moderation (
+     target_id                bigint        NOT NULL,
+     target_type              smallint      NOT NULL DEFAULT 0, -- 0: Post, 3: Message
+     owner_id                 bigint        NOT NULL DEFAULT 0,
+     author_trust_score       numeric(4, 3) NOT NULL DEFAULT 0.200,
+     report_origin            smallint      NOT NULL DEFAULT 0, -- 0: USER, 1: AUTO_AI, 2: HYBRID
+     ia_score_max             numeric(4, 3) NOT NULL DEFAULT 0.000,
+     accumulated_report_score numeric(8, 3) NOT NULL DEFAULT 0.000,
+     report_count             integer       NOT NULL DEFAULT 1,
+     priority_score           numeric(8, 3) GENERATED ALWAYS AS (
+         ROUND(
+                 ((1.0 + 0.50 * (1.0 - author_trust_score)) / (1.0 + 1.50 * author_trust_score * author_trust_score))
+                     * ((ia_score_max * 2.0) + accumulated_report_score),
+                 3
+         )
+         ) STORED,
+     status                   varchar(20)   NOT NULL DEFAULT 'pending',
+     created_at               bigint        NOT NULL DEFAULT util.now_ms(),
+     updated_at               bigint        NOT NULL DEFAULT util.now_ms(),
+     CONSTRAINT posts_moderation_pkey PRIMARY KEY (target_type, target_id)
+);
+
+/* moderation.stegano_bans — registre permanent des identifiants stéganographiques bannis (infraction majeure). */
+CREATE TABLE moderation.stegano_bans (
+    user_id        bigint NOT NULL,
+    stegano_Basic  text   NOT NULL,
+    reason         text   NOT NULL,
+    source_post_id bigint,
+    created_at     bigint NOT NULL DEFAULT util.now_ms(),
+    CONSTRAINT stegano_bans_pkey PRIMARY KEY (user_id)
 );
 /* =============================================================================
    SECTION 4 — PRIMARY KEYS, UNIQUE & FOREIGN KEYS  (unchanged guarantees vs v1)
@@ -430,9 +467,10 @@ CREATE INDEX idx_likes_user           ON content.likes (user_id, target_type, cr
 -- saved: newest-first pages + reverse lookup (also serves the FK cascade from posts)
 CREATE INDEX idx_saved_user_created ON content.saved (user_id, created_at DESC, id DESC);
 CREATE INDEX idx_saved_post         ON content.saved (post_id);
--- media: FK support + GC candidate scan (invisible rows only)
-CREATE INDEX idx_media_owner ON content.media (owner_id);
-CREATE INDEX idx_media_gc    ON content.media (updated_at) WHERE visibility = false;
+-- media: FK support + GC candidate scan (pending=0 or soft-deleted=-1/-2) + quarantine queue index (visibility=2)
+CREATE INDEX idx_media_owner      ON content.media (owner_id);
+CREATE INDEX idx_media_gc         ON content.media (updated_at) WHERE visibility IN (-2, -1, 0);
+CREATE INDEX idx_media_quarantine ON content.media (created_at ASC, id ASC) WHERE visibility = 2;
 
 -- ---- messaging --------------------------------------------------------------
 CREATE INDEX idx_conversations_created      ON messaging.conversations (created_at DESC);
@@ -458,6 +496,8 @@ CREATE INDEX idx_reports_reporter ON moderation.reports (reporter_id);
 CREATE INDEX idx_reports_targets  ON moderation.reports USING gin (target_ids);
 CREATE INDEX idx_reports_created  ON moderation.reports (created_at);
 CREATE INDEX idx_reports_state    ON moderation.reports (state);
+CREATE INDEX idx_posts_priority ON moderation.posts_moderation (priority_score DESC, created_at ASC) WHERE status = 'pending';
+CREATE INDEX idx_reports_pending_priority ON moderation.reports (importance DESC, created_at ASC) WHERE state = 0;
 /* =============================================================================
    SECTION 6 — ROW-SHAPE VIEWS (internal; single source of the column lists that
    the Go `Scan` calls depend on, so each shape is defined once)
@@ -507,7 +547,9 @@ SELECT u.id,
        util.ms_to_ts(u.updated_at)     AS updated_at,
        u.two_factor_enabled,
        u.two_factor_method,
-       COALESCE(u.totp_secret, '')::text AS totp_secret
+       COALESCE(u.totp_secret, '')::text AS totp_secret,
+       u.trust_score,
+       COALESCE(u.last_infraction_at, 0) AS last_infraction_at
 FROM auth.users u;
 
 /* auth.sessions_l3 — the 8 non-secret columns scanned by func_load_session(s).go (secrets are never returned). */
@@ -661,29 +703,80 @@ LANGUAGE sql STABLE AS $$
     FROM auth.relations r WHERE r.id > COALESCE(p_after_id, 0) ORDER BY r.id LIMIT LEAST(GREATEST(p_limit, 1), 50000)
 $$;
 
-/* User-lite seeder. v1 failed at runtime: varchar/text type mismatch and COALESCE(smallint, boolean). */
+/* User-lite seeder (inclut désormais trust_score pour le Speed Cache L1). */
 CREATE FUNCTION auth.func_load_users_paginated(p_limit integer, p_offset integer)
 RETURNS TABLE(id bigint, username text, first_name text, last_name text, profile_picture_id bigint, bio text,
-              grade smallint, conversation_permission smallint, add_group_permission smallint, hide_connections smallint)
+              grade smallint, trust_score double precision, conversation_permission smallint,
+              add_group_permission smallint, hide_connections smallint)
 LANGUAGE sql STABLE AS $$
-    SELECT u.id, u.username, u.first_name, u.last_name, u.profile_picture_id, u.bio, u.grade,
-           COALESCE((s.privacy ->> 'conversation_permission')::smallint, 0::smallint),
-           COALESCE((s.privacy ->> 'add_group_permission')::smallint,   0::smallint),
-           COALESCE((s.privacy ->> 'hide_connections')::smallint,       0::smallint)
+    SELECT  u.id, u.username, u.first_name, u.last_name, u.profile_picture_id, u.bio, u.grade, u.trust_score,
+            COALESCE((s.privacy ->> 'conversation_permission')::smallint, 0::smallint),
+            COALESCE((s.privacy ->> 'add_group_permission')::smallint,   0::smallint),
+            COALESCE((s.privacy ->> 'hide_connections')::smallint,       0::smallint)
     FROM auth.users u LEFT JOIN auth.user_settings s ON s.user_id = u.id
     ORDER BY u.id LIMIT p_limit OFFSET GREATEST(p_offset, 0)
 $$;
 
 CREATE FUNCTION auth.func_load_users_keyset(p_after_id bigint DEFAULT 0, p_limit integer DEFAULT 5000)
 RETURNS TABLE(id bigint, username text, first_name text, last_name text, profile_picture_id bigint, bio text,
-              grade smallint, conversation_permission smallint, add_group_permission smallint, hide_connections smallint)
+              grade smallint, trust_score double precision, conversation_permission smallint,
+              add_group_permission smallint, hide_connections smallint)
 LANGUAGE sql STABLE AS $$
-    SELECT u.id, u.username, u.first_name, u.last_name, u.profile_picture_id, u.bio, u.grade,
+    SELECT u.id, u.username, u.first_name, u.last_name, u.profile_picture_id, u.bio, u.grade, u.trust_score,
            COALESCE((s.privacy ->> 'conversation_permission')::smallint, 0::smallint),
            COALESCE((s.privacy ->> 'add_group_permission')::smallint,   0::smallint),
            COALESCE((s.privacy ->> 'hide_connections')::smallint,       0::smallint)
     FROM auth.users u LEFT JOIN auth.user_settings s ON s.user_id = u.id
     WHERE u.id > COALESCE(p_after_id, 0) ORDER BY u.id LIMIT LEAST(GREATEST(p_limit, 1), 50000)
+$$;
+
+/* Mise à jour atomique par lot des Trust Scores et récompense mensuelle (+0.02). */
+CREATE FUNCTION auth.func_apply_trust_score_delta(p_user_id bigint, p_delta double precision, p_is_infraction boolean,
+                                                  p_is_major_ban boolean, p_ban_reason text DEFAULT NULL)
+RETURNS TABLE(new_score double precision, is_banned boolean)
+LANGUAGE plpgsql AS $$
+DECLARE
+v_score  double precision;
+    v_banned boolean;
+    v_now    bigint := util.now_ms();
+BEGIN
+    IF p_is_major_ban THEN
+        UPDATE auth.users u
+        SET trust_score        = 0.00,
+            banned             = true,
+            ban_reason         = COALESCE(p_ban_reason, 'Infraction majeure confirmée'),
+            last_infraction_at = v_now,
+            updated_at         = v_now
+        WHERE u.id = p_user_id
+            RETURNING u.trust_score, u.banned INTO v_score, v_banned;
+    ELSE
+        UPDATE auth.users u
+        SET trust_score        = LEAST(1.00, GREATEST(0.00, u.trust_score + p_delta)),
+            banned             = CASE WHEN LEAST(1.00, GREATEST(0.00, u.trust_score + p_delta)) <= 0.00 THEN true ELSE u.banned END,
+            ban_reason         = CASE WHEN LEAST(1.00, GREATEST(0.00, u.trust_score + p_delta)) <= 0.00 THEN COALESCE(p_ban_reason, 'Trust Score tombé à 0.00') ELSE u.ban_reason END,
+            last_infraction_at = CASE WHEN p_is_infraction THEN v_now ELSE u.last_infraction_at END,
+            updated_at         = v_now
+        WHERE u.id = p_user_id
+            RETURNING u.trust_score, u.banned INTO v_score, v_banned;
+    END IF;
+RETURN QUERY SELECT COALESCE(v_score, 0.00), COALESCE(v_banned, false);
+END;
+$$;
+
+/* Cron mensuel : +0.02 pour tous les utilisateurs actifs non bannis sans infraction depuis >= 30 jours. */
+CREATE FUNCTION auth.func_increment_monthly_trust_scores()
+RETURNS TABLE(user_id bigint, new_trust_score double precision)
+LANGUAGE sql AS $$
+    UPDATE auth.users u
+    SET trust_score = LEAST(1.00, u.trust_score + 0.02),
+        updated_at  = util.now_ms()
+    WHERE u.banned = false
+      AND u.desactivated = false
+      AND u.trust_score > 0.00
+      AND u.trust_score < 1.00
+      AND u.created_at <= util.now_ms() - (30::bigint * 86400000)
+      AND (u.last_infraction_at IS NULL OR u.last_infraction_at <= util.now_ms() - (30::bigint * 86400000))
+        RETURNING u.id, u.trust_score
 $$;
 
 /* Cuckoo-filter warm-up (username/email/phone of every user). */
@@ -979,10 +1072,12 @@ $$;
    --------------------------------------------------------------------------- */
 -- name kept from v1 (content.get_media). storage_path NULL -> '' because Go scans it into string.
 CREATE FUNCTION content.get_media(p_media_id bigint)
-RETURNS TABLE(id bigint, owner_id bigint, storage_path text, visibility boolean, created_at bigint, updated_at bigint)
+RETURNS TABLE(id bigint, owner_id bigint, storage_path text, visibility smallint, ia_score double precision,
+              created_at bigint, updated_at bigint)
 LANGUAGE sql STABLE AS $$
-    SELECT m.id, m.owner_id, COALESCE(m.storage_path, ''), m.visibility, m.created_at, m.updated_at
-    FROM content.media m WHERE m.id = p_media_id
+    SELECT m.id, m.owner_id, COALESCE(m.storage_path, ''), m.visibility, COALESCE(m.ia_score, 0.0), m.created_at, m.updated_at
+    FROM content.media m
+    WHERE m.id = p_media_id
 $$;
 
 /* ---------------------------------------------------------------------------
@@ -1150,10 +1245,10 @@ CREATE FUNCTION content.func_delete_orphan_media() RETURNS TABLE(id bigint, stor
 LANGUAGE plpgsql AS $$
 DECLARE v_now bigint := util.now_ms();
 BEGIN
-    RETURN QUERY
+RETURN QUERY
     WITH del AS (
         DELETE FROM content.media m
-        WHERE m.visibility = false
+        WHERE m.visibility IN (-2, -1, 0)
           AND NOT EXISTS (SELECT 1 FROM moderation.legal_holds lh JOIN content.posts p ON p.id = lh.post_id
                           WHERE p.media_ids @> ARRAY[m.id])
           AND NOT EXISTS (SELECT 1 FROM moderation.reports r
@@ -1162,15 +1257,16 @@ BEGIN
                               OR (r.target_type = 1 AND EXISTS (SELECT 1 FROM content.posts p
                                                                 WHERE p.id = ANY(r.target_ids) AND p.media_ids @> ARRAY[m.id]))))
           AND (
-                (m.updated_at < v_now - 6 * 3600000
-                 AND NOT EXISTS (SELECT 1 FROM content.posts p WHERE p.media_ids @> ARRAY[m.id])
-                 AND NOT EXISTS (SELECT 1 FROM messaging.messages msg
-                                 WHERE msg.attachments ? 'media_id' AND msg.attachments -> 'media_id' = to_jsonb(m.id))
-                 AND NOT EXISTS (SELECT 1 FROM auth.users u WHERE u.profile_picture_id = m.id))
-                OR m.updated_at < v_now - 48 * 3600000
+                m.visibility = -2
+                OR (m.visibility = 0 AND m.updated_at < v_now - 6 * 3600000
+                    AND NOT EXISTS (SELECT 1 FROM content.posts p WHERE p.media_ids @> ARRAY[m.id])
+                    AND NOT EXISTS (SELECT 1 FROM messaging.messages msg
+                                    WHERE msg.attachments ? 'media_id' AND msg.attachments -> 'media_id' = to_jsonb(m.id))
+                    AND NOT EXISTS (SELECT 1 FROM auth.users u WHERE u.profile_picture_id = m.id))
+                OR (m.visibility = -1 AND m.updated_at < v_now - 48 * 3600000)
               )
         RETURNING m.id, m.storage_path)
-    SELECT d.id, COALESCE(d.storage_path, '')::text FROM del d;
+SELECT d.id, COALESCE(d.storage_path, '')::text FROM del d;
 END;
 $$;
 /* ---------------------------------------------------------------------------
@@ -1504,6 +1600,78 @@ LANGUAGE sql AS $$
     UPDATE moderation.reports SET state = p_new_state, rationale = p_new_rationale, updated_at = util.now_ms() WHERE id = p_report_id
 $$;
 
+CREATE FUNCTION moderation.func_archive_closed_report(
+    p_report_id bigint,
+    p_state smallint,
+    p_rationale text
+)
+RETURNS boolean
+LANGUAGE plpgsql AS $$
+BEGIN
+    UPDATE moderation.reports
+    SET state = p_state,
+        rationale = p_rationale,
+        updated_at = util.now_ms()
+    WHERE id = p_report_id;
+    RETURN FOUND;
+END;
+$$;
+
+CREATE FUNCTION moderation.func_register_stegano_ban(p_user_id bigint, p_stegano_id text, p_reason text,
+                                                     p_source_post_id bigint DEFAULT NULL)
+RETURNS void
+LANGUAGE sql AS $$
+    INSERT INTO moderation.stegano_bans (user_id, stegano_id, reason, source_post_id, created_at)
+    VALUES (p_user_id, p_stegano_id, p_reason, p_source_post_id, util.now_ms())
+    ON CONFLICT (user_id) DO UPDATE
+      SET stegano_id = EXCLUDED.stegano_id,
+      reason     = EXCLUDED.reason,
+      created_at = EXCLUDED.created_at
+      $$;
+
+CREATE FUNCTION moderation.func_is_stegano_banned(p_user_id bigint)
+RETURNS boolean
+LANGUAGE sql STABLE AS $$
+    SELECT EXISTS(SELECT 1 FROM moderation.stegano_bans b WHERE b.user_id = p_user_id)
+$$;
+
+CREATE FUNCTION moderation.func_load_quarantined_media_paginated(p_limit integer, p_offset integer)
+RETURNS TABLE(id bigint, owner_id bigint, storage_path text, visibility smallint, ia_score double precision, created_at bigint, updated_at bigint)
+LANGUAGE sql STABLE AS $$
+    SELECT m.id, m.owner_id, COALESCE(m.storage_path, ''), m.visibility, COALESCE(m.ia_score, 0.0), m.created_at, m.updated_at
+    FROM content.media m
+    WHERE m.visibility = 2
+    ORDER BY m.ia_score DESC, m.created_at ASC, m.id ASC
+    LIMIT LEAST(GREATEST(p_limit, 1), 100) OFFSET GREATEST(p_offset, 0)
+$$;
+
+CREATE FUNCTION moderation.func_load_pending_reports_paginated(
+    p_limit integer,
+    p_offset integer,
+    p_origin_filter smallint DEFAULT NULL,
+    p_target_type_filter smallint DEFAULT NULL
+)
+RETURNS TABLE(
+    id bigint, reporter_id bigint, report_origin smallint, target_type smallint, target_ids bigint[],
+    target_owner_id bigint, author_trust_score double precision, ia_score_max double precision,
+    accumulated_report_score double precision, report_count integer, category smallint,
+    reason text, rationale text, state smallint, importance double precision,
+    created_at bigint, updated_at bigint
+)
+LANGUAGE sql STABLE AS $$
+    SELECT r.id, COALESCE(r.reporter_id, 0), r.report_origin, r.target_type, r.target_ids,
+           r.target_owner_id, r.author_trust_score, r.ia_score_max,
+           r.accumulated_report_score, r.report_count, r.category,
+           COALESCE(r.reason, ''), COALESCE(r.rationale, ''), r.state, r.importance,
+           r.created_at, r.updated_at
+    FROM moderation.reports r
+    WHERE r.state = 0
+      AND (p_origin_filter IS NULL OR r.report_origin = p_origin_filter)
+      AND (p_target_type_filter IS NULL OR r.target_type = p_target_type_filter)
+    ORDER BY r.importance DESC, r.created_at ASC
+    LIMIT LEAST(GREATEST(p_limit, 1), 100) OFFSET GREATEST(p_offset, 0)
+$$;
+
 /* ---------------------------------------------------------------------------
    7.14 VIEWS schema — read projections
    post_engagement_view now READS the denormalised counters instead of re-aggregating likes/comments per row.
@@ -1753,12 +1921,13 @@ LANGUAGE sql STABLE AS $$
     LIMIT LEAST(GREATEST(p_limit, 1), 1000)
 $$;
 
-CREATE FUNCTION content.func_load_media(
-    p_owner_id bigint DEFAULT NULL, p_media_ids bigint[] DEFAULT NULL, p_order_mode smallint DEFAULT 0)
-RETURNS TABLE(id bigint, owner_id bigint, storage_path text, visibility boolean, created_at bigint)
+CREATE FUNCTION content.func_load_media(p_owner_id bigint DEFAULT NULL, p_media_ids bigint[] DEFAULT NULL,
+                                        p_order_mode smallint DEFAULT 0)
+RETURNS TABLE(id bigint, owner_id bigint, storage_path text, visibility smallint, created_at bigint)
 LANGUAGE sql STABLE AS $$
     SELECT m.id, m.owner_id, m.storage_path, m.visibility, m.created_at FROM content.media m
-    WHERE m.visibility = true AND (p_owner_id IS NULL OR m.owner_id = p_owner_id) AND (p_media_ids IS NULL OR m.id = ANY(p_media_ids))
+    WHERE m.visibility = 1 AND (p_owner_id IS NULL OR m.owner_id = p_owner_id)
+                           AND (p_media_ids IS NULL OR m.id = ANY(p_media_ids))
     ORDER BY CASE WHEN p_order_mode = 0 THEN m.created_at END DESC, CASE WHEN p_order_mode = 1 THEN m.created_at END ASC
 $$;
 

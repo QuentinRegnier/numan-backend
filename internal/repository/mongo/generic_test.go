@@ -1,7 +1,8 @@
-package mongo
+package mongo_test
 
 import (
 	"context"
+	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"reflect"
 	"testing"
 
@@ -13,7 +14,7 @@ import (
 )
 
 func TestCollection_NilReceiver(t *testing.T) {
-	var nilColl *Collection
+	var nilColl *mongo.Collection
 
 	// Set
 	err := nilColl.Set(map[string]any{"id": int64(1)})
@@ -29,7 +30,7 @@ func TestCollection_NilReceiver(t *testing.T) {
 	test.AssertDatabaseError_Mongo(t, err)
 
 	// update
-	err = nilColl.update(map[string]any{"id": int64(1)}, map[string]any{"id": int64(1)})
+	err = nilColl.UpdateForTest(map[string]any{"id": int64(1)}, map[string]any{"id": int64(1)})
 	test.AssertDatabaseError_Mongo(t, err)
 
 	// GetPaginated
@@ -38,17 +39,17 @@ func TestCollection_NilReceiver(t *testing.T) {
 	test.AssertDatabaseError_Mongo(t, err)
 
 	// validate
-	err = nilColl.validate(context.Background(), map[string]any{"id": int64(1)}, false)
+	err = nilColl.ValidateForTest(context.Background(), map[string]any{"id": int64(1)}, false)
 	test.AssertDatabaseError_Mongo(t, err)
 
-	// Collection with nil DB
-	collNilDB := &Collection{Name: "test", DB: nil}
+	// mongo.Collection with nil DB
+	collNilDB := &mongo.Collection{Name: "test", DB: nil}
 	test.AssertDatabaseError_Mongo(t, collNilDB.Set(map[string]any{"id": int64(1)}))
 	docs, err = collNilDB.Get(map[string]any{"id": int64(1)}, nil)
 	assert.Nil(t, docs)
 	test.AssertDatabaseError_Mongo(t, err)
 	test.AssertDatabaseError_Mongo(t, collNilDB.Delete(map[string]any{"id": int64(1)}))
-	test.AssertDatabaseError_Mongo(t, collNilDB.update(map[string]any{"id": int64(1)}, map[string]any{"id": int64(1)}))
+	test.AssertDatabaseError_Mongo(t, collNilDB.UpdateForTest(map[string]any{"id": int64(1)}, map[string]any{"id": int64(1)}))
 	docs, err = collNilDB.GetPaginated(map[string]any{"id": int64(1)}, nil, 0, 10)
 	assert.Nil(t, docs)
 	test.AssertDatabaseError_Mongo(t, err)
@@ -59,22 +60,22 @@ func TestCollection_Validate(t *testing.T) {
 		"id":   reflect.Int64,
 		"name": reflect.String,
 	}
-	coll := &Collection{Name: "test", Schema: schema}
+	coll := &mongo.Collection{Name: "test", Schema: schema}
 
 	// Missing required field (partial = false)
-	err := coll.validate(context.Background(), map[string]any{"id": int64(1)}, false)
+	err := coll.ValidateForTest(context.Background(), map[string]any{"id": int64(1)}, false)
 	test.AssertDatabaseError_Mongo(t, err)
 
 	// Inconsistent type
-	err = coll.validate(context.Background(), map[string]any{"id": "not an int", "name": "foo"}, false)
+	err = coll.ValidateForTest(context.Background(), map[string]any{"id": "not an int", "name": "foo"}, false)
 	test.AssertDatabaseError_Mongo(t, err)
 
 	// Partial valid
-	err = coll.validate(context.Background(), map[string]any{"id": int64(2)}, true)
+	err = coll.ValidateForTest(context.Background(), map[string]any{"id": int64(2)}, true)
 	assert.NoError(t, err)
 
 	// Complete valid
-	err = coll.validate(context.Background(), map[string]any{"id": int64(2), "name": "hello"}, false)
+	err = coll.ValidateForTest(context.Background(), map[string]any{"id": int64(2), "name": "hello"}, false)
 	assert.NoError(t, err)
 }
 
@@ -145,17 +146,17 @@ func TestCollection_Operations(t *testing.T) {
 		coll := test.NewMockCollection(mt, "items", schema)
 
 		// Validation error
-		err := coll.update(map[string]any{"id": int64(1)}, map[string]any{"name": 12345})
+		err := coll.UpdateForTest(map[string]any{"id": int64(1)}, map[string]any{"name": 12345})
 		test.AssertDatabaseError_Mongo(t, err)
 
 		// DB error
 		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 96, Message: "update failed"}))
-		err = coll.update(map[string]any{"id": int64(1)}, map[string]any{"name": "new"})
+		err = coll.UpdateForTest(map[string]any{"id": int64(1)}, map[string]any{"name": "new"})
 		test.AssertDatabaseError_Mongo(t, err)
 
 		// DB success
 		mt.AddMockResponses(mtest.CreateSuccessResponse())
-		err = coll.update(map[string]any{"id": int64(1)}, map[string]any{"name": "new"})
+		err = coll.UpdateForTest(map[string]any{"id": int64(1)}, map[string]any{"name": "new"})
 		assert.NoError(t, err)
 	})
 

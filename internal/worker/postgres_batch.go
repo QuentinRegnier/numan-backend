@@ -15,6 +15,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
 	"github.com/lib/pq"
 )
 
@@ -582,7 +583,7 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 		_, _ = postgres.PostgresDB.ExecContext(ctx, "UPDATE content.comments SET visibility = -1, updated_at = NOW() WHERE post_id = ANY($1)", pq.Array(ids))
 		_, _ = postgres.PostgresDB.ExecContext(ctx, "DELETE FROM content.likes WHERE target_type = 0 AND target_id = ANY($1)", pq.Array(ids))
 		_, _ = postgres.PostgresDB.ExecContext(ctx, "DELETE FROM content.saved WHERE post_id = ANY($1)", pq.Array(ids))
-		_, _ = postgres.PostgresDB.ExecContext(ctx, "UPDATE content.media SET visibility = false, updated_at = util.now_ms() WHERE id IN (SELECT unnest(media_ids) FROM content.posts WHERE id = ANY($1))", pq.Array(ids))
+		_, _ = postgres.PostgresDB.ExecContext(ctx, fmt.Sprintf("UPDATE content.media SET visibility = %d, updated_at = util.now_ms() WHERE id IN (SELECT unnest(media_ids) FROM content.posts WHERE id = ANY($1))", variables.MediaVisibilitySoftDeleted), pq.Array(ids))
 		return nil
 
 	} else if entity == redis.EntityMessage {
@@ -619,7 +620,11 @@ func updateCountersPostgres(ctx context.Context, events []redis.AsyncEvent) {
 	commentDeltas := make(map[int64]int)
 	viewDeltas := make(map[int64]int)
 	commentLikeDeltas := make(map[int64]int)
-	reportDeltas := make(map[int64]int)
+
+	// ISOLATION DES MÉTRIQUES DE MODÉRATION
+	postReportDeltas := make(map[int64]int)
+	commentReportDeltas := make(map[int64]int)
+
 	telemetryDwellSum := make(map[int64]float64)
 	telemetryDwellSq := make(map[int64]float64)
 	telemetryClicks := make(map[int64]int)
@@ -690,9 +695,19 @@ func updateCountersPostgres(ctx context.Context, events []redis.AsyncEvent) {
 				TargetType int     `json:"target_type"`
 				TargetIDs  []int64 `json:"target_ids"`
 			}
-			if err := json.Unmarshal(jsonBytes, &r); err == nil && r.TargetType == 1 {
+			if err := json.Unmarshal(jsonBytes, &r); err == nil {
 				for _, id := range r.TargetIDs {
-					reportDeltas[id] += delta
+					// ROUTAGE SÉMANTIQUE STRICT
+					switch r.TargetType {
+					case variables.ReportTargetPost:
+						postReportDeltas[id] += delta
+					case variables.ReportTargetComment:
+						commentReportDeltas[id] += delta
+					case variables.ReportTargetMessage, variables.ReportTargetConversation, variables.ReportTargetUser:
+						// Évolution future
+					default:
+						numan_log.Warn(ctx).Int("target_type", r.TargetType).Msg("Worker Postgres : Type de signalement non géré pour les compteurs")
+					}
 				}
 			}
 		} else if e.Type == redis.EntityTelemetry {
@@ -742,7 +757,7 @@ func updateCountersPostgres(ctx context.Context, events []redis.AsyncEvent) {
 		}
 	}
 
-	// B. Exécution vers Procédures Stockées PostgreSQL
+	// B. Exécution vers Procédures Stockées PostgreSQL (Cold Storage L3)
 	for id, delta := range likeDeltas {
 		if delta == 0 {
 			continue
@@ -775,7 +790,9 @@ func updateCountersPostgres(ctx context.Context, events []redis.AsyncEvent) {
 			numan_log.Error(ctx).Err(err).Int64("comment_id", id).Msg("Échec exécution fonction func_increment_comment_metrics")
 		}
 	}
-	for id, delta := range reportDeltas {
+
+	// EXÉCUTION SÉPARÉE DES COMPTEURS DE SIGNALEMENT (L3)
+	for id, delta := range postReportDeltas {
 		if delta == 0 {
 			continue
 		}
@@ -783,6 +800,16 @@ func updateCountersPostgres(ctx context.Context, events []redis.AsyncEvent) {
 			numan_log.Error(ctx).Err(err).Int64("post_id", id).Msg("Échec exécution fonction func_increment_post_report")
 		}
 	}
+	for id, delta := range commentReportDeltas {
+		if delta == 0 {
+			continue
+		}
+		// Appel de la procédure stockée spécifique aux commentaires
+		if _, err := postgres.PostgresDB.ExecContext(ctx, "SELECT content.func_increment_comment_report($1, $2)", id, delta); err != nil {
+			numan_log.Error(ctx).Err(err).Int64("comment_id", id).Msg("Échec exécution fonction func_increment_comment_report")
+		}
+	}
+
 	for id, sum := range telemetryDwellSum {
 		if _, err := postgres.PostgresDB.ExecContext(ctx, "SELECT content.func_increment_post_telemetry($1, $2, $3, $4)", id, sum, telemetryDwellSq[id], telemetryClicks[id]); err != nil {
 			numan_log.Error(ctx).Err(err).Int64("post_id", id).Msg("Échec exécution fonction func_increment_post_telemetry")

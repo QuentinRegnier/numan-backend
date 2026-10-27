@@ -29,7 +29,7 @@ func TestMediaObjectCache_CompletePayloadFidelityAndErrors(t *testing.T) {
 			ID:          101,
 			OwnerID:     10,
 			StoragePath: "s3://numan-media/users/10/avatar_101.webp",
-			Visibility:  true,
+			Visibility:  1,
 			CreatedAt:   1700000001000,
 			UpdatedAt:   1700000002000,
 		}
@@ -52,7 +52,7 @@ func TestMediaObjectCache_CompletePayloadFidelityAndErrors(t *testing.T) {
 			ID:          102,
 			OwnerID:     10,
 			StoragePath: "s3://numan-media/users/10/deleted_102.webp",
-			Visibility:  false,
+			Visibility:  -1,
 			CreatedAt:   1700000003000,
 			UpdatedAt:   1700000004000,
 		}
@@ -76,7 +76,7 @@ func TestMediaObjectCache_CompletePayloadFidelityAndErrors(t *testing.T) {
 			ID:          103,
 			OwnerID:     10,
 			StoragePath: "s3://numan-media/users/10/fail.webp",
-			Visibility:  true,
+			Visibility:  1,
 		})
 		srv.SetFailCmd("SET", nil)
 		assertAppError(t, errSet, http.StatusInternalServerError, numan_error.CodeCacheError)

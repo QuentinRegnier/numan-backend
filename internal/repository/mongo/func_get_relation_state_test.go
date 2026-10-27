@@ -1,7 +1,8 @@
-package mongo
+package mongo_test
 
 import (
 	"context"
+	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"testing"
 
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
@@ -16,9 +17,9 @@ func TestMongoGetRelationState(t *testing.T) {
 
 	ctx := context.Background()
 
-	// 1. Relations is nil
-	Relations = nil
-	state, err := MongoGetRelationState(ctx, 10, 20)
+	// 1. mongo.Relations is nil
+	mongo.Relations = nil
+	state, err := mongo.MongoGetRelationState(ctx, 10, 20)
 	assert.Equal(t, 0, state)
 	test.AssertDatabaseError_Mongo(t, err)
 
@@ -26,32 +27,32 @@ func TestMongoGetRelationState(t *testing.T) {
 
 	// 2. DB error
 	mt.Run("DB error", func(mt *mtest.T) {
-		Relations = test.NewMockCollection(mt, "relations", nil)
+		mongo.Relations = test.NewMockCollection(mt, "relations", nil)
 		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 96, Message: "failed"}))
 
-		state, err := MongoGetRelationState(ctx, 10, 20)
+		state, err := mongo.MongoGetRelationState(ctx, 10, 20)
 		assert.Equal(mt, 0, state)
 		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 3. Not found
 	mt.Run("Not found", func(mt *mtest.T) {
-		Relations = test.NewMockCollection(mt, "relations", nil)
+		mongo.Relations = test.NewMockCollection(mt, "relations", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.relations", mtest.FirstBatch))
 
-		state, err := MongoGetRelationState(ctx, 10, 20)
+		state, err := mongo.MongoGetRelationState(ctx, 10, 20)
 		assert.Equal(mt, 0, state)
 		test.AssertNotFoundError_Mongo(mt, err, "RELATION_NOT_FOUND")
 	})
 
 	// 4. Invalid state format
 	mt.Run("Invalid state format", func(mt *mtest.T) {
-		Relations = test.NewMockCollection(mt, "relations", nil)
+		mongo.Relations = test.NewMockCollection(mt, "relations", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.relations", mtest.FirstBatch, bson.D{
 			{Key: "state", Value: "invalid_string_state"},
 		}))
 
-		state, err := MongoGetRelationState(ctx, 10, 20)
+		state, err := mongo.MongoGetRelationState(ctx, 10, 20)
 		assert.Equal(mt, 0, state)
 		test.AssertDatabaseError_Mongo(mt, err)
 	})
@@ -70,12 +71,12 @@ func TestMongoGetRelationState(t *testing.T) {
 
 	for _, tc := range tests {
 		mt.Run("Success "+tc.name, func(mt *mtest.T) {
-			Relations = test.NewMockCollection(mt, "relations", nil)
+			mongo.Relations = test.NewMockCollection(mt, "relations", nil)
 			mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.relations", mtest.FirstBatch, bson.D{
 				{Key: "state", Value: tc.val},
 			}))
 
-			state, err := MongoGetRelationState(ctx, 10, 20)
+			state, err := mongo.MongoGetRelationState(ctx, 10, 20)
 			require.NoError(mt, err)
 			assert.Equal(mt, tc.expected, state)
 		})

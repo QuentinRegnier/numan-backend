@@ -54,6 +54,10 @@ const (
 	CodeTwoFactorInvalid      = "TWO_FACTOR_INVALID_PROOF"
 	CodeTwoFactorExpired      = "TWO_FACTOR_SESSION_EXPIRED"
 	CodePasskeyCloneAlert     = "PASSKEY_CLONE_DETECTED"
+	CodeUserBanned            = "USER_BANNED"
+	CodeMediaUnderReview      = "MEDIA_UNDER_REVIEW"
+	CodeMediaRejected         = "MEDIA_REJECTED"
+	CodeSteganoBanned         = "STEGANO_IDENTITY_BANNED"
 )
 
 // ############################################################################

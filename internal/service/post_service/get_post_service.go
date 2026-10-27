@@ -68,8 +68,8 @@ func GetPosts(ctx context.Context, callerID int64, input post_models.GetPostInpu
 			continue
 		}
 
-		// Règle A : Soft Delete
-		if postPayload.Visibility == variables.PostVisibilityDeleted {
+		// Règle A : Soft Delete (-1) ou Suppression par Modération (-2)
+		if postPayload.Visibility == variables.PostVisibilityDeleted || postPayload.Visibility == variables.PostVisibilityModerated {
 			hydratedPostsResults = append(hydratedPostsResults, post_models.GetPostOutput{
 				PostID: requestedPostID,
 				Error:  "Cette publication est introuvable ou a été supprimée.",

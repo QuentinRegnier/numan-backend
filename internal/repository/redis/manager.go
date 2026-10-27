@@ -120,6 +120,14 @@ var (
 
 	// --- PASSKEY TWO FACTOR ---
 	PreAuth *Collection // Sessions éphémères de challenge 2FA (TTL 5m)
+
+	// --- TRUST SCORE & MODERATION ---
+	ReportAggregators     *Collection // OBJECT (MsgPack) de l'accumulateur mathématique de signalement par cible
+	SteganoBanlist        *Collection // SET global des identifiants stéganographiques bannis
+	ModerationQueues      *Collection // ZSETs des files de modération ("active", "peer_review", "final_vote", "admin")
+	ModerationExpirations *Collection // ZSETs des échéances temporelles ("locks" 48h, "waiting_info" 7j)
+	ModerationTickets     *Collection // OBJECT (MsgPack) de l'état de cycle de vie des tickets de modération
+	ModeratorStats        *Collection // OBJECT (MsgPack) du profil de fiabilité modérateur (T_mod, blâmes, audits)
 )
 
 // ============================================================================
@@ -227,6 +235,14 @@ func InitCacheDatabase() {
 
 	// --- PASSKEY TWO FACTOR ---
 	PreAuth = newCollection("auth:pre_auth", variables.TwoFactorPreAuthTTL)
+
+	// --- TRUST SCORE & MODERATION ---
+	ReportAggregators = newCollection("moderation:report_agg", variables.StandardTTL)
+	SteganoBanlist = newCollection("moderation:stegano_banlist", 0)
+	ModerationQueues = newCollection("moderation:queue", 0)
+	ModerationExpirations = newCollection("moderation:expirations", 0)
+	ModerationTickets = newCollection("moderation:ticket", 0)
+	ModeratorStats = newCollection("moderation:mod_stats", 0)
 }
 
 // ============================================================================
@@ -377,6 +393,10 @@ func (c *Collection) SMembers(ctx context.Context, id any) ([]string, error) {
 	return c.Client.SMembers(ctx, c.Key(id)).Result()
 }
 
+func (c *Collection) SIsMember(ctx context.Context, id any, member any) (bool, error) {
+	return c.Client.SIsMember(ctx, c.Key(id), member).Result()
+}
+
 func (c *Collection) SCard(ctx context.Context, id any) (int64, error) {
 	return c.Client.SCard(ctx, c.Key(id)).Result()
 }
@@ -391,6 +411,26 @@ func (c *Collection) SRemCount(ctx context.Context, id any, members ...any) (int
 
 func (c *Collection) LPush(ctx context.Context, id any, values ...any) error {
 	return c.Client.LPush(ctx, c.Key(id), values...).Err()
+}
+
+func (c *Collection) RPush(ctx context.Context, id any, values ...any) error {
+	return c.Client.RPush(ctx, c.Key(id), values...).Err()
+}
+
+func (c *Collection) LPop(ctx context.Context, id any) (string, error) {
+	return c.Client.LPop(ctx, c.Key(id)).Result()
+}
+
+func (c *Collection) RPop(ctx context.Context, id any) (string, error) {
+	return c.Client.RPop(ctx, c.Key(id)).Result()
+}
+
+func (c *Collection) LLen(ctx context.Context, id any) (int64, error) {
+	return c.Client.LLen(ctx, c.Key(id)).Result()
+}
+
+func (c *Collection) LRange(ctx context.Context, id any, start, stop int64) ([]string, error) {
+	return c.Client.LRange(ctx, c.Key(id), start, stop).Result()
 }
 
 // ============================================================================

@@ -27,13 +27,11 @@ func TestFuncLoadUser(t *testing.T) {
 	})
 
 	cols := []string{
-		"id", "username", "email", "email_verified",
-		"phone", "phone_verified", "password_hash",
-		"first_name", "last_name", "birthdate", "sex",
-		"bio", "profile_picture_id", "grade", "location",
-		"school", "work", "badges", "desactivated",
-		"banned", "ban_reason", "ban_expires_at",
-		"created_at", "updated_at", "two_factor_enabled", "two_factor_method", "totp_secret",
+		"id", "username", "email", "email_verified", "phone", "phone_verified",
+		"password_hash", "first_name", "last_name", "birthdate", "sex", "bio",
+		"profile_picture_id", "grade", "location", "school", "work", "badges",
+		"desactivated", "banned", "ban_reason", "ban_expires_at", "created_at", "updated_at",
+		"two_factor_enabled", "two_factor_method", "totp_secret", "trust_score", "last_infraction_at",
 	}
 	now := time.Now()
 
@@ -45,13 +43,11 @@ func TestFuncLoadUser(t *testing.T) {
 			assert.Equal(t, "alice", args[1].Value)
 			return test.NewMockRows(cols, [][]driver.Value{
 				{
-					int64(1), "alice", "alice@example.com", true,
-					"+33123456789", true, "hash123",
-					"Alice", "Dupont", "2000-01-01T00:00:00Z", 1,
-					"Hello world", int64(50), 1, "Paris",
-					"University", "Company", "{}", false,
-					false, nil, nil,
-					now, now, false, 0, nil,
+					int64(1), "alice", "alice@example.com", true, "+33123456789", true,
+					"hash123", "Alice", "Dupont", "2000-01-01T00:00:00Z", 1, "Hello world",
+					int64(50), 1, "Paris", "University", "Company", "{}",
+					false, false, nil, nil, now, now,
+					false, 0, nil, float64(0.65), int64(0),
 				},
 			}), nil
 		}, nil)
@@ -63,6 +59,7 @@ func TestFuncLoadUser(t *testing.T) {
 		assert.Equal(t, "alice@example.com", u.Email)
 		assert.Equal(t, "Alice", u.FirstName)
 		assert.Equal(t, "Paris", u.Location)
+		assert.Equal(t, 0.65, u.TrustScore)
 	})
 
 	t.Run("handles_user_not_found_returning_empty_payload_and_nil_error", func(t *testing.T) {

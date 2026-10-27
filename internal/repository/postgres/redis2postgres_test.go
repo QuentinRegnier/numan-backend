@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,6 +45,6 @@ func TestRedis2Postgres(t *testing.T) {
 		target, err := redis2Postgres(ctx, redis.EntityType("unsupported_entity"))
 		assert.Empty(t, target.Schema)
 		assert.Empty(t, target.Table)
-		assertDatabaseError(t, err)
+		test.AssertDatabaseError_Postgres(t, err)
 	})
 }

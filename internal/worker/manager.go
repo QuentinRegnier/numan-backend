@@ -32,6 +32,14 @@ func StartBackgroundWorkers(ctx context.Context) {
 	// Moteur de Warm-up : Régénère en silence les flux des utilisateurs inactifs
 	startFeedWarmupCron(ctx)
 
+	// Moteur de Réputation (Trust Score) : Consommateur par lots + Cron mensuel (+0.02)
+	startTrustScoreWorker(ctx)
+	startMonthlyTrustScoreCron(ctx)
+
+	// Moteur de Modération Unifiée : Vieillissement quadratique M_temps + Expiration verrous & minuteurs
+	StartModerationAgingCron(ctx)
+	StartModerationExpirationWorker(ctx)
+
 	// ── ÉTAPE 2 : LANCEMENT DES GARBAGE COLLECTORS (PURGES L3->L2) ──────────
 
 	// Détruit les fichiers physiques et logs des médias orphelins

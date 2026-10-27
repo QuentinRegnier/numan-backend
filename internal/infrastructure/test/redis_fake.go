@@ -105,7 +105,7 @@ func (s *FakeRedisServer) setFailKey(key string, err error) {
 	}
 }
 
-func (s *FakeRedisServer) GetTTL(key string) time.Duration {
+func (s *FakeRedisServer) getTTL(key string) time.Duration {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.ttls[key]
@@ -533,6 +533,15 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 		key := args[1]
 		return respInt(int64(len(s.sets[key])))
 
+	case "SISMEMBER":
+		key, member := args[1], args[2]
+		if st := s.sets[key]; st != nil {
+			if _, ok := st[member]; ok {
+				return respInt(1)
+			}
+		}
+		return respInt(0)
+
 	case "RPUSH":
 		key := args[1]
 		s.lists[key] = append(s.lists[key], args[2:]...)
@@ -543,6 +552,38 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 		for _, v := range args[2:] {
 			s.lists[key] = append([]string{v}, s.lists[key]...)
 		}
+		return respInt(int64(len(s.lists[key])))
+
+	case "LPOP":
+		key := args[1]
+		lst := s.lists[key]
+		if len(lst) == 0 {
+			return respNil()
+		}
+		val := lst[0]
+		if len(lst) == 1 {
+			delete(s.lists, key)
+		} else {
+			s.lists[key] = lst[1:]
+		}
+		return respBulk(val)
+
+	case "RPOP":
+		key := args[1]
+		lst := s.lists[key]
+		if len(lst) == 0 {
+			return respNil()
+		}
+		val := lst[len(lst)-1]
+		if len(lst) == 1 {
+			delete(s.lists, key)
+		} else {
+			s.lists[key] = lst[:len(lst)-1]
+		}
+		return respBulk(val)
+
+	case "LLEN":
+		key := args[1]
 		return respInt(int64(len(s.lists[key])))
 
 	case "ZADD":
@@ -606,11 +647,15 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 		key := args[1]
 		start, _ := strconv.ParseInt(args[2], 10, 64)
 		stop, _ := strconv.ParseInt(args[3], 10, 64)
+		withScores := len(args) >= 5 && strings.ToUpper(args[4]) == "WITHSCORES"
 		items := s.sortedZSet(key, cmd == "ZREVRANGE")
 		sliced := sliceBounds(items, start, stop)
-		out := make([]string, 0, len(sliced))
+		out := make([]string, 0, len(sliced)*2)
 		for _, it := range sliced {
 			out = append(out, respBulk(it.member))
+			if withScores {
+				out = append(out, respBulk(strconv.FormatFloat(it.score, 'f', -1, 64)))
+			}
 		}
 		return respArray(out)
 
@@ -624,18 +669,22 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 			minStr, maxStr = args[2], args[3]
 		}
 		var offset, count int64 = 0, -1
+		withScores := false
 		for i := 4; i < len(args); i++ {
-			if strings.ToUpper(args[i]) == "LIMIT" && i+2 < len(args) {
+			upper := strings.ToUpper(args[i])
+			if upper == "WITHSCORES" {
+				withScores = true
+			} else if upper == "LIMIT" && i+2 < len(args) {
 				offset, _ = strconv.ParseInt(args[i+1], 10, 64)
 				count, _ = strconv.ParseInt(args[i+2], 10, 64)
 				i += 2
 			}
 		}
 		items := s.sortedZSet(key, rev)
-		var matched []string
+		var matched []zItem
 		for _, it := range items {
 			if matchScoreBound(it.score, minStr, true) && matchScoreBound(it.score, maxStr, false) {
-				matched = append(matched, it.member)
+				matched = append(matched, it)
 			}
 		}
 		if offset > 0 {
@@ -648,9 +697,12 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 		if count >= 0 && int(count) < len(matched) {
 			matched = matched[:count]
 		}
-		out := make([]string, 0, len(matched))
-		for _, m := range matched {
-			out = append(out, respBulk(m))
+		out := make([]string, 0, len(matched)*2)
+		for _, it := range matched {
+			out = append(out, respBulk(it.member))
+			if withScores {
+				out = append(out, respBulk(strconv.FormatFloat(it.score, 'f', -1, 64)))
+			}
 		}
 		return respArray(out)
 

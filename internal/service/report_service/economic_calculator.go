@@ -63,3 +63,64 @@ func calculateEconomicImportance(ctx context.Context, input report_models.Create
 
 	return totalEconomicValue
 }
+
+// resolveTargetOwnerID détermine l'identifiant du propriétaire de l'entité signalée (Utilisateur B).
+func resolveTargetOwnerID(ctx context.Context, targetType int, targetID int64) int64 {
+	switch targetType {
+	case variables.ReportTargetUser:
+		return targetID
+	case variables.ReportTargetPost:
+		if p, err := object_cache_service.GetPostFromObjectCache(ctx, targetID); err == nil && p.ID != 0 {
+			return p.UserID
+		}
+	case variables.ReportTargetComment:
+		if c, err := object_cache_service.GetCommentFromObjectCache(ctx, targetID); err == nil && c.ID != 0 {
+			return c.UserID
+		}
+	case variables.ReportTargetMessage:
+		if m, err := object_cache_service.GetMessageFromObjectCache(ctx, targetID); err == nil && m.ID != 0 {
+			return m.SenderID
+		}
+	}
+	return 0
+}
+
+// resolveTargetIAScore récupère en O(1) RAM le score IA (P_ia) associé à un Post ou à un Message contenant une image.
+func resolveTargetIAScore(ctx context.Context, targetType int, targetID int64) float64 {
+	switch targetType {
+	case variables.ReportTargetPost:
+		if p, err := object_cache_service.GetPostFromObjectCache(ctx, targetID); err == nil && p.ID != 0 {
+			if p.IAScoreMax > 0 {
+				return p.IAScoreMax
+			}
+			maxScore := 0.0
+			for _, mID := range p.MediaIDs {
+				if med, errMed := object_cache_service.GetMediaFromObjectCache(ctx, mID); errMed == nil && med.IAScore > maxScore {
+					maxScore = med.IAScore
+				}
+			}
+			return maxScore
+		}
+	case variables.ReportTargetMessage:
+		if m, err := object_cache_service.GetMessageFromObjectCache(ctx, targetID); err == nil && m.ID != 0 {
+			if m.Attachments != nil {
+				if rawScore, ok := m.Attachments["ia_score"].(float64); ok && rawScore > 0 {
+					return rawScore
+				}
+				var mediaID int64
+				switch v := m.Attachments["media_id"].(type) {
+				case float64:
+					mediaID = int64(v)
+				case int64:
+					mediaID = v
+				}
+				if mediaID > 0 {
+					if med, errMed := object_cache_service.GetMediaFromObjectCache(ctx, mediaID); errMed == nil {
+						return med.IAScore
+					}
+				}
+			}
+		}
+	}
+	return 0.0
+}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image"
 	"io"
+	"math"
 	"os"
 	"time"
 
@@ -27,12 +28,11 @@ import (
 // # SERVICE : UPLOAD ET TRAITEMENT DES MÉDIAS (AVIF & MINIO)
 // ############################################################################
 
-// UploadMedia traite l'image (redimensionnement + conversion AVIF), la stocke sur MinIO
-// et crée l'enregistrement en BDD.
-// Le paramètre "isVisible" permet de gérer la coexistence :
-// - false : Upload Out-of-Band (Orphelin, attente de confirmation)
-// - true  : Upload Direct (Avatar de profil par ex.)
-func UploadMedia(fileStream io.ReadSeeker, ownerID int64, mediaID int64, isVisible bool) error {
+// UploadMediaWithStatusAndIAScore traite l'image, l'uploade sur S3/MinIO et l'enregistre avec son statut et son score IA NSFWJS [0.0, 1.0].
+func UploadMediaWithStatusAndIAScore(fileStream io.ReadSeeker, ownerID int64, mediaID int64, initialVisibility int, iaScore float64) error {
+	if iaScore < 0.0 || iaScore > 1.0 || math.IsNaN(iaScore) || math.IsInf(iaScore, 0) {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le score IA doit être compris entre 0.0 et 1.0.", nil)
+	}
 
 	// ── ÉTAPE 1 : ANALYSE ET VALIDATION DE L'IMAGE ──────────────────────────
 
@@ -107,7 +107,7 @@ func UploadMedia(fileStream io.ReadSeeker, ownerID int64, mediaID int64, isVisib
 		ID:          mediaID,
 		OwnerID:     ownerID,
 		StoragePath: storagePath,
-		Visibility:  isVisible, // Modifié par la confirmation Out-Of-Band plus tard
+		Visibility:  initialVisibility, // 0=Pending, 1=Public, 2=Quarantaine
 		CreatedAt:   domain.TimeToMillis(currentTime),
 		UpdatedAt:   domain.TimeToMillis(currentTime),
 	}
@@ -132,7 +132,7 @@ func UploadMedia(fileStream io.ReadSeeker, ownerID int64, mediaID int64, isVisib
 
 	numan_log.Info(context.Background()).
 		Int64("media_id", mediaID).
-		Bool("visible", isVisible).
+		Int("visibility", initialVisibility).
 		Int64("owner_id", ownerID).
 		Msg("Nouveau média traité et uploadé avec succès")
 

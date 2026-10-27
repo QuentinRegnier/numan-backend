@@ -17,6 +17,7 @@ type PostPayload struct {
 	ViewCount         int       `bson:"view_count" json:"view_count" msgpack:"view_count"`
 	ReportCount       int       `bson:"report_count" json:"-" msgpack:"report_count"`
 	HasMedia          bool      `bson:"has_media" json:"has_media" msgpack:"has_media"`
+	IAScoreMax        float64   `bson:"ia_score_max" json:"ia_score_max" msgpack:"ia_score_max"` // MAX(P_ia) des 1 à 4 images
 	Vector            []float32 `bson:"vector" json:"vector" msgpack:"vector"`
 	VectorVersion     int       `bson:"vector_version" json:"vector_version" msgpack:"vector_version"`
 	TelemetryDwellSum float64   `bson:"telemetry_dwell_sum" json:"telemetry_dwell_sum" msgpack:"telemetry_dwell_sum"`

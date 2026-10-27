@@ -51,12 +51,37 @@ func AdminGuard() gin.HandlerFunc {
 			return
 		}
 
-		// Supposons que Grade >= 90 soit le niveau Administrateur
-		if userLite.Grade != variables.MemberRoleAdmin {
+		// Grade Administrateur (4 ou fallback 1)
+		if userLite.Grade != variables.UserGradeAdmin && userLite.Grade != variables.MemberRoleAdmin {
 			numan_error.RespondWithError(c, numan_error.NewForbidden("", "Privilèges insuffisants.", nil))
 			return
 		}
 
+		c.Next()
+	}
+}
+
+// ModeratorGuard vérifie que l'utilisateur possède au moins le rang Modérateur (Grade >= 3 ou Admin).
+func ModeratorGuard() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID, err := pkg.GetUserIDFromContext(c)
+		if err != nil || userID == 0 {
+			numan_error.RespondWithError(c, numan_error.NewUnauthorized("", "Non authentifié", err))
+			return
+		}
+
+		userLite, err := cache_service.GetUserLite(c.Request.Context(), userID)
+		if err != nil {
+			numan_error.RespondWithError(c, numan_error.NewInternal(err))
+			return
+		}
+
+		if userLite.Grade < variables.UserGradeModerator && userLite.Grade != variables.MemberRoleAdmin {
+			numan_error.RespondWithError(c, numan_error.NewForbidden("", "Privilèges de modération requis.", nil))
+			return
+		}
+
+		c.Set("user_grade", userLite.Grade)
 		c.Next()
 	}
 }

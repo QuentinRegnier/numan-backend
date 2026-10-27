@@ -1,7 +1,8 @@
-package mongo
+package mongo_test
 
 import (
 	"context"
+	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"testing"
 
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
@@ -16,9 +17,9 @@ func TestMongoLoadCommentsPaginated(t *testing.T) {
 
 	ctx := context.Background()
 
-	// 1. Comments is nil
-	Comments = nil
-	comments, err := MongoLoadCommentsPaginated(ctx, 100, 0, 10)
+	// 1. mongo.Comments is nil
+	mongo.Comments = nil
+	comments, err := mongo.MongoLoadCommentsPaginated(ctx, 100, 0, 10)
 	assert.Nil(t, comments)
 	test.AssertDatabaseError_Mongo(t, err)
 
@@ -26,20 +27,20 @@ func TestMongoLoadCommentsPaginated(t *testing.T) {
 
 	// 2. DB error
 	mt.Run("DB error", func(mt *mtest.T) {
-		Comments = test.NewMockCollection(mt, "comments", nil)
+		mongo.Comments = test.NewMockCollection(mt, "comments", nil)
 		mt.AddMockResponses(mtest.CreateCommandErrorResponse(mtest.CommandError{Code: 96, Message: "failed"}))
 
-		comments, err := MongoLoadCommentsPaginated(ctx, 100, 0, 10)
+		comments, err := mongo.MongoLoadCommentsPaginated(ctx, 100, 0, 10)
 		assert.Nil(mt, comments)
 		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 3. Empty result
 	mt.Run("Empty result", func(mt *mtest.T) {
-		Comments = test.NewMockCollection(mt, "comments", nil)
+		mongo.Comments = test.NewMockCollection(mt, "comments", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.comments", mtest.FirstBatch))
 
-		comments, err := MongoLoadCommentsPaginated(ctx, 100, 0, 10)
+		comments, err := mongo.MongoLoadCommentsPaginated(ctx, 100, 0, 10)
 		require.NoError(mt, err)
 		assert.NotNil(mt, comments)
 		assert.Empty(mt, comments)
@@ -47,26 +48,26 @@ func TestMongoLoadCommentsPaginated(t *testing.T) {
 
 	// 4. Deserialization error
 	mt.Run("Deserialization error", func(mt *mtest.T) {
-		Comments = test.NewMockCollection(mt, "comments", nil)
+		mongo.Comments = test.NewMockCollection(mt, "comments", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.comments", mtest.FirstBatch, bson.D{
 			{Key: "id", Value: "not_an_int64"},
 		}))
 
-		comments, err := MongoLoadCommentsPaginated(ctx, 100, 0, 10)
+		comments, err := mongo.MongoLoadCommentsPaginated(ctx, 100, 0, 10)
 		assert.Nil(mt, comments)
 		test.AssertDatabaseError_Mongo(mt, err)
 	})
 
 	// 5. Success
 	mt.Run("Success", func(mt *mtest.T) {
-		Comments = test.NewMockCollection(mt, "comments", nil)
+		mongo.Comments = test.NewMockCollection(mt, "comments", nil)
 		mt.AddMockResponses(mtest.CreateCursorResponse(0, "test.comments", mtest.FirstBatch, bson.D{
 			{Key: "id", Value: int64(201)},
 			{Key: "post_id", Value: int64(100)},
 			{Key: "content", Value: "Awesome!"},
 		}))
 
-		comments, err := MongoLoadCommentsPaginated(ctx, 100, 0, 10)
+		comments, err := mongo.MongoLoadCommentsPaginated(ctx, 100, 0, 10)
 		require.NoError(mt, err)
 		require.Len(mt, comments, 1)
 		assert.Equal(mt, int64(201), comments[0].ID)
