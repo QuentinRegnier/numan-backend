@@ -32,7 +32,7 @@ const (
 // ############################################################################
 
 // generateCopyQuery génère dynamiquement une requête COPY IN optimisée pour PostgreSQL
-// en prenant en compte le schéma et la table.
+// en prenant en compte le schéma et la table. (Instruction protocolaire du driver pq)
 func generateCopyQuery(fullTableName string, columns []string) string {
 	quotedTableName := ""
 	if strings.Contains(fullTableName, ".") {
@@ -287,12 +287,7 @@ func handleMessageReactionUpsert(ctx context.Context, events []redis.AsyncEvent)
 		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction Upsert", errTx)
 	}
 
-	stmt, errStmt := tx.Prepare(`
-		INSERT INTO messaging.message_reactions (id, message_id, user_id, reaction, created_at)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (message_id, user_id) 
-		DO UPDATE SET reaction = EXCLUDED.reaction, created_at = EXCLUDED.created_at
-	`)
+	stmt, errStmt := tx.Prepare("SELECT messaging.func_upsert_message_reaction($1, $2, $3, $4, $5)")
 	if errStmt != nil {
 		_ = tx.Rollback()
 		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec préparation statement Upsert", errStmt)
@@ -424,7 +419,7 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction Like Delete", errTx)
 		}
 
-		stmt, errStmt := tx.Prepare("DELETE FROM content.likes WHERE target_type = $1 AND target_id = $2 AND user_id = $3")
+		stmt, errStmt := tx.Prepare("SELECT content.func_delete_like($1, $2, $3)")
 		if errStmt != nil {
 			_ = tx.Rollback()
 			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec préparation statement Like Delete", errStmt)
@@ -463,7 +458,7 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction Relation Delete", errTx)
 		}
 
-		stmt, errStmt := tx.Prepare("DELETE FROM auth.relations WHERE primary_id = $1 AND secondary_id = $2")
+		stmt, errStmt := tx.Prepare("SELECT auth.func_delete_relation($1, $2)")
 		if errStmt != nil {
 			_ = tx.Rollback()
 			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec préparation statement Relation Delete", errStmt)
@@ -500,7 +495,7 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction Msg Reaction Delete", errTx)
 		}
 
-		stmt, errStmt := tx.Prepare("DELETE FROM messaging.message_reactions WHERE message_id = $1 AND user_id = $2")
+		stmt, errStmt := tx.Prepare("SELECT messaging.func_delete_message_reaction($1, $2)")
 		if errStmt != nil {
 			_ = tx.Rollback()
 			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec préparation statement Msg Reaction Delete", errStmt)
@@ -535,7 +530,7 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction Saved Delete", errTx)
 		}
 
-		stmt, errStmt := tx.Prepare("DELETE FROM content.saved WHERE user_id = $1 AND post_id = $2")
+		stmt, errStmt := tx.Prepare("SELECT content.func_unsave_post($1, $2)")
 		if errStmt != nil {
 			_ = tx.Rollback()
 			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec préparation statement Saved Delete", errStmt)
@@ -574,44 +569,41 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 	var query string
 
 	if entity == redis.EntityPost {
-		// A. Soft Delete des posts (visibility = -1)
-		query = fmt.Sprintf("UPDATE %s SET visibility = -1 WHERE id = ANY($1)", mapper.TableName())
-		if _, errExec := postgres.PostgresDB.ExecContext(ctx, query, pq.Array(ids)); errExec != nil {
-			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Soft Delete Posts", errExec)
+		query = "SELECT content.func_bulk_soft_delete_posts($1, $2)"
+		if _, errExec := postgres.PostgresDB.ExecContext(ctx, query, pq.Array(ids), variables.MediaVisibilitySoftDeleted); errExec != nil {
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Soft Delete Posts & Cascades", errExec)
 		}
-
-		// B. Cascade Logicielle (Soft & Hard Delete)
-		_, _ = postgres.PostgresDB.ExecContext(ctx, "UPDATE content.comments SET visibility = -1, updated_at = NOW() WHERE post_id = ANY($1)", pq.Array(ids))
-		_, _ = postgres.PostgresDB.ExecContext(ctx, "DELETE FROM content.likes WHERE target_type = 0 AND target_id = ANY($1)", pq.Array(ids))
-		_, _ = postgres.PostgresDB.ExecContext(ctx, "DELETE FROM content.saved WHERE post_id = ANY($1)", pq.Array(ids))
-		_, _ = postgres.PostgresDB.ExecContext(ctx, fmt.Sprintf("UPDATE content.media SET visibility = %d, updated_at = util.now_ms() WHERE id IN (SELECT unnest(media_ids) FROM content.posts WHERE id = ANY($1))", variables.MediaVisibilitySoftDeleted), pq.Array(ids))
 		return nil
 
 	} else if entity == redis.EntityMessage {
-		// Soft Delete du Message (visibility = false)
-		query = fmt.Sprintf("UPDATE %s SET visibility = false, updated_at = util.now_ms() WHERE id = ANY($1)", mapper.TableName())
+		query = "SELECT messaging.func_bulk_soft_delete_messages($1)"
 		if _, errExec := postgres.PostgresDB.ExecContext(ctx, query, pq.Array(ids)); errExec != nil {
-			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Soft Delete Message", errExec)
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Soft Delete Message & Cascades", errExec)
 		}
-
-		// Cascade : Purge des réactions associées pour soulager la base
-		_, _ = postgres.PostgresDB.ExecContext(ctx, "DELETE FROM messaging.message_reactions WHERE message_id = ANY($1)", pq.Array(ids))
 		return nil
 
 	} else if entity == redis.EntityComment {
-		// Soft Delete du Commentaire (visibility = -1)
-		query = fmt.Sprintf("UPDATE %s SET visibility = -1 WHERE id = ANY($1)", mapper.TableName())
+		query = "SELECT content.func_bulk_soft_delete_comments($1)"
+		if _, errExec := postgres.PostgresDB.ExecContext(ctx, query, pq.Array(ids)); errExec != nil {
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Soft Delete Comment", errExec)
+		}
+		return nil
 
 	} else {
-		// Hard Delete pour le reste (Utilisateurs, Sessions, etc.)
-		query = fmt.Sprintf("DELETE FROM %s WHERE id = ANY($1)", mapper.TableName())
+		parts := strings.SplitN(mapper.TableName(), ".", 2)
+		if len(parts) == 2 {
+			query = "SELECT util.func_bulk_hard_delete($1, $2, $3)"
+			if _, errExec := postgres.PostgresDB.ExecContext(ctx, query, parts[0], parts[1], pq.Array(ids)); errExec != nil {
+				return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Hard Delete Générique", errExec)
+			}
+		} else {
+			query = "SELECT util.func_bulk_hard_delete('public', $1, $2)"
+			if _, errExec := postgres.PostgresDB.ExecContext(ctx, query, parts[0], pq.Array(ids)); errExec != nil {
+				return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Hard Delete Générique", errExec)
+			}
+		}
+		return nil
 	}
-
-	if _, errExec := postgres.PostgresDB.ExecContext(ctx, query, pq.Array(ids)); errExec != nil {
-		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec de la requête de Suppression/Mise à jour Finale", errExec)
-	}
-
-	return nil
 }
 
 // updateCountersPostgres regroupe les événements (Deltas) en mémoire avant d'appeler

@@ -1976,5 +1976,67 @@ END;
 $$;
 
 /* =============================================================================
+   MIGRATION DDD : FONCTIONS DE MUTATION BATCH (DML)
+   ============================================================================= */
+
+-- 1. Upsert pour les réactions de messages
+CREATE FUNCTION messaging.func_upsert_message_reaction(p_id bigint, p_message_id bigint, p_user_id bigint, p_reaction text, p_created_at bigint) RETURNS void
+    LANGUAGE sql AS $$
+    INSERT INTO messaging.message_reactions (id, message_id, user_id, reaction, created_at)
+    VALUES (p_id, p_message_id, p_user_id, p_reaction, p_created_at)
+    ON CONFLICT (message_id, user_id)
+    DO UPDATE SET reaction = EXCLUDED.reaction, created_at = EXCLUDED.created_at;
+$$;
+
+-- 2. Suppression physique d'un like (cible polymorphe)
+CREATE FUNCTION content.func_delete_like(p_target_type smallint, p_target_id bigint, p_user_id bigint) RETURNS void
+    LANGUAGE sql AS $$
+DELETE FROM content.likes WHERE target_type = p_target_type AND target_id = p_target_id AND user_id = p_user_id;
+$$;
+
+-- 3. Suppression physique d'une relation
+CREATE FUNCTION auth.func_delete_relation(p_primary_id bigint, p_secondary_id bigint) RETURNS void
+    LANGUAGE sql AS $$
+DELETE FROM auth.relations WHERE primary_id = p_primary_id AND secondary_id = p_secondary_id;
+$$;
+
+-- 4. Suppression physique d'une réaction de message
+CREATE FUNCTION messaging.func_delete_message_reaction(p_message_id bigint, p_user_id bigint) RETURNS void
+    LANGUAGE sql AS $$
+DELETE FROM messaging.message_reactions WHERE message_id = p_message_id AND user_id = p_user_id;
+$$;
+
+-- 5. Suppression logique (Soft Delete) en masse pour les Posts et exécution des cascades
+CREATE FUNCTION content.func_bulk_soft_delete_posts(p_ids bigint[], p_media_visibility smallint) RETURNS void
+    LANGUAGE sql AS $$
+UPDATE content.posts SET visibility = -1 WHERE id = ANY(p_ids);
+UPDATE content.comments SET visibility = -1, updated_at = now() WHERE post_id = ANY(p_ids);
+DELETE FROM content.likes WHERE target_type = 0 AND target_id = ANY(p_ids);
+DELETE FROM content.saved WHERE post_id = ANY(p_ids);
+UPDATE content.media SET visibility = p_media_visibility, updated_at = util.now_ms() WHERE id IN (SELECT unnest(media_ids) FROM content.posts WHERE id = ANY(p_ids));
+$$;
+
+-- 6. Suppression logique en masse pour les Messages et purge des réactions
+CREATE FUNCTION messaging.func_bulk_soft_delete_messages(p_ids bigint[]) RETURNS void
+    LANGUAGE sql AS $$
+UPDATE messaging.messages SET visibility = false, updated_at = util.now_ms() WHERE id = ANY(p_ids);
+DELETE FROM messaging.message_reactions WHERE message_id = ANY(p_ids);
+$$;
+
+-- 7. Suppression logique en masse pour les Commentaires
+CREATE FUNCTION content.func_bulk_soft_delete_comments(p_ids bigint[]) RETURNS void
+    LANGUAGE sql AS $$
+UPDATE content.comments SET visibility = -1 WHERE id = ANY(p_ids);
+$$;
+
+-- 8. Utilitaire dynamique (PL/pgSQL) pour centraliser les Hard Deletes génériques
+CREATE FUNCTION util.func_bulk_hard_delete(p_schema text, p_table text, p_ids bigint[]) RETURNS void
+    LANGUAGE plpgsql AS $$
+BEGIN
+EXECUTE format('DELETE FROM %I.%I WHERE id = ANY($1)', p_schema, p_table) USING p_ids;
+END;
+$$;
+
+/* =============================================================================
    END OF SCHEMA
    ============================================================================= */
