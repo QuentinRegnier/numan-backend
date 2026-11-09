@@ -4,8 +4,8 @@ import (
 	"context"
 	"net/http"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/media_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
@@ -27,7 +27,7 @@ func TestActivateMediaBatch_OnboardingQuarantineVsEstablished(t *testing.T) {
 
 	newUser := int64(101)
 	establishedUser := int64(202)
-	now := time.Now().UnixMilli()
+	now := domain.NowMillis()
 
 	// 1. Nouvel utilisateur (T = 0.20 < 0.40)
 	require.NoError(t, redis.UsersLite.SetObject(ctx, newUser, lite_models.UserLiteRequest{
@@ -94,7 +94,7 @@ func TestGenerateMediaViewCascade_AccessControl(t *testing.T) {
 	_ = pkg.InitSnowflake(1)
 	ctx := context.Background()
 
-	now := time.Now().UnixMilli()
+	now := domain.NowMillis()
 
 	// 1. Média en quarantaine (Visibility = 2)
 	quarantineMedia := media_models.MediaPayload{
@@ -157,7 +157,7 @@ func TestGetSignedURLForClient_QuarantinedMediaDenial(t *testing.T) {
 	_ = pkg.InitSnowflake(1)
 	ctx := context.Background()
 
-	now := time.Now().UnixMilli()
+	now := domain.NowMillis()
 
 	quarantinedID := int64(4001)
 	require.NoError(t, object_cache_service.SetMediaInObjectCache(ctx, media_models.MediaPayload{

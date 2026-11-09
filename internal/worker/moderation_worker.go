@@ -5,36 +5,12 @@ import (
 	"math"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/moderation_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
-
-// ClockFunc permet d'injecter une horloge déterministe lors des tests unitaires (§B.4).
-type ClockFunc func() time.Time
-
-var defaultClock ClockFunc = time.Now
-
-// SetModerationWorkerClock injecte une horloge personnalisée (utilisé pour les tests).
-func SetModerationWorkerClock(c ClockFunc) func() {
-	prev := defaultClock
-	if c == nil {
-		defaultClock = time.Now
-	} else {
-		defaultClock = c
-	}
-	return func() {
-		defaultClock = prev
-	}
-}
-
-func getWorkerTime() time.Time {
-	if defaultClock != nil {
-		return defaultClock()
-	}
-	return time.Now()
-}
 
 // StartModerationAgingCron lance la tâche périodique de réévaluation de M_temps sur la file active.
 func StartModerationAgingCron(ctx context.Context) {
@@ -53,7 +29,7 @@ func StartModerationAgingCron(ctx context.Context) {
 				numan_log.Info(ctx).Msg("Arrêt du Cron de vieillissement de la modération.")
 				return
 			case <-ticker.C:
-				_, _ = ProcessModerationAgingBatch(ctx, getWorkerTime())
+				_, _ = ProcessModerationAgingBatch(ctx, domain.NowTime())
 			}
 		}
 	}()
@@ -76,7 +52,7 @@ func StartModerationExpirationWorker(ctx context.Context) {
 				numan_log.Info(ctx).Msg("Arrêt du Worker d'expiration de la modération.")
 				return
 			case <-ticker.C:
-				now := getWorkerTime()
+				now := domain.NowTime()
 				_, _ = ProcessModerationLockExpirations(ctx, now)
 				_, _ = ProcessModerationWaitingInfoExpirations(ctx, now)
 			}
@@ -103,7 +79,7 @@ func ProcessModerationAgingBatch(ctx context.Context, now time.Time) (int, error
 
 		ageHours := 0.0
 		if rec.CreatedAt > 0 {
-			createdTime := time.UnixMilli(rec.CreatedAt)
+			createdTime := domain.MillisToTime(rec.CreatedAt)
 			if now.After(createdTime) {
 				ageHours = now.Sub(createdTime).Hours()
 			}
@@ -111,7 +87,7 @@ func ProcessModerationAgingBatch(ctx context.Context, now time.Time) (int, error
 
 		newScore := moderation_service.RecomputeAgedQueueScore(rec.StaticBaseScore, ageHours)
 		rec.PriorityScore = newScore
-		rec.UpdatedAt = now.UnixMilli()
+		rec.UpdatedAt = domain.TimeToMillis(now)
 
 		_ = cache_service.IndexTicketInModerationQueue(ctx, variables.ModerationQueueActive, rec.ReportID, newScore)
 		_ = cache_service.SaveModerationTicket(ctx, rec)
@@ -128,7 +104,7 @@ func ProcessModerationAgingBatch(ctx context.Context, now time.Time) (int, error
 
 // ProcessModerationLockExpirations libère les tickets restés InProgress plus de 48h sans résolution et les replace en Pending.
 func ProcessModerationLockExpirations(ctx context.Context, now time.Time) (int, error) {
-	nowMs := now.UnixMilli()
+	nowMs := domain.TimeToMillis(now)
 	expiredIDs, err := cache_service.GetExpiredTicketIDs(ctx, variables.ModerationExpirationLocks, nowMs, 100)
 	if err != nil {
 		return 0, err
@@ -166,7 +142,7 @@ func ProcessModerationLockExpirations(ctx context.Context, now time.Time) (int, 
 // ProcessModerationWaitingInfoExpirations débloque les tickets WaitingForInfo dont le délai de 7 jours est expiré
 // et les restitue en InProgress au même modérateur pour décision finale.
 func ProcessModerationWaitingInfoExpirations(ctx context.Context, now time.Time) (int, error) {
-	nowMs := now.UnixMilli()
+	nowMs := domain.TimeToMillis(now)
 	expiredIDs, err := cache_service.GetExpiredTicketIDs(ctx, variables.ModerationExpirationWaitingInfo, nowMs, 100)
 	if err != nil {
 		return 0, err

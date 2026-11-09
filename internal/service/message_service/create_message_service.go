@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/conversation_models"
@@ -233,7 +232,7 @@ func CreateMessage(ctx context.Context, senderID int64, conversationID int64, in
 
 	// ── ÉTAPE 5 : PRÉPARATION DU PAYLOAD ET CACHE IMMÉDIAT (L1) ─────────────
 	newMessageID := pkg.GenerateID()
-	currentTimestamp := time.Now().UTC()
+	currentTimestamp := domain.NowTime()
 
 	// Si le message comporte une image (MessageTypeMedia), évaluation combinée (P_ia, T_auteur)
 	// pour émettre un signalement automatique Robot si le seuil de risque est dépassé.
@@ -319,6 +318,6 @@ func CreateMessage(ctx context.Context, senderID int64, conversationID int64, in
 
 	return message_models.CreateMessageOutput{
 		MessageID:     newMessageID,
-		InboxUpdateAt: domain.TimeToMillis(time.UnixMilli(latestActivityTimestampMs)),
+		InboxUpdateAt: latestActivityTimestampMs,
 	}, nil
 }

@@ -263,7 +263,7 @@ func UpdateScoreWithMetrics(ctx context.Context, postID int64, likesCount int, c
 	}
 	globalScore *= priorityMultiplier
 
-	scoreStrictRecent := float64(createdAt.UnixMilli())
+	scoreStrictRecent := float64(domain.TimeToMillis(createdAt)) // Timestamp en millisecondes pour le classement strict des récents
 	err := redis.ZAddWithCap(ctx, variables.RedisKeyStrictRecent, scoreStrictRecent, postID, variables.MaxStrictElements)
 	if err != nil {
 		appErr := numan_error.NewAppError(
@@ -276,7 +276,7 @@ func UpdateScoreWithMetrics(ctx context.Context, postID int64, likesCount int, c
 		return
 	}
 
-	currentTime := time.Now().UTC()
+	currentTime := domain.NowTime()
 	year, isoWeek := currentTime.ISOWeek()
 	weekString := fmt.Sprintf("%d-W%02d", year, isoWeek)
 

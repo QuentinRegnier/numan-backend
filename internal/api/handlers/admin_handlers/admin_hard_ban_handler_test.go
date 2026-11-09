@@ -1,4 +1,4 @@
-package moderation_handlers
+package admin_handlers
 
 import (
 	"bytes"
@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/QuentinRegnier/numan-backend/internal/domain/models/moderation_models"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/models/admin_models"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
@@ -28,7 +28,7 @@ func TestAdminHardBanHandler(t *testing.T) {
 		AdminHardBanHandler(c)
 	})
 
-	body, _ := json.Marshal(moderation_models.AdminHardBanInput{
+	body, _ := json.Marshal(admin_models.AdminHardBanInput{
 		TargetUserID:    7010,
 		Reason:          "Violation extrême des CGU",
 		CGUFeedbackNote: "Compte banni définitivement",
@@ -40,7 +40,7 @@ func TestAdminHardBanHandler(t *testing.T) {
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	var res moderation_models.AdminHardBanOutput
+	var res admin_models.AdminHardBanOutput
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
 	assert.True(t, res.Banned)
 	assert.Equal(t, variables.TrustScoreHardBan, res.TrustScore)

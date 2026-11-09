@@ -5,8 +5,8 @@ import (
 	"database/sql/driver"
 	"errors"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
@@ -27,7 +27,7 @@ func TestFuncGetMedia(t *testing.T) {
 	})
 
 	cols := []string{"id", "owner_id", "storage_path", "visibility", "created_at", "updated_at"}
-	now := time.Now().UnixMilli()
+	now := domain.NowMillis()
 
 	t.Run("returns_media_successfully", func(t *testing.T) {
 		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {

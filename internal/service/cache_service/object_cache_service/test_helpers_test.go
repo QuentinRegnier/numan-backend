@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 )
 
@@ -24,8 +25,8 @@ func assertAppError(t testing.TB, err error, wantStatus int, wantCode string) {
 
 func waitForCondition(t testing.TB, timeout time.Duration, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	deadline := domain.NowTime().Add(timeout)
+	for domain.NowTime().Before(deadline) {
 		if cond() {
 			return
 		}

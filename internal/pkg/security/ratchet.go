@@ -87,7 +87,7 @@ func RotateRatchet(ctx context.Context, userID int64, firebaseInstallationID str
 	sessionRaw.CurrentSecret = newCurrentSecret
 	sessionRaw.LastSecret = newLastSecret
 	sessionRaw.LastJWT = incomingJWT
-	sessionRaw.ToleranceTime = domain.TimeToMillis(time.Now().Add(time.Duration(variables.ToleranceTimeSeconds) * time.Second))
+	sessionRaw.ToleranceTime = domain.TimeToMillis(domain.NowTime().Add(time.Duration(variables.ToleranceTimeSeconds) * time.Second))
 
 	// 4. SAUVEGARDE EN RAM (L1)
 	err = cache_service.SetSessionInCache(ctx, sessionRaw)

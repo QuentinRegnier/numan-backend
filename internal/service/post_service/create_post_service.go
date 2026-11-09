@@ -3,7 +3,6 @@ package post_service
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/service/moderation_service"
@@ -101,7 +100,7 @@ func CreatePost(ctx context.Context, callerID int64, input post_models.CreatePos
 		return -1, errMentions
 	}
 
-	currentTime := time.Now().UTC()
+	currentTime := domain.NowTime()
 	newPostID := pkg.GenerateID()
 
 	// ── ÉTAPE 2 : DÉLÉGATION - ACTIVATION DES MÉDIAS & SCORE IA MAX ─────────
@@ -189,7 +188,7 @@ func CreatePost(ctx context.Context, callerID int64, input post_models.CreatePos
 
 	// Un post en quarantaine (Shadowban) n'apparaît pas dans la timeline publique avant sa validation
 	if effectiveVisibility != variables.PostVisibilityQuarantine {
-		_ = cache_service.AddPostToUserProfile(ctx, callerID, newPostID, float64(currentTime.UnixMilli()))
+		_ = cache_service.AddPostToUserProfile(ctx, callerID, newPostID, float64(domain.TimeToMillis(currentTime)))
 	}
 
 	// ── ÉTAPE 8 : PERSISTANCE ASYNCHRONE (WRITE-BEHIND) ─────────────────────

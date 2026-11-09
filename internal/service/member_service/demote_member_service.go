@@ -2,7 +2,6 @@ package member_service
 
 import (
 	"context"
-	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
@@ -117,6 +116,6 @@ func DemoteMember(ctx context.Context, callerID int64, input member_models.Demot
 	latestActivityTimestampMs := cache_service.TouchInboxActivity(ctx, callerID)
 
 	return member_models.DemoteMemberOutput{
-		InboxUpdateAt: domain.TimeToMillis(time.UnixMilli(latestActivityTimestampMs)),
+		InboxUpdateAt: latestActivityTimestampMs,
 	}, nil
 }

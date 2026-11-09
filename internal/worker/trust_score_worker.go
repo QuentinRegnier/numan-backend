@@ -293,7 +293,7 @@ func processTrustScoreBatch(ctx context.Context, events []moderation_models.Trus
 
 	var mongoUpdates []mongo.UserTrustScoreUpdate
 	var mongoModels []libMongo.WriteModel
-	now := time.Now().UTC()
+	now := domain.NowTime()
 	nowMs := domain.TimeToMillis(now)
 
 	for userID, change := range aggregated {
@@ -461,7 +461,7 @@ func processMonthlyTrustBonus(ctx context.Context) {
 	}()
 
 	var count int
-	now := time.Now().UTC()
+	now := domain.NowTime()
 	nowMs := domain.TimeToMillis(now)
 	var mongoModels []libMongo.WriteModel
 

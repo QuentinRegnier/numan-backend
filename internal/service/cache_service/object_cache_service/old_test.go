@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/post_models"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	repoMongo "github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
@@ -64,7 +65,7 @@ func TestGetPostsView_HybridCascadeAndOrderPreservation(t *testing.T) {
 		identVal, _ := pq.Array([]int64{}).Value()
 		mediaVal, _ := pq.Array([]int64{}).Value()
 		vecVal, _ := pq.Array([]float32{}).Value()
-		now := time.Now().UnixMilli()
+		now := domain.NowMillis()
 		cols := []string{
 			"id", "user_id", "content", "hashtags", "indirect_hashtags",
 			"identifiers", "media_ids", "visibility", "priority_level", "location",

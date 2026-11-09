@@ -2,7 +2,6 @@ package conversation_service
 
 import (
 	"context"
-	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/conversation_models"
@@ -151,7 +150,7 @@ func JoinGroup(ctx context.Context, callerID int64, input conversation_models.Jo
 	}
 
 	// ── ÉTAPE 6 : HYDRATATION DU MODÈLE DE DONNÉES ──────────────────────────
-	currentTime := time.Now().UTC()
+	currentTime := domain.NowTime()
 
 	if !isAnUpdateOfExistingMember {
 		memberPayload = member_models.MemberPayload{
@@ -256,6 +255,6 @@ func JoinGroup(ctx context.Context, callerID int64, input conversation_models.Jo
 	latestActivityTimestampMs := cache_service.TouchInboxActivity(ctx, callerID)
 
 	return conversation_models.JoinGroupOutput{
-		InboxUpdateAt: domain.TimeToMillis(time.UnixMilli(latestActivityTimestampMs)),
+		InboxUpdateAt: latestActivityTimestampMs,
 	}, nil
 }

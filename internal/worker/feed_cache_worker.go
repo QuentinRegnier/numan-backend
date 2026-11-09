@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/feed_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
@@ -40,7 +41,7 @@ func startFeedWarmupCron(ctx context.Context) {
 
 // processScheduledWarmups identifie et régénère les flux des utilisateurs dont le cache L1 a expiré.
 func processScheduledWarmups(ctx context.Context) {
-	now := time.Now().Unix()
+	now := domain.TimeToMillis(domain.NowTime())
 
 	// ── ÉTAPE 1 : EXTRACTION CHIRURGICALE DES UTILISATEURS (L1) ─────────────
 	expiredUserIDs, err := redis.FeedSchedule.ZRangeByScoreWithLimit(ctx, "global", now, variables.FeedWarmupBatchSize)
@@ -59,7 +60,7 @@ func processScheduledWarmups(ctx context.Context) {
 
 		// Coupe-circuit : Si l'utilisateur est en ligne, le Feed est géré en direct.
 		if isOnline {
-			_ = redis.FeedSchedule.ZAdd(ctx, "global", float64(time.Now().Add(1*time.Hour).Unix()), userID)
+			_ = redis.FeedSchedule.ZAdd(ctx, "global", float64(domain.TimeToMillis(domain.NowTime().Add(1*time.Hour))), userID)
 			continue
 		}
 
@@ -69,13 +70,13 @@ func processScheduledWarmups(ctx context.Context) {
 		if inactivityDuration < 2*24*time.Hour {
 			// NIVEAU 1 : Inactivité récente (< 2 jours) -> Régénération soutenue (12h)
 			executeBackgroundGeneration(ctx, userID)
-			nextRun := time.Now().Add(12 * time.Hour).Unix()
+			nextRun := domain.TimeToMillis(domain.NowTime().Add(12 * time.Hour))
 			_ = redis.FeedSchedule.ZAdd(ctx, "global", float64(nextRun), userID)
 
 		} else if inactivityDuration >= 2*24*time.Hour && inactivityDuration < 7*24*time.Hour {
 			// NIVEAU 2 : Absent temporaire (2-7 jours) -> Régénération dégradée (48h)
 			executeBackgroundGeneration(ctx, userID)
-			nextRun := time.Now().Add(48 * time.Hour).Unix()
+			nextRun := domain.TimeToMillis(domain.NowTime().Add(48 * time.Hour))
 			_ = redis.FeedSchedule.ZAdd(ctx, "global", float64(nextRun), userID)
 
 		} else {
@@ -110,10 +111,10 @@ func getTelemetryData(ctx context.Context, userID int64) (time.Time, bool) {
 	profile, err := cache_service.GetTelemetryProfile(ctx, userID)
 	if err == nil && profile.TimestampMs > 0 {
 		tsMs := profile.TimestampMs
-		lastActiveAt = time.UnixMilli(tsMs)
+		lastActiveAt = domain.MillisToTime(tsMs)
 	} else {
 		// En l'absence totale de télémétrie, on simule une inactivité lointaine pour déclencher le Mode Dormant.
-		lastActiveAt = time.Now().Add(-30 * 24 * time.Hour)
+		lastActiveAt = domain.NowTime().Add(-30 * 24 * time.Hour)
 	}
 
 	return lastActiveAt, isOnline
@@ -168,7 +169,7 @@ func handleSocialFanOut(ctx context.Context, events []redis.AsyncEvent) {
 
 			// ── ÉTAPE 3 : DISTRIBUTION DE MASSE VIA PIPELINE REDIS ──────────
 			pipe := redis.FeedsMailbox.Pipeline()
-			score := float64(time.Now().UnixMilli())
+			score := float64(domain.NowMillis())
 
 			for _, followerID := range targetIDs {
 				mailboxKey := redis.FeedsMailbox.Key(followerID)

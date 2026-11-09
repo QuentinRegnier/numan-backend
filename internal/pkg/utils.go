@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
@@ -51,8 +52,8 @@ func GenerateToken(userID int64, firebaseInstallationID string, expirationSecond
 	claims := jwt.MapClaims{
 		"sub": fmt.Sprintf("%d", userID),
 		"dev": firebaseInstallationID, // Ajout du claim personnalisé
-		"exp": time.Now().Add(time.Second * time.Duration(expirationSeconds)).Unix(),
-		"iat": time.Now().Unix(),
+		"exp": domain.TimeToSeconds(domain.NowTime().Add(time.Second * time.Duration(expirationSeconds))),
+		"iat": domain.TimeToSeconds(domain.NowTime()),
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

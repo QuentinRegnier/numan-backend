@@ -5,8 +5,8 @@ import (
 	"database/sql/driver"
 	"errors"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
@@ -15,7 +15,7 @@ import (
 
 func TestFuncLoadPendingReportsPaginated(t *testing.T) {
 	ctx := context.Background()
-	now := time.Now().UnixMilli()
+	now := domain.NowMillis()
 	cols := []string{
 		"id", "reporter_id", "report_origin", "target_type", "target_ids",
 		"target_owner_id", "author_trust_score", "ia_score_max", "accumulated_report_score", "report_count",

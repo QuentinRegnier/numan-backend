@@ -1,12 +1,12 @@
-package moderation_handlers
+package admin_handlers
 
 import (
 	"net/http"
 
-	"github.com/QuentinRegnier/numan-backend/internal/domain/models/moderation_models"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/models/admin_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
-	"github.com/QuentinRegnier/numan-backend/internal/service/moderation_service"
+	"github.com/QuentinRegnier/numan-backend/internal/service/admin_service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -100,8 +100,8 @@ import (
 // @Param        Authorization header string                                        true "Bearer <votre_jwt>"
 // @Param        X-Signature   header string                                        true "Signature HMAC de la requête"
 // @Param        X-Timestamp   header string                                        true "Timestamp Unix de la requête"
-// @Param        input         body   moderation_models.ResolveAdminAuditInput      true "Décision d'audit (validate ou revoke) et justification"
-// @Success      200  {object}  moderation_models.ResolveAdminAuditOutput
+// @Param        input         body   admin_models.ResolveAdminAuditInput      true "Décision d'audit (validate ou revoke) et justification"
+// @Success      200  {object}  admin_models.ResolveAdminAuditOutput
 // @Failure      400  {object}  numan_error.PublicErrorResponse "Invalid Payload"
 // @Failure      401  {object}  numan_error.PublicErrorResponse "Unauthorized"
 // @Failure      403  {object}  numan_error.PublicErrorResponse "Forbidden (Admin only)"
@@ -116,13 +116,13 @@ func ResolveAdminAuditHandler(c *gin.Context) {
 	}
 	grade := c.GetInt("user_grade")
 
-	var input moderation_models.ResolveAdminAuditInput
+	var input admin_models.ResolveAdminAuditInput
 	if err := c.ShouldBindJSON(&input); err != nil {
 		numan_error.RespondWithError(c, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Format JSON invalide ou décision manquante (validate/revoke).", err))
 		return
 	}
 
-	out, errSvc := moderation_service.ResolveAdminAuditService(c.Request.Context(), callerID, grade, input)
+	out, errSvc := admin_service.ResolveAdminAuditService(c.Request.Context(), callerID, grade, input)
 	if errSvc != nil {
 		numan_error.RespondWithError(c, errSvc)
 		return

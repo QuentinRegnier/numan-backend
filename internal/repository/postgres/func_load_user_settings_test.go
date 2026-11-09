@@ -5,8 +5,8 @@ import (
 	"database/sql/driver"
 	"errors"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
@@ -30,7 +30,7 @@ func TestFuncLoadUserSettings(t *testing.T) {
 		"id", "user_id", "privacy", "notifications", "display_and_content",
 		"telemetry_vector", "telemetry_tags", "telemetry_timestamp",
 	}
-	now := time.Now()
+	now := domain.NowMillis()
 
 	t.Run("returns_user_settings_successfully", func(t *testing.T) {
 		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
@@ -41,7 +41,7 @@ func TestFuncLoadUserSettings(t *testing.T) {
 				{
 					int64(10), int64(1), []byte(`{"profile_visibility":0,"show_online_status":true}`),
 					[]byte(`{"master_push_enabled":true}`), []byte(`{"theme":2}`),
-					"{0.1,0.2}", "{tech,news}", now.UnixMilli(),
+					"{0.1,0.2}", "{tech,news}", now,
 				},
 			}), nil
 		}, nil)
@@ -71,7 +71,7 @@ func TestFuncLoadUserSettings(t *testing.T) {
 	t.Run("handles_invalid_privacy_json", func(t *testing.T) {
 		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return test.NewMockRows(cols, [][]driver.Value{
-				{int64(10), int64(1), []byte("corrupt-json"), nil, nil, "{}", "{}", now.UnixMilli()},
+				{int64(10), int64(1), []byte("corrupt-json"), nil, nil, "{}", "{}", now},
 			}), nil
 		}, nil)
 

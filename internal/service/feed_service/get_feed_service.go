@@ -2,8 +2,8 @@ package feed_service
 
 import (
 	"context"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/feed_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/post_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
@@ -53,7 +53,7 @@ func GetFeed(ctx context.Context, callerID int64, input feed_models.GetFeedInput
 			UserVec:        userVector,
 			UserConfidence: confidenceScore, // ✅ REMPLACEMENT DU PLACEHOLDER
 			FriendIDs:      friendIDsMap,
-			Date:           time.Now(),
+			Date:           domain.NowTime(),
 			Limit:          variables.TDDFeedSize,
 		},
 		IsForce: isManualRefresh,

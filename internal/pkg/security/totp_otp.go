@@ -14,6 +14,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 )
 
 const (
@@ -49,7 +51,7 @@ func VerifyTOTP(base32Secret, userCode string, now time.Time) bool {
 		return false
 	}
 
-	baseCounter := uint64(now.UTC().Unix() / totpPeriod)
+	baseCounter := uint64(domain.TimeToSeconds(now.UTC()) / totpPeriod)
 	for offset := -totpSkew; offset <= totpSkew; offset++ {
 		counter := uint64(int64(baseCounter) + int64(offset))
 		expected := computeHOTP(key, counter)

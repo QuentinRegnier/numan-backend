@@ -5,8 +5,8 @@ import (
 	"database/sql/driver"
 	"errors"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
@@ -30,7 +30,7 @@ func TestFuncLoadPostsForTimeDecay(t *testing.T) {
 		"id", "like_count", "comment_count", "view_count", "has_media",
 		"created_at", "hashtags", "indirect_hashtags", "visibility", "priority_level", "report_count",
 	}
-	now := time.Now()
+	now := domain.NowTime()
 
 	t.Run("returns_time_decay_posts_successfully", func(t *testing.T) {
 		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {

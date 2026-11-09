@@ -1,4 +1,4 @@
-package moderation_models
+package admin_models
 
 type AdminDelegationSwitchInput struct {
 	Enabled bool `json:"enabled"`

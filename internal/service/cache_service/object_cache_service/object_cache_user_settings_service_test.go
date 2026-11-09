@@ -6,8 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/user_settings_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
@@ -95,7 +95,7 @@ func TestGetUserSettingsCascade_L2MongoAndL3Postgres(t *testing.T) {
 		// 2. L3 Postgres fallback when not in L1 or L2
 		vecVal, _ := pq.Array([]float32{0.1, 0.2}).Value()
 		tagsVal, _ := pq.Array([]string{"tech"}).Value()
-		now := time.Now().UnixMilli()
+		now := domain.NowMillis()
 		cols := []string{"id", "user_id", "privacy", "notifications", "display_and_content", "telemetry_vector", "telemetry_tags", "telemetry_timestamp"}
 
 		returnEmptyPg := false

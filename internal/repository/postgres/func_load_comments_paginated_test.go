@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
@@ -34,7 +35,7 @@ func TestFuncLoadCommentsKeyset(t *testing.T) {
 	})
 
 	cols := []string{"id", "post_id", "user_id", "content", "visibility", "like_count", "score", "created_at", "updated_at"}
-	now := time.Now()
+	now := domain.NowTime()
 
 	t.Run("returns_comments_successfully", func(t *testing.T) {
 		validTime := now.Format(time.RFC3339)

@@ -5,8 +5,8 @@ import (
 	"database/sql/driver"
 	"errors"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
@@ -30,7 +30,7 @@ func TestFuncGetPasskeyByCredentialID(t *testing.T) {
 		"id", "user_id", "credential_id", "public_key", "attestation_type",
 		"aaguid", "sign_count", "device_name", "transports", "created_at", "updated_at",
 	}
-	now := time.Now().UnixMilli()
+	now := domain.NowMillis()
 
 	t.Run("returns_passkey_successfully", func(t *testing.T) {
 		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {

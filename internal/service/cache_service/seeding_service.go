@@ -330,7 +330,7 @@ func SeedUserCache(ctx context.Context) error {
 		}
 
 		for _, timelineRecord := range timelineSeedsFromPg {
-			err := AddPostToUserProfile(backgroundCtx, timelineRecord.UserID, timelineRecord.PostID, float64(timelineRecord.CreatedAt.UnixMilli()))
+			err := AddPostToUserProfile(backgroundCtx, timelineRecord.UserID, timelineRecord.PostID, float64(domain.TimeToMillis(timelineRecord.CreatedAt)))
 			if err != nil {
 				numan_log.Warn(ctx).Err(err).Int64("post_id", timelineRecord.PostID).Msg("Échec lors de l'ajout du post à la timeline de l'utilisateur")
 				continue

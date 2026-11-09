@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
@@ -20,7 +21,7 @@ func TestGraphCacheService(t *testing.T) {
 
 	t.Run("UpdateTagCooccurrences and GetRelatedTagsLazy with Markov decay and lazy pruning", func(t *testing.T) {
 		_ = test.SetupTestRedis(t)
-		nowMs := time.Now().UnixMilli()
+		nowMs := domain.NowMillis()
 
 		// Fewer than 2 tags is a no-op
 		UpdateTagCooccurrences(ctx, []string{"only_one"}, nowMs)
@@ -61,7 +62,7 @@ func TestGraphCacheService(t *testing.T) {
 
 	t.Run("Error Paths in updateEdge and GetRelatedTagsLazy", func(t *testing.T) {
 		srv := test.SetupTestRedis(t)
-		nowMs := time.Now().UnixMilli()
+		nowMs := domain.NowMillis()
 
 		// HGET non-Nil error in updateEdge
 		srv.SetFailCmd("HGET", errors.New("hget err"))
@@ -89,7 +90,7 @@ func TestGraphCacheService(t *testing.T) {
 
 	t.Run("SeedGraphCache", func(t *testing.T) {
 		_ = test.SetupTestRedis(t)
-		now := time.Now()
+		now := domain.NowTime()
 
 		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return test.NewMockRows(

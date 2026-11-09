@@ -5,8 +5,8 @@ import (
 	"database/sql/driver"
 	"errors"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
@@ -30,7 +30,7 @@ func TestFuncLoadActiveMembers(t *testing.T) {
 		"conversation_id", "user_id", "role", "settings", "unread_count",
 		"frozen_message_id", "last_read_message_id", "last_message_id", "joined_at",
 	}
-	now := time.Now()
+	now := domain.NowTime()
 
 	t.Run("returns_active_members_successfully", func(t *testing.T) {
 		settingsJSON := `{"is_muted":1,"pinned":2}`

@@ -3,8 +3,8 @@ package worker
 import (
 	"context"
 	"encoding/json"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/post_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/relation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/saved_models"
@@ -31,7 +31,7 @@ func flushMongo(ctx context.Context, events []redis.AsyncEvent) {
 	}
 
 	// Référence temporelle universelle pour rafraîchir le Sliding TTL (Éviction L2)
-	now := time.Now().UTC()
+	now := domain.NowTime()
 
 	// ── ÉTAPE 2 : TRAITEMENT DE CHAQUE COLLECTION BDD ───────────────────────
 	for entity, evts := range grouped {
@@ -356,7 +356,7 @@ func updateCountersMongo(ctx context.Context, events []redis.AsyncEvent) {
 	var commentModels []libMongo.WriteModel
 	var messageModels []libMongo.WriteModel
 
-	now := time.Now().UTC()
+	now := domain.NowTime()
 
 	// Application des deltas aggrégés
 	for id, delta := range postLikeDeltas {

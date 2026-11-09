@@ -2,7 +2,6 @@ package conversation_service
 
 import (
 	"context"
-	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/conversation_models"
@@ -65,7 +64,7 @@ func AddMembersToConversation(ctx context.Context, callerID int64, input convers
 		ConversationIDs: make([]int64, 0),
 	}
 
-	currentTime := time.Now().UTC()
+	currentTime := domain.NowTime()
 
 	// ── ÉTAPE 3 : FILTRAGE ET TRAITEMENT DES CANDIDATS ──────────────────────
 	if err := pkg.ListLimitVerif(input.ParticipantIDs, variables.MaxAddMemberCount); err != nil {
@@ -247,7 +246,7 @@ func AddMembersToConversation(ctx context.Context, callerID int64, input convers
 
 	// ── ÉTAPE 4 : HORODATAGE DE L'ACTIVITÉ (DIRTY FLAG) ─────────────────────
 	latestActivityTimestampMs := cache_service.TouchInboxActivity(ctx, callerID)
-	output.InboxUpdateAt = domain.TimeToMillis(time.UnixMilli(latestActivityTimestampMs))
+	output.InboxUpdateAt = latestActivityTimestampMs
 
 	return output, nil
 }

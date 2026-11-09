@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/security_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
@@ -189,7 +189,7 @@ func RefreshJWT(c *gin.Context) {
 		return
 	}
 
-	respTs := fmt.Sprintf("%d", time.Now().Unix())
+	respTs := fmt.Sprintf("%d", domain.TimeToSeconds(domain.NowTime()))
 	stringToSignResp := security.BuildStringToSign(c.Request.Method, c.Request.URL.Path, respTs, string(respBytes))
 
 	// La réponse est signée avec le secret fourni par le client pour prouver l'authenticité du serveur

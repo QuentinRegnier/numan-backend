@@ -2,7 +2,6 @@ package report_service
 
 import (
 	"context"
-	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/moderation_models"
@@ -24,7 +23,7 @@ import (
 // applique le Shadowban préventif si requis (Impact > 0.40 ou 3 signalements standards),
 // et envoie le ticket aux workers pour persistance dans PostgreSQL.
 func SubmitReport(ctx context.Context, callerID int64, input report_models.CreateReportInput) error {
-	currentTime := time.Now().UTC()
+	currentTime := domain.NowTime()
 
 	// ── ÉTAPE 1 : CALCUL DU SCORE D'URGENCE ÉCONOMIQUE & TRUST IMPACT (O(1)) ─
 	err := pkg.ListLimitVerif(input.TargetIDs, variables.MaxReportTargets)

@@ -2,7 +2,6 @@ package conversation_service
 
 import (
 	"context"
-	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/conversation_models"
@@ -98,6 +97,6 @@ func TogglePinConversation(ctx context.Context, callerID int64, input conversati
 	latestActivityTimestampMs := cache_service.TouchInboxActivity(ctx, callerID)
 
 	return conversation_models.PinConversationOutput{
-		InboxUpdateAt: domain.TimeToMillis(time.UnixMilli(latestActivityTimestampMs)),
+		InboxUpdateAt: latestActivityTimestampMs,
 	}, nil
 }

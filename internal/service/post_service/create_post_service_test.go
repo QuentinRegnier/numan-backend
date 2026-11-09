@@ -7,8 +7,8 @@ import (
 	"math"
 	"strings"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/media_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/moderation_models"
@@ -50,8 +50,8 @@ func TestCreatePost_Wiring_QuarantineOnHighRiskAI(t *testing.T) {
 		StoragePath: "users/8001/media/risk.avif",
 		Visibility:  variables.MediaVisibilityPending,
 		IAScore:     0.90,
-		CreatedAt:   time.Now().UnixMilli(),
-		UpdatedAt:   time.Now().UnixMilli(),
+		CreatedAt:   domain.NowMillis(),
+		UpdatedAt:   domain.NowMillis(),
 	}
 	require.NoError(t, object_cache_service.SetMediaInObjectCache(ctx, mediaPayload))
 
@@ -97,8 +97,8 @@ func TestCreatePost_Wiring_AutoQuarantineNewUser(t *testing.T) {
 		StoragePath: "users/8002/media/clean.avif",
 		Visibility:  variables.MediaVisibilityPending,
 		IAScore:     0.05,
-		CreatedAt:   time.Now().UnixMilli(),
-		UpdatedAt:   time.Now().UnixMilli(),
+		CreatedAt:   domain.NowMillis(),
+		UpdatedAt:   domain.NowMillis(),
 	}
 	require.NoError(t, object_cache_service.SetMediaInObjectCache(ctx, mediaPayload))
 
@@ -141,8 +141,8 @@ func TestCreatePost_Wiring_CleanPostEstablishedUser(t *testing.T) {
 		StoragePath: "users/8003/media/normal.avif",
 		Visibility:  variables.MediaVisibilityPending,
 		IAScore:     0.05,
-		CreatedAt:   time.Now().UnixMilli(),
-		UpdatedAt:   time.Now().UnixMilli(),
+		CreatedAt:   domain.NowMillis(),
+		UpdatedAt:   domain.NowMillis(),
 	}
 	require.NoError(t, object_cache_service.SetMediaInObjectCache(ctx, mediaPayload))
 
@@ -188,7 +188,7 @@ func TestCreatePost_Wiring_ModeratorValidationGrantsBonusAndExitsQuarantine(t *t
 	require.NoError(t, redis.UsersLite.SetObject(ctx, userID, userLite))
 
 	// Média 1 en quarantaine
-	now := time.Now().UnixMilli()
+	now := domain.NowMillis()
 	test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 		if strings.Contains(query, "content.get_media") {
 			return test.NewMockRows(
@@ -229,8 +229,8 @@ func TestCreatePost_Wiring_ModeratorValidationGrantsBonusAndExitsQuarantine(t *t
 		StoragePath: "users/8004/media/post2.avif",
 		Visibility:  variables.MediaVisibilityPending,
 		IAScore:     0.05,
-		CreatedAt:   time.Now().UnixMilli(),
-		UpdatedAt:   time.Now().UnixMilli(),
+		CreatedAt:   domain.NowMillis(),
+		UpdatedAt:   domain.NowMillis(),
 	}
 	require.NoError(t, object_cache_service.SetMediaInObjectCache(ctx, mediaPayload2))
 
@@ -271,7 +271,7 @@ func TestOnboarding_FourValidationsStepToExit(t *testing.T) {
 	}
 	require.NoError(t, redis.UsersLite.SetObject(ctx, onboardingUserID, newUserLite))
 
-	now := time.Now().UnixMilli()
+	now := domain.NowMillis()
 	test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 		if strings.Contains(query, "content.get_media") {
 			var requestedMediaID int64 = 10000
@@ -306,8 +306,8 @@ func TestOnboarding_FourValidationsStepToExit(t *testing.T) {
 			StoragePath: fmt.Sprintf("users/8888/media/step%d.avif", step+1),
 			Visibility:  variables.MediaVisibilityPending,
 			IAScore:     0.05,
-			CreatedAt:   time.Now().UnixMilli(),
-			UpdatedAt:   time.Now().UnixMilli(),
+			CreatedAt:   domain.NowMillis(),
+			UpdatedAt:   domain.NowMillis(),
 		}
 		require.NoError(t, object_cache_service.SetMediaInObjectCache(ctx, mediaPayload))
 
@@ -353,8 +353,8 @@ func TestOnboarding_FourValidationsStepToExit(t *testing.T) {
 		StoragePath: "users/8888/media/step5_public.avif",
 		Visibility:  variables.MediaVisibilityPending,
 		IAScore:     0.05,
-		CreatedAt:   time.Now().UnixMilli(),
-		UpdatedAt:   time.Now().UnixMilli(),
+		CreatedAt:   domain.NowMillis(),
+		UpdatedAt:   domain.NowMillis(),
 	}
 	require.NoError(t, object_cache_service.SetMediaInObjectCache(ctx, mediaPayload5))
 

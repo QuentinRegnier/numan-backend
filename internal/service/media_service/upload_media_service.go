@@ -8,7 +8,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/media_models"
@@ -102,7 +101,7 @@ func UploadMediaWithStatusAndIAScore(fileStream io.ReadSeeker, ownerID int64, me
 
 	// ── ÉTAPE 4 : CRÉATION DU MODÈLE MÉTIER ET MISE EN CACHE L1 ─────────────
 
-	currentTime := time.Now().UTC()
+	currentTime := domain.NowTime()
 	mediaPayload := media_models.MediaPayload{
 		ID:          mediaID,
 		OwnerID:     ownerID,

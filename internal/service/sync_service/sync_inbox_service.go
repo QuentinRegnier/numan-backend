@@ -2,8 +2,8 @@ package sync_service
 
 import (
 	"context"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/conversation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/sync_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
@@ -31,7 +31,7 @@ func SyncInbox(ctx context.Context, callerID int64, input sync_models.SyncInboxI
 	if errRedis != nil || serverLatestActivityTimestamp == 0 {
 		// Cas d'un cold start complet ou d'une purge volatile Redis :
 		// On force la génération d'un timestamp actuel valide.
-		serverLatestActivityTimestamp = time.Now().UnixMilli()
+		serverLatestActivityTimestamp = domain.NowMillis()
 		_ = redis.InboxActivity.SetPrimitive(ctx, callerID, serverLatestActivityTimestamp)
 	}
 

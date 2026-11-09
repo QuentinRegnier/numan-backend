@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/auth_models"
@@ -142,7 +141,7 @@ func HMACMiddleware() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		now := time.Now().Unix()
+		now := domain.TimeToSeconds(domain.NowTime())
 		if math.Abs(float64(now-tsInt)) > float64(variables.ToleranceTimeSeconds) {
 			numan_error.RespondWithError(c, numan_error.NewUnauthorized("REQUEST_EXPIRED", "Requête expirée.", nil))
 			c.Abort()
@@ -168,7 +167,7 @@ func HMACMiddleware() gin.HandlerFunc {
 		isValid := security.CheckHMAC(stringToSignReq, session.CurrentSecret, clientSig)
 
 		if !isValid && session.LastSecret != "" {
-			if session.ToleranceTime > 0 && time.Now().Before(domain.MillisToTime(session.ToleranceTime)) {
+			if session.ToleranceTime > 0 && domain.NowTime().Before(domain.MillisToTime(session.ToleranceTime)) {
 				if security.CheckHMAC(stringToSignReq, session.LastSecret, clientSig) {
 					isValid = true
 					usedSecret = session.LastSecret
@@ -192,7 +191,7 @@ func HMACMiddleware() gin.HandlerFunc {
 		c.Next()
 
 		responseBody := w.body.Bytes()
-		respTs := fmt.Sprintf("%d", time.Now().Unix())
+		respTs := fmt.Sprintf("%d", domain.TimeToSeconds(domain.NowTime()))
 
 		stringToSignResp := security.BuildStringToSign(
 			c.Request.Method,

@@ -34,7 +34,7 @@ func MarkNotificationsAsRead(ctx context.Context, userID int64, input notificati
 
 	websocketPayload := map[string]any{
 		"read_up_to_id": input.ReadUpToID,
-		"read_at":       time.Now().UTC().Format(time.RFC3339),
+		"read_at":       domain.NowTime().Format(time.RFC3339),
 	}
 
 	errBroadcast := realtime_service.DistributeToUsers(ctx, variables.NotificationRead, websocketPayload, []int64{userID})
@@ -47,6 +47,6 @@ func MarkNotificationsAsRead(ctx context.Context, userID int64, input notificati
 	latestActivityTimestampMs := cache_service.TouchActivityTimestamp(ctx, userID)
 
 	return notification_models.ReadNotificationsOutput{
-		ActivityUpdateAt: domain.TimeToMillis(time.UnixMilli(latestActivityTimestampMs)),
+		ActivityUpdateAt: latestActivityTimestampMs,
 	}, nil // Ne bloque pas le client HTTP pour une erreur WebSocket
 }

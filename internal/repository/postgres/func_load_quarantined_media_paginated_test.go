@@ -5,8 +5,8 @@ import (
 	"database/sql/driver"
 	"errors"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
@@ -15,7 +15,7 @@ import (
 
 func TestFuncLoadQuarantinedMediaPaginated(t *testing.T) {
 	ctx := context.Background()
-	now := time.Now().UnixMilli()
+	now := domain.NowMillis()
 	cols := []string{"id", "owner_id", "storage_path", "visibility", "created_at", "updated_at"}
 
 	t.Run("handles_uninitialized_database", func(t *testing.T) {

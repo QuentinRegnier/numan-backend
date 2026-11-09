@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/realtime_service"
@@ -40,7 +41,7 @@ func (c *client) readPump() {
 	}()
 
 	c.Conn.SetReadLimit(maxMessageSize)
-	err := c.Conn.SetReadDeadline(time.Now().Add(pongWait))
+	err := c.Conn.SetReadDeadline(domain.NowTime().Add(pongWait))
 	if err != nil {
 		numan_log.Error(context.Background()).Err(err).Msg("WS readPump: Erreur lors de la définition du ReadDeadline")
 		return
@@ -49,7 +50,7 @@ func (c *client) readPump() {
 	// Optionnel : Tu peux garder le SetPongHandler si tu veux supporter les deux méthodes
 	// (Pings natifs ET Pings JSON). C'est ce que je ferais en tant que Senior pour être ultra robuste.
 	c.Conn.SetPongHandler(func(string) error {
-		err = c.Conn.SetReadDeadline(time.Now().Add(pongWait))
+		err = c.Conn.SetReadDeadline(domain.NowTime().Add(pongWait))
 		if err != nil {
 			numan_log.Error(context.Background()).Err(err).Msg("WS readPump: Erreur lors de la mise à jour du ReadDeadline après PONG")
 			return err
@@ -120,7 +121,7 @@ func (c *client) writePump() {
 	for {
 		select {
 		case message, ok := <-c.Send:
-			err := c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
+			err := c.Conn.SetWriteDeadline(domain.NowTime().Add(writeWait))
 			if err != nil {
 				numan_log.Error(context.Background()).Err(err).Msg("WS writePump: Impossible de définir le WriteDeadline")
 				return
@@ -157,7 +158,7 @@ func (c *client) writePump() {
 			}
 
 		case <-ticker.C:
-			err := c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
+			err := c.Conn.SetWriteDeadline(domain.NowTime().Add(writeWait))
 			if err != nil {
 				numan_log.Error(context.Background()).Err(err).Msg("WS writePump: Impossible de définir le WriteDeadline")
 				return

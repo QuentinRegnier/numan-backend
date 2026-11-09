@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/admin_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/admin_handlers/variables_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/auth_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/comment_handlers"
@@ -28,6 +29,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/two_factor_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/user_settings_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/websocket"
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/QuentinRegnier/numan-backend/internal/api/middleware"
@@ -74,8 +76,8 @@ func SetupRoutes(r *gin.Engine) {
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 			"sub": 1234,
 			"dev": "device-token-sample",
-			"exp": time.Now().Add(time.Hour * 24).Unix(), // expire dans 24h
-			"iat": time.Now().Unix(),
+			"exp": domain.TimeToSeconds(domain.NowTime().Add(time.Hour * 24)), // expire dans 24h
+			"iat": domain.TimeToSeconds(domain.NowTime()),
 		})
 		secret := os.Getenv("JWT_SECRET")
 		if secret == "" {
@@ -228,7 +230,7 @@ func SetupRoutes(r *gin.Engine) {
 	// - Un JWT valide (Identity)
 	// - Une signature HMAC valide (Integrity & Anti-Replay)
 	// =========================================================================
-	adminGroup := r.Group("/admin/")
+	adminGroup := r.Group("/admin")
 	adminGroup.Use(middleware.JWTMiddleware())  // 1. Qui est-ce ? (Populate context with UserID & FirebaseInstallationIDs)
 	adminGroup.Use(middleware.HMACMiddleware()) // 2. Est-ce authentique ? (Check Signature with Redis Secret)
 	adminGroup.Use(middleware.AdminGuard())
@@ -236,15 +238,15 @@ func SetupRoutes(r *gin.Engine) {
 	// L'équivalent de ton "Admin.PATCH" devient simplement l'utilisation de ce groupe
 	adminGroup.PATCH("/variables/update", variables_handlers.UpdateVariablesHandler)
 	adminGroup.GET("/variables/get", variables_handlers.GetVariablesHandler)
-	adminGroup.POST("/moderation/audit/resolve", moderation_handlers.ResolveAdminAuditHandler)
-	adminGroup.POST("/moderation/hard-ban", moderation_handlers.AdminHardBanHandler)
-	adminGroup.GET("/moderation/delegation-switch", moderation_handlers.GetDelegationSwitchHandler)
-	adminGroup.POST("/moderation/delegation-switch", moderation_handlers.SetDelegationSwitchHandler)
+	adminGroup.POST("/moderation/audit/resolve", admin_handlers.ResolveAdminAuditHandler)
+	adminGroup.POST("/moderation/hard-ban", admin_handlers.AdminHardBanHandler)
+	adminGroup.GET("/moderation/delegation-switch", admin_handlers.GetDelegationSwitchHandler)
+	adminGroup.POST("/moderation/delegation-switch", admin_handlers.SetDelegationSwitchHandler)
 
 	// =========================================================================
 	// 4. ROUTES MODÉRATION (JWT + HMAC + Rôle Modérateur Grade >= 3 ou Admin)
 	// =========================================================================
-	modGroup := r.Group("/admin/moderation")
+	modGroup := r.Group("/moderation")
 	modGroup.Use(middleware.JWTMiddleware())
 	modGroup.Use(middleware.HMACMiddleware())
 	modGroup.Use(middleware.ModeratorGuard())

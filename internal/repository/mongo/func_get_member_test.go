@@ -2,11 +2,11 @@ package mongo_test
 
 import (
 	"context"
-	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
+	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
@@ -67,7 +67,7 @@ func TestMongoGetMember(t *testing.T) {
 		mongo.Members = test.NewMockCollection(mt, "members", nil)
 		mongo.Messages = test.NewMockCollection(mt, "messages", nil)
 
-		nowMillis := time.Now().UnixMilli()
+		nowMillis := domain.NowMillis()
 		mt.AddMockResponses(
 			// Member find
 			mtest.CreateCursorResponse(0, "test.members", mtest.FirstBatch, bson.D{

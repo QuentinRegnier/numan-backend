@@ -1,4 +1,4 @@
-package moderation_handlers
+package admin_handlers
 
 import (
 	"bytes"
@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain/models/admin_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/moderation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
@@ -52,7 +53,7 @@ func TestResolveAdminAuditHandler(t *testing.T) {
 	require.NoError(t, cache_service.SaveModerationTicket(t.Context(), superReport))
 	require.NoError(t, cache_service.IndexTicketInModerationQueue(t.Context(), variables.ModerationQueueAdmin, superReportID, 100.0))
 
-	body, _ := json.Marshal(moderation_models.ResolveAdminAuditInput{
+	body, _ := json.Marshal(admin_models.ResolveAdminAuditInput{
 		ReportID:  superReportID,
 		Decision:  "validate",
 		Rationale: "Infractions répétées confirmées par l'audit",
@@ -64,7 +65,7 @@ func TestResolveAdminAuditHandler(t *testing.T) {
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	var res moderation_models.ResolveAdminAuditOutput
+	var res admin_models.ResolveAdminAuditOutput
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
 	assert.True(t, res.TargetBanned)
 	assert.Equal(t, variables.ReportStateClosed, res.Ticket.State)

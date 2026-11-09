@@ -2,7 +2,6 @@ package conversation_service
 
 import (
 	"context"
-	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models"
@@ -74,7 +73,7 @@ func CreateConversation(ctx context.Context, callerID int64, input conversation_
 	}
 
 	// ── ÉTAPE 3 : INITIALISATION DE L'ENTITÉ CONVERSATION ───────────────────
-	currentTime := time.Now().UTC()
+	currentTime := domain.NowTime()
 	conversationID := pkg.GenerateID()
 
 	cleanedTitle := ""
@@ -198,7 +197,7 @@ func CreateConversation(ctx context.Context, callerID int64, input conversation_
 
 	// ── ÉTAPE 5 : TOUCH ACTIVITÉ FINALE ─────────────────────────────────────
 	latestActivityTimestampMs := cache_service.TouchInboxActivity(ctx, callerID)
-	output.InboxUpdateAt = domain.TimeToMillis(time.UnixMilli(latestActivityTimestampMs))
+	output.InboxUpdateAt = latestActivityTimestampMs
 
 	return output, nil
 }

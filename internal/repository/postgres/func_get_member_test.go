@@ -5,8 +5,8 @@ import (
 	"database/sql/driver"
 	"errors"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
@@ -30,7 +30,7 @@ func TestFuncGetMember(t *testing.T) {
 		"id", "conversation_id", "user_id", "role", "settings", "joined_at",
 		"unread_count", "frozen_message_id", "last_read_message_id", "created_at", "updated_at",
 	}
-	now := time.Now().UnixMilli()
+	now := domain.NowMillis()
 
 	t.Run("returns_member_successfully", func(t *testing.T) {
 		settingsJSON := `{"is_muted":1,"pinned":1}`

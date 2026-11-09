@@ -51,7 +51,7 @@ func finalizeLoginSession(
 	input auth_models.LoginInput,
 	ipAddresses []string,
 ) (two_factor_models.VerifyTwoFactorOutput, error) {
-	currentTime := time.Now().UTC()
+	currentTime := domain.NowTime()
 	isNewSession := false
 	deviceFirebaseID := input.FirebaseInstallationID
 
@@ -153,7 +153,7 @@ func finalizeSignupAfterTwoFactor(
 ) (two_factor_models.VerifyTwoFactorOutput, error) {
 	input := preAuth.SignUpData
 	newUserID := preAuth.UserID
-	currentTime := time.Now().UTC()
+	currentTime := domain.NowTime()
 	newSessionID := pkg.GenerateID()
 
 	parsedBirthdate, errParse := time.Parse("02012006", input.Birthdate)

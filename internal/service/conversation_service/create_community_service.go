@@ -2,7 +2,6 @@ package conversation_service
 
 import (
 	"context"
-	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/conversation_models"
@@ -66,7 +65,7 @@ func CreateCommunity(ctx context.Context, callerID int64, input conversation_mod
 	}
 
 	// ── ÉTAPE 3 : INITIALISATION DES PAYLOADS MÉTIER ────────────────────────
-	currentTime := time.Now().UTC()
+	currentTime := domain.NowTime()
 	newConversationID := pkg.GenerateID()
 
 	conversationSettings := input.Settings
@@ -156,6 +155,6 @@ func CreateCommunity(ctx context.Context, callerID int64, input conversation_mod
 
 	return conversation_models.CreateCommunityOutput{
 		ConversationID: newConversationID,
-		InboxUpdateAt:  domain.TimeToMillis(time.UnixMilli(timestampMs)),
+		InboxUpdateAt:  timestampMs,
 	}, nil
 }

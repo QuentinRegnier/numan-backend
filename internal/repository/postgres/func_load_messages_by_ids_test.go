@@ -5,8 +5,8 @@ import (
 	"database/sql/driver"
 	"errors"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
@@ -30,7 +30,7 @@ func TestFuncLoadMessagesByIDs(t *testing.T) {
 		"id", "conversation_id", "sender_id", "message_type",
 		"visibility", "content", "attachments", "allow_new_reactions", "created_at", "updated_at",
 	}
-	now := time.Now().UnixMilli()
+	now := domain.NowMillis()
 
 	t.Run("returns_messages_successfully", func(t *testing.T) {
 		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {

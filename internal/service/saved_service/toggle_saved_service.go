@@ -2,7 +2,6 @@ package saved_service
 
 import (
 	"context"
-	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/saved_models"
@@ -29,14 +28,14 @@ func ToggleSaved(ctx context.Context, userID int64, postID int64, requestedActio
 		return numan_error.NewNotFound(numan_error.CodeNotFound, "La publication est introuvable ou indisponible.", nil)
 	}
 
-	currentTime := time.Now().UTC()
+	currentTime := domain.NowTime()
 	var redisActionType redis.ActionType
 
 	// ── ÉTAPE 2 : TRAITEMENT L1 (RAM ZSET) ──────────────────────────────────
 
 	if requestedAction == variables.SavedActionSave {
 		redisActionType = redis.ActionCreate
-		zsetScore := float64(currentTime.UnixMilli())
+		zsetScore := float64(domain.TimeToMillis(currentTime))
 		_ = object_cache_service.AddSavedToZSET(ctx, userID, postID, zsetScore)
 
 	} else if requestedAction == variables.SavedActionUnsave {

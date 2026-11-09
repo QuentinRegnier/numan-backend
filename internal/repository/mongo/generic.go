@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/schemas"
 	"go.mongodb.org/mongo-driver/bson"
@@ -158,7 +159,7 @@ func (c *Collection) Set(obj map[string]any) error {
 	}
 
 	// AUTOMATISATION DU SLIDING TTL
-	obj["last_use"] = time.Now().UTC()
+	obj["last_use"] = domain.NowTime()
 
 	collection := c.DB.Collection(c.Name)
 
@@ -277,7 +278,7 @@ func (c *Collection) update(filter map[string]any, update map[string]any) error 
 	}
 
 	// AUTOMATISATION DU SLIDING TTL (Y compris pour les Soft Deletes)
-	update["last_use"] = time.Now().UTC()
+	update["last_use"] = domain.NowTime()
 
 	collection := c.DB.Collection(c.Name)
 	_, err := collection.UpdateMany(ctx, filter, bson.M{"$set": update})

@@ -2,8 +2,8 @@ package two_factor_service
 
 import (
 	"context"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/two_factor_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
@@ -23,7 +23,7 @@ func VerifyTwoFactorTOTP(ctx context.Context, input two_factor_models.VerifyTwoF
 		return two_factor_models.VerifyTwoFactorOutput{}, numan_error.NewForbidden(numan_error.CodeForbidden, "La méthode Authenticator (TOTP) n'est pas autorisée pour cette session.", nil)
 	}
 
-	if preAuth.TempTOTPSecret == "" || !security.VerifyTOTP(preAuth.TempTOTPSecret, input.Code, time.Now().UTC()) {
+	if preAuth.TempTOTPSecret == "" || !security.VerifyTOTP(preAuth.TempTOTPSecret, input.Code, domain.NowTime()) {
 		if errInc := cache_service.IncrementPreAuthAttempts(ctx, preAuth); errInc != nil {
 			return two_factor_models.VerifyTwoFactorOutput{}, errInc
 		}

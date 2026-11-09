@@ -3,8 +3,8 @@ package moderation_service_test
 import (
 	"encoding/json"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/moderation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/service/moderation_service"
 	"github.com/stretchr/testify/assert"
@@ -12,7 +12,7 @@ import (
 )
 
 func TestToPublicTicketView_NonAdmin_PeerReviewMasking(t *testing.T) {
-	now := time.Now().UnixMilli()
+	now := domain.NowMillis()
 	record := moderation_models.ModerationTicketRecord{
 		ReportID:          12345,
 		TargetType:        0,
@@ -59,7 +59,7 @@ func TestToPublicTicketView_NonAdmin_PeerReviewMasking(t *testing.T) {
 }
 
 func TestToPublicTicketView_Admin_AuditDetailsIncluded(t *testing.T) {
-	now := time.Now().UnixMilli()
+	now := domain.NowMillis()
 	record := moderation_models.ModerationTicketRecord{
 		ReportID:          12345,
 		TargetType:        0,

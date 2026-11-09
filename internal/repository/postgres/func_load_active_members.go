@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/member_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
@@ -83,7 +84,7 @@ func FuncLoadActiveMembers(ctx context.Context) ([]activeMemberResult, error) {
 					MediaAutoDownload: parsedSettings.MediaAutoDownload,
 				},
 				UnreadCount: unreadCount,
-				JoinedAt:    joinedAt.UnixMilli(),
+				JoinedAt:    domain.TimeToMillis(joinedAt),
 			}
 
 			if frozenID.Valid {

@@ -4,6 +4,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -44,7 +45,7 @@ func JWTMiddleware() gin.HandlerFunc {
 		}
 
 		if exp, ok := claims["exp"].(float64); ok {
-			if time.Now().After(time.Unix(int64(exp), 0)) {
+			if domain.NowTime().After(time.Unix(int64(exp), 0)) {
 				numan_error.RespondWithError(c, numan_error.NewUnauthorized("EXPIRED_TOKEN", "Token expiré.", nil))
 				c.Abort()
 				return

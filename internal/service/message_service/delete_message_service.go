@@ -3,7 +3,6 @@ package message_service
 import (
 	"context"
 	"strconv"
-	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/message_models"
@@ -75,6 +74,6 @@ func DeleteMessage(ctx context.Context, callerID int64, input message_models.Del
 	latestActivityTimestampMs := cache_service.TouchInboxActivity(ctx, callerID)
 
 	return message_models.DeleteMessageOutput{
-		InboxUpdateAt: domain.TimeToMillis(time.UnixMilli(latestActivityTimestampMs)),
+		InboxUpdateAt: latestActivityTimestampMs,
 	}, nil
 }

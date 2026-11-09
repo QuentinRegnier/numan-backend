@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
@@ -180,7 +180,7 @@ func fillBasket(ctx context.Context, userID int64, basket *candidateBasket, quot
 	// ─────────────────────────────────────────────────────────────────────────────
 	// PHASE 1 : COLLECTE GLOBALE (SÉRENDIPITÉ PURE)
 	// ─────────────────────────────────────────────────────────────────────────────
-	currentDateStr := time.Now().UTC().Format("20060102")
+	currentDateStr := domain.NowTime().Format("20060102")
 	globalTrendKey := fmt.Sprintf(variables.RedisKeyTrendGlobalDaily, currentDateStr)
 
 	successfullyAddedGlobally := basket.fetchDeterministicallyFromZSET(ctx, userID, globalTrendKey, globalTargetQuota, originGlobal)

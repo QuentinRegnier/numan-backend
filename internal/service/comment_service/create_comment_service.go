@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/comment_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
@@ -42,7 +43,7 @@ func CreateComment(ctx context.Context, callerID int64, input comment_models.Cre
 
 	// ── ÉTAPE 3 : PRÉPARATION DU MODÈLE DE DONNÉES ──────────────────────────
 
-	currentTime := time.Now().UTC().Format(time.RFC3339)
+	currentTime := domain.NowTime().Format(time.RFC3339)
 	initialScore := priorityLevel * variables.CommentPriorityMultiplier // Remplace le '10000' magique
 
 	commentPayload := comment_models.CommentPayload{

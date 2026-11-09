@@ -2,7 +2,6 @@ package media_service
 
 import (
 	"context"
-	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
@@ -24,7 +23,7 @@ func ActivateMediaBatch(ctx context.Context, mediaIDs []int64, ownerID int64) er
 		return nil
 	}
 
-	currentTime := time.Now().UTC()
+	currentTime := domain.NowTime()
 
 	// Évaluation O(1) RAM du palier de confiance de l'utilisateur
 	targetVisibility := variables.MediaVisibilityPublic
@@ -82,7 +81,7 @@ func DeactivateMediaBatch(ctx context.Context, mediaIDs []int64, ownerID int64) 
 		return nil
 	}
 
-	currentTime := time.Now().UTC()
+	currentTime := domain.NowTime()
 
 	for _, mediaID := range mediaIDs {
 		if mediaID <= 0 {

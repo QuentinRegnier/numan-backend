@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/auth_models"
@@ -46,7 +45,7 @@ func AddCertification(ctx context.Context, userID int64, input auth_models.AddCe
 		userPayload.Badges = make(auth_models.UserBadges)
 	}
 
-	now := time.Now().UTC()
+	now := domain.NowTime()
 	if existing, exists := userPayload.Badges[badgeName]; exists {
 		// Conflit si la certification est toujours active (non expirée)
 		if existing.ExpiresAt == nil || existing.ExpiresAt.After(now) {

@@ -5,8 +5,8 @@ import (
 	"database/sql/driver"
 	"errors"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
@@ -32,7 +32,7 @@ func TestFuncLoadConversationPaginated(t *testing.T) {
 		"mem_id", "mem_conv_id", "mem_user_id", "mem_role", "mem_settings", "mem_joined",
 		"mem_unread", "mem_frozen_id", "mem_last_read_message_id", "mem_created", "mem_updated",
 	}
-	now := time.Now().UnixMilli()
+	now := domain.NowMillis()
 
 	t.Run("returns_conversations_paginated_successfully", func(t *testing.T) {
 		convSettings := `{"theme":"dark"}`

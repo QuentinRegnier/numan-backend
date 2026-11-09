@@ -2,7 +2,6 @@ package message_service
 
 import (
 	"context"
-	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/message_models"
@@ -80,6 +79,6 @@ func UpdateMessage(ctx context.Context, callerID int64, input message_models.Upd
 	latestActivityTimestampMs := cache_service.TouchInboxActivity(ctx, callerID)
 
 	return message_models.UpdateMessageOutput{
-		InboxUpdateAt: domain.TimeToMillis(time.UnixMilli(latestActivityTimestampMs)),
+		InboxUpdateAt: latestActivityTimestampMs,
 	}, nil
 }

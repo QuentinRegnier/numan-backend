@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/media_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
@@ -33,7 +33,7 @@ import (
 func generateWatermarkedURL(mediaStoragePath string, authorID int64, contextID int64, readerID int64) string {
 	baseURL := os.Getenv("WATERMARK_API_URL")
 	secretKey := os.Getenv("WATERMARK_SECRET_KEY")
-	currentTimestamp := time.Now().Unix()
+	currentTimestamp := domain.TimeToSeconds(domain.NowTime())
 
 	// Construction stricte de la chaîne de paramètres à signer
 	signaturePayload := fmt.Sprintf("key=%s&author=%d&post=%d&reader=%d&ts=%d", mediaStoragePath, authorID, contextID, readerID, currentTimestamp)

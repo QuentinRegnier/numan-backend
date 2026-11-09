@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/moderation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
@@ -19,10 +20,6 @@ func TestModerationWorker_AgingBatchAndLockExpirations(t *testing.T) {
 	ctx := context.Background()
 
 	baseTime := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
-	restoreClock := SetModerationWorkerClock(func() time.Time {
-		return baseTime
-	})
-	defer restoreClock()
 
 	// 1. Vieillissement quadratique M_temps sur ticket standard vs préservation stricte de +Inf
 	tStandard := &moderation_models.ModerationTicketRecord{
@@ -32,7 +29,7 @@ func TestModerationWorker_AgingBatchAndLockExpirations(t *testing.T) {
 		State:           variables.ReportStatePending,
 		StaticBaseScore: 10.0,
 		PriorityScore:   10.0,
-		CreatedAt:       baseTime.Add(-12 * time.Hour).UnixMilli(), // 12h d'âge -> M_temps = 1 + (12/12)^2 = 2.0 -> Score = 20.0
+		CreatedAt:       domain.TimeToMillis(baseTime.Add(-12 * time.Hour)), // 12h d'âge -> M_temps = 1 + (12/12)^2 = 2.0 -> Score = 20.0
 	}
 	tUrgent := &moderation_models.ModerationTicketRecord{
 		ReportID:         1002,
@@ -42,7 +39,7 @@ func TestModerationWorker_AgingBatchAndLockExpirations(t *testing.T) {
 		StaticBaseScore:  math.Inf(1),
 		PriorityScore:    math.Inf(1),
 		IsInfiniteUrgent: true,
-		CreatedAt:        baseTime.Add(-24 * time.Hour).UnixMilli(),
+		CreatedAt:        domain.TimeToMillis(baseTime.Add(-24 * time.Hour)),
 	}
 
 	require.NoError(t, cache_service.SaveModerationTicket(ctx, tStandard))
@@ -71,8 +68,8 @@ func TestModerationWorker_AgingBatchAndLockExpirations(t *testing.T) {
 		State:           variables.ReportStateInProgress,
 		ClaimedByModID:  9001,
 		PriorityScore:   15.0,
-		LockExpiresAtMs: baseTime.Add(-1 * time.Hour).UnixMilli(), // Expiré depuis 1h
-		CreatedAt:       baseTime.Add(-49 * time.Hour).UnixMilli(),
+		LockExpiresAtMs: domain.TimeToMillis(baseTime.Add(-1 * time.Hour)), // Expiré depuis 1h
+		CreatedAt:       domain.TimeToMillis(baseTime.Add(-49 * time.Hour)),
 	}
 	require.NoError(t, cache_service.SaveModerationTicket(ctx, tInProgress))
 	// Simuler le verrou dans le ZSET d'expiration
@@ -95,8 +92,8 @@ func TestModerationWorker_AgingBatchAndLockExpirations(t *testing.T) {
 		TargetID:       5004,
 		State:          variables.ReportStateWaitingForInfo,
 		ClaimedByModID: 9002,
-		WaitingUntilMs: baseTime.Add(-2 * time.Hour).UnixMilli(), // 7 jours écoulés
-		CreatedAt:      baseTime.Add(-8 * 24 * time.Hour).UnixMilli(),
+		WaitingUntilMs: domain.TimeToMillis(baseTime.Add(-2 * time.Hour)), // 7 jours écoulés
+		CreatedAt:      domain.TimeToMillis(baseTime.Add(-8 * 24 * time.Hour)),
 	}
 	require.NoError(t, cache_service.SaveModerationTicket(ctx, tWaiting))
 	require.NoError(t, cache_service.ScheduleTicketWaitingInfoExpiration(ctx, 1004, tWaiting.WaitingUntilMs))
@@ -118,12 +115,6 @@ func TestModerationWorker_WaitingForInfoSevenDayExpiry(t *testing.T) {
 	startTime := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
 	currentTime := startTime
 
-	// Injecte l'horloge personnalisée contrôlable
-	restoreClock := SetModerationWorkerClock(func() time.Time {
-		return currentTime
-	})
-	defer restoreClock()
-
 	modID := int64(7001)
 	ticketID := int64(9901)
 	waitingUntil := startTime.Add(variables.ModerationWaitingInfoTTL) // + 7 jours
@@ -134,9 +125,9 @@ func TestModerationWorker_WaitingForInfoSevenDayExpiry(t *testing.T) {
 		TargetID:       5555,
 		State:          variables.ReportStateWaitingForInfo,
 		ClaimedByModID: modID,
-		WaitingUntilMs: waitingUntil.UnixMilli(),
-		CreatedAt:      startTime.UnixMilli(),
-		UpdatedAt:      startTime.UnixMilli(),
+		WaitingUntilMs: domain.TimeToMillis(waitingUntil),
+		CreatedAt:      domain.TimeToMillis(startTime),
+		UpdatedAt:      domain.TimeToMillis(startTime),
 	}
 	require.NoError(t, cache_service.SaveModerationTicket(ctx, ticket))
 	require.NoError(t, cache_service.ScheduleTicketWaitingInfoExpiration(ctx, ticketID, ticket.WaitingUntilMs))
@@ -162,5 +153,5 @@ func TestModerationWorker_WaitingForInfoSevenDayExpiry(t *testing.T) {
 	assert.Equal(t, variables.ReportStateInProgress, tCheck2.State, "Le ticket doit être restitué en InProgress")
 	assert.Equal(t, modID, tCheck2.ClaimedByModID, "Le ticket doit être assigné au même modérateur")
 	assert.Equal(t, int64(0), tCheck2.WaitingUntilMs)
-	assert.True(t, tCheck2.LockExpiresAtMs > currentTime.UnixMilli(), "Un nouveau verrou exclusif 48h doit être posé")
+	assert.True(t, tCheck2.LockExpiresAtMs > domain.TimeToMillis(currentTime), "Un nouveau verrou exclusif 48h doit être posé")
 }

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
 
@@ -208,7 +209,7 @@ func buildSimilarityMatrix(candidates []postCandidate) ([]float32, int) {
 
 // getOrBuildSimMatrix retourne la matrice depuis la RAM, ou la calcule si le cache a expiré.
 func getOrBuildSimMatrix(candidates []postCandidate) ([]float32, int) {
-	now := time.Now()
+	now := domain.NowTime()
 
 	// 1. Lecture Rapide (RLock)
 	simCacheMu.RLock()

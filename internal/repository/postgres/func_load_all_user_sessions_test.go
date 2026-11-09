@@ -5,8 +5,8 @@ import (
 	"database/sql/driver"
 	"errors"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
@@ -30,7 +30,7 @@ func TestFuncLoadAllUserSessions(t *testing.T) {
 		"id", "user_id", "master_token", "firebase_installation_id",
 		"device_info", "ip_history", "created_at", "expires_at",
 	}
-	now := time.Now().UnixMilli()
+	now := domain.NowMillis()
 	future := now + 3600000
 
 	t.Run("returns_all_user_sessions_successfully", func(t *testing.T) {

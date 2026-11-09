@@ -40,7 +40,7 @@ func startHashtagTrendCron(ctx context.Context) {
 // processHashtagTrends calcule le score de popularité des tags basés sur la viralité des posts récents.
 func processHashtagTrends(ctx context.Context) {
 	// ── ÉTAPE 1 : EXTRACTION DES MEILLEURS POSTS MONDIAUX (L1) ──────────────
-	now := time.Now().UTC()
+	now := domain.NowTime()
 	dateStr := now.Format("20060102")
 
 	// Reconstruction de la clé physique du ZSET Global

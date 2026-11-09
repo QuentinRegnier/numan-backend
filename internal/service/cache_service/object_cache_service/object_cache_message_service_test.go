@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/message_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
@@ -83,7 +84,7 @@ func TestGetMessagesView_HybridCascadeAndVisibilityFilter(t *testing.T) {
 		defer restore()
 		repoMongo.Messages = test.NewMockCollection(mt, "messaging.messages", nil)
 
-		now := time.Now().UnixMilli()
+		now := domain.NowMillis()
 		// Message 1 in L1 (visible)
 		_ = SetMessageInObjectCache(ctx, message_models.MessagePayload{
 			ID:                1,

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/message_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
@@ -199,7 +200,7 @@ func slowPathDichotomy(ctx context.Context, entity redis.EntityType, action redi
 func sendToDLQ(ctx context.Context, entity redis.EntityType, action redis.ActionType, event redis.AsyncEvent, dbErr error) {
 	dlqPayload := map[string]any{
 		"numan_error": dbErr.Error(),
-		"time":        time.Now().Format(time.RFC3339),
+		"time":        domain.NowTime().Format(time.RFC3339),
 		"entity":      entity,
 		"action":      action,
 		"event":       event,
@@ -359,7 +360,7 @@ func bulkUpdatePostgres(ctx context.Context, entity redis.EntityType, events []r
 
 	// Génération d'une table temporaire propre à la session
 	safeTableName := strings.ReplaceAll(mapper.TableName(), ".", "_")
-	tempTable := fmt.Sprintf("tmp_%s_%d", safeTableName, time.Now().UnixNano())
+	tempTable := fmt.Sprintf("tmp_%s_%d", safeTableName, domain.NowTime().UnixNano())
 
 	queryCreateTable := fmt.Sprintf("CREATE TEMP TABLE %s (LIKE %s INCLUDING DEFAULTS) ON COMMIT DROP", tempTable, mapper.TableName())
 	if _, errExec := tx.ExecContext(ctx, queryCreateTable); errExec != nil {

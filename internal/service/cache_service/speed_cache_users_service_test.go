@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/auth_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/user_settings_models"
@@ -132,7 +133,7 @@ func TestSpeedCacheUsersService(t *testing.T) {
 				mtest.CreateSuccessResponse(),
 			)
 
-			now := time.Now()
+			now := domain.NowTime()
 			test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 				if strings.Contains(query, "func_load_user_settings") {
 					return test.NewMockRows(

@@ -6,8 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/post_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	infraPg "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
@@ -36,7 +36,7 @@ func TestMostCacheAndPostHydrator(t *testing.T) {
 				CommentCount:     5,
 				ViewCount:        100,
 				HasMedia:         true,
-				CreatedAt:        time.Now().UnixMilli(),
+				CreatedAt:        domain.NowMillis(),
 				Hashtags:         []string{"golang"},
 				IndirectHashtags: []string{"redis"},
 				Visibility:       1,

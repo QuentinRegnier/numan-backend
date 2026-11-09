@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
@@ -30,7 +31,7 @@ func cleanMongo() {
 	}
 
 	// 2. Le seuil de péremption : 30 jours dans le passé
-	expirationThreshold := time.Now().AddDate(0, 0, -30)
+	expirationThreshold := domain.NowTime().AddDate(0, 0, -30)
 	deletionFilter := bson.M{
 		"last_use": bson.M{
 			"$lt": expirationThreshold,

@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/moderation_handlers"
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/moderation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
@@ -44,8 +44,8 @@ func TestCloseTicketHandler(t *testing.T) {
 			State:          variables.ReportStateInProgress,
 			ClaimedByModID: modID,
 			ReporterIDs:    []int64{8001},
-			CreatedAt:      time.Now().UnixMilli(),
-			UpdatedAt:      time.Now().UnixMilli(),
+			CreatedAt:      domain.NowMillis(),
+			UpdatedAt:      domain.NowMillis(),
 		}
 		require.NoError(t, cache_service.SaveModerationTicket(ctx, ticket))
 
@@ -85,8 +85,8 @@ func TestCloseTicketHandler(t *testing.T) {
 			State:          variables.ReportStateInProgress,
 			ClaimedByModID: modID,
 			ReporterIDs:    []int64{8002},
-			CreatedAt:      time.Now().UnixMilli(),
-			UpdatedAt:      time.Now().UnixMilli(),
+			CreatedAt:      domain.NowMillis(),
+			UpdatedAt:      domain.NowMillis(),
 		}
 		require.NoError(t, cache_service.SaveModerationTicket(ctx, ticket2))
 

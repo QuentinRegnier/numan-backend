@@ -5,8 +5,8 @@ import (
 	"errors"
 	"math"
 	"strings"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
@@ -120,7 +120,7 @@ func GetRelatedTagsLazy(ctx context.Context, sourceTag string) map[string]float6
 
 	survivingEdgesMap := make(map[string]float64)
 	var edgesToDeleteList []string
-	currentTimestampMs := time.Now().UnixMilli()
+	currentTimestampMs := domain.NowMillis()
 
 	// Évaluation à la volée de la vitalité des arêtes sémantiques
 	for targetTag, binaryData := range edgesMapJSON {
@@ -172,7 +172,7 @@ func SeedGraphCache(ctx context.Context) error {
 
 	// 2. Rejeu Temporel pour reconstruire fidèlement l'état d'apprentissage
 	for _, postRecord := range historicalPosts {
-		UpdateTagCooccurrences(ctx, postRecord.Hashtags, postRecord.CreatedAt.UnixMilli())
+		UpdateTagCooccurrences(ctx, postRecord.Hashtags, domain.TimeToMillis(postRecord.CreatedAt))
 	}
 
 	numan_log.Info(ctx).Msg("Graphe sémantique initialisé avec succès !")

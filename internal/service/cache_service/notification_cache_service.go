@@ -4,8 +4,8 @@ import (
 	"context"
 	"net/http"
 	"strconv"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
@@ -88,7 +88,7 @@ func PurgeNotificationsZSET(ctx context.Context, userID int64) error {
 // TouchActivityTimestamp signale une modification d'état (ex: marquage comme lu)
 // et retourne le timestamp exact généré par le serveur.
 func TouchActivityTimestamp(ctx context.Context, userID int64) int64 {
-	currentTimestampMs := time.Now().UnixMilli()
+	currentTimestampMs := domain.NowMillis()
 
 	errRedis := redis.NotificationActivity.SetPrimitive(ctx, userID, currentTimestampMs)
 	if errRedis != nil {

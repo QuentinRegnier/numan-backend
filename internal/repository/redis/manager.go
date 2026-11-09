@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	redisgo "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
@@ -512,7 +513,7 @@ func (c *Collection) CFAdd(ctx context.Context, id any, item any) error {
 // PushFlux publie un message lourd (stockage RAM puis notification)
 func (c *Collection) PushFlux(ctx context.Context, message []byte) error {
 	// 1. La génération de l'ID est encapsulée ici (zéro fuite d'infrastructure)
-	messageID := strconv.FormatInt(time.Now().UnixNano(), 10)
+	messageID := strconv.FormatInt(domain.NowTime().UnixNano(), 10)
 
 	// 2. Stockage du payload avec le TTL par défaut de la collection
 	payloadKey := c.Key("msg:" + messageID)

@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql/driver"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/auth_models"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
@@ -22,7 +22,7 @@ func TestAddCertification_PublishesVerifiedIdentityEvent(t *testing.T) {
 	ctx := context.Background()
 
 	userID := int64(456789)
-	now := time.Now()
+	now := domain.NowTime()
 
 	test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 		// Mock pour postgres.FuncLoadUser

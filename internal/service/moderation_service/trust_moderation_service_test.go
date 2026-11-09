@@ -5,8 +5,8 @@ import (
 	"database/sql/driver"
 	"strings"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/moderation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/post_models"
@@ -21,7 +21,7 @@ import (
 func TestReviewQuarantineMedia_ApproveAndReject(t *testing.T) {
 	_ = test.SetupTestRedis(t)
 	ctx := context.Background()
-	now := time.Now().UnixMilli()
+	now := domain.NowMillis()
 
 	// Seed moderator (Grade 3) and normal user (Grade 0)
 	require.NoError(t, redis.UsersLite.SetObject(ctx, 99, lite_models.UserLiteRequest{ID: 99, Username: "mod", Grade: variables.UserGradeModerator, TrustScore: 0.95}))

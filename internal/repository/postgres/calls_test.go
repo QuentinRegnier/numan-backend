@@ -5,8 +5,8 @@ import (
 	"database/sql/driver"
 	"errors"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
@@ -30,12 +30,12 @@ func TestCalls_ScanPosts(t *testing.T) {
 		"has_media", "vector", "vector_version", "telemetry_dwell_sum", "telemetry_dwell_sq", "telemetry_clicks",
 	}
 
-	now := time.Now()
+	now := domain.NowMillis()
 
 	validRow := []driver.Value{
 		int64(101), int64(202), "Hello world", "{tag1,tag2}", "{itag1}", "{1,2}",
-		"{1,2}", 1, 0, "Paris", now.UnixMilli(),
-		now.UnixMilli(), 5, 2, 100, 0,
+		"{1,2}", 1, 0, "Paris", now,
+		now, 5, 2, 100, 0,
 		true, "{0.1,0.2}", 1, float64(12.5), float64(150.25), 10,
 	}
 
@@ -76,8 +76,8 @@ func TestCalls_ScanPosts(t *testing.T) {
 	t.Run("skips_corrupted_row_and_continues", func(t *testing.T) {
 		corruptedRow := []driver.Value{
 			"invalid-not-int", int64(202), "Corrupt", "{tag1}", "{}", "{}",
-			"{}", 1, 0, nil, now.UnixMilli(),
-			now.UnixMilli(), 0, 0, 0, 0,
+			"{}", 1, 0, nil, now,
+			now, 0, 0, 0, 0,
 			false, "{}", 1, float64(0), float64(0), 0,
 		}
 

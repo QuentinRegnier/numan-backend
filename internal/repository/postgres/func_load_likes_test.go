@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
@@ -27,7 +28,7 @@ func TestFuncLoadLikes(t *testing.T) {
 	})
 
 	cols := []string{"id", "target_type", "target_id", "user_id", "created_at"}
-	now := time.Now().UTC()
+	now := domain.NowTime()
 
 	t.Run("returns_likes_successfully", func(t *testing.T) {
 		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {

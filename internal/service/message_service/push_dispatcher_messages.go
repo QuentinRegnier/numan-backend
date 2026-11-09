@@ -3,8 +3,8 @@ package message_service
 import (
 	"context"
 	"encoding/json"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/message_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
@@ -51,10 +51,10 @@ func shouldSendPush(ctx context.Context, conversationID int64, targetUserID int6
 	// Gestion du "Mute Temporaire"
 	expirationTimestamp := memberPayload.Settings.MuteExpireAt
 	if expirationTimestamp > 0 {
-		currentTimestamp := time.Now().Unix()
+		currentTimestamp := domain.TimeToMillis(domain.NowTime())
 		// Auto-détection du format millisecondes vs secondes
 		if expirationTimestamp > variables.MaxTimestamp {
-			currentTimestamp = time.Now().UnixMilli()
+			currentTimestamp = domain.NowMillis()
 		}
 		if expirationTimestamp > currentTimestamp {
 			isMutedStatus = variables.SettingsMutedAll // Toujours silencieux

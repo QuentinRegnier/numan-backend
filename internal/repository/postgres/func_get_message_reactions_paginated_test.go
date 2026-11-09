@@ -5,8 +5,8 @@ import (
 	"database/sql/driver"
 	"errors"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
@@ -27,7 +27,7 @@ func TestFuncGetMessageReactionsPaginated(t *testing.T) {
 	})
 
 	cols := []string{"id", "message_id", "user_id", "reaction", "created_at"}
-	now := time.Now().UnixMilli()
+	now := domain.NowMillis()
 
 	t.Run("returns_reactions_successfully", func(t *testing.T) {
 		beforeCreated := int64(1700000000)

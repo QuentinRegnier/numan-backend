@@ -66,7 +66,7 @@ func CreateUser(ctx context.Context, input auth_models.SignUpInput, ipAddress st
 
 	// ── ÉTAPE 2 : GÉNÉRATION DES MODÈLES DE DONNÉES (La source de vérité) ──
 
-	currentTime := time.Now().UTC()
+	currentTime := domain.NowTime()
 	newUserID := pkg.GenerateID()
 	newSessionID := pkg.GenerateID()
 

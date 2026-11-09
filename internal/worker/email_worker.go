@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/email_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
@@ -76,7 +77,7 @@ func parseTemplate(templateName string, data map[string]any) (string, error) {
 	if data == nil {
 		data = make(map[string]any)
 	}
-	data["Year"] = time.Now().Year()
+	data["Year"] = domain.NowTime().Year()
 
 	// ParseFS charge les fichiers directement depuis la RAM (Embedded FS)
 	tpl, err := template.ParseFS(templates.EmailFS, "emails/layout.html", "emails/"+templateName+".html")

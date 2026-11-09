@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/conversation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/member_models"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
@@ -52,7 +53,7 @@ func TestMuteMember_PublishesMutedInPublicCommEvent(t *testing.T) {
 	}))
 
 	// Application d'un mute de 2 heures
-	restrictedUntil := time.Now().Add(2 * time.Hour).UnixMilli()
+	restrictedUntil := domain.TimeToMillis(domain.NowTime().Add(2 * time.Hour))
 	errMute := member_service.MuteMember(ctx, adminCallerID, member_models.MuteMemberInput{
 		ConversationID:  convID,
 		TargetUserID:    targetMemberID,

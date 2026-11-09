@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
@@ -57,13 +57,13 @@ func (n *node) generate() int64 {
 	n.mu.Lock()         // Verrouille pour éviter que deux goroutines accèdent en même temps
 	defer n.mu.Unlock() // Déverrouille à la fin de la fonction
 
-	now := time.Now().UnixMilli() // Temps actuel en millisecondes
+	now := domain.NowMillis() // Temps actuel en millisecondes
 
 	if now < n.timestamp {
 		// Protection contre le changement d'heure système (NTP drift)
 		// On attend que l'horloge rattrape le dernier timestamp
 		for now <= n.timestamp {
-			now = time.Now().UnixMilli()
+			now = domain.NowMillis()
 		}
 	}
 
@@ -74,7 +74,7 @@ func (n *node) generate() int64 {
 		// Si la séquence déborde (plus de 4096 IDs dans la même ms), on attend la ms suivante
 		if n.step == 0 {
 			for now <= n.timestamp {
-				now = time.Now().UnixMilli()
+				now = domain.NowMillis()
 			}
 		}
 	} else {

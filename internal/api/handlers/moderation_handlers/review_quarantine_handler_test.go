@@ -8,8 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
@@ -24,7 +24,7 @@ func TestReviewQuarantineHandler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	_ = test.SetupTestRedis(t)
 	ctx := context.Background()
-	now := time.Now().UnixMilli()
+	now := domain.NowMillis()
 
 	adminUser := lite_models.UserLiteRequest{
 		ID:         1,

@@ -2,8 +2,8 @@ package sync_service
 
 import (
 	"context"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/notification_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/sync_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
@@ -40,7 +40,7 @@ func SyncActivity(ctx context.Context, callerID int64, input sync_models.SyncAct
 	}
 
 	if len(recentNotificationViews) == 0 {
-		syncOutput.ServerUpdated = time.Now().UnixMilli()
+		syncOutput.ServerUpdated = domain.NowMillis()
 		return syncOutput, nil
 	}
 

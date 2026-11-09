@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
@@ -69,7 +70,7 @@ func HandlePullToRefresh(ctx context.Context, opts RefreshOptions) ([]int64, err
 		if time.Since(feedState.GeneratedAt) >= variables.FeedReloadDelay {
 
 			// Le délai est écoulé : Reset intégral et régénération complète
-			feedState.GeneratedAt = time.Now()
+			feedState.GeneratedAt = domain.NowTime()
 			feedState.ActiveFeed = "A"
 			feedState.Feeds["A"] = feedData{Seed: rand.Int63(), PostIDs: nil, Fused: false}
 			feedState.Feeds["B"] = feedData{Seed: rand.Int63(), PostIDs: nil, Fused: false}

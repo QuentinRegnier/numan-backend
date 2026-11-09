@@ -5,8 +5,8 @@ import (
 	"database/sql/driver"
 	"errors"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
@@ -27,7 +27,7 @@ func TestFuncLoadUserSessionsView(t *testing.T) {
 	})
 
 	cols := []string{"id", "device_info", "ip_history", "created_at", "expires_at"}
-	now := time.Now().UnixMilli()
+	now := domain.NowMillis()
 	future := now + 3600000
 
 	t.Run("returns_session_views_successfully", func(t *testing.T) {

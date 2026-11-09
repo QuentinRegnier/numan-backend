@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	redisgo "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
@@ -92,7 +93,7 @@ const (
 // Si partitionKey est fourni (ex: ID du User), on utilise ça pour forcer la file.
 func EnqueueDB(ctx context.Context, id int64, partitionKey int64, entity EntityType, action ActionType, data interface{}, target DBTarget) error {
 
-	now := time.Now().UnixMilli()
+	now := domain.NowMillis()
 	event := AsyncEvent{
 		ID:        id,
 		Type:      entity,

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/auth_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
@@ -111,7 +112,7 @@ func TestSessionCacheService(t *testing.T) {
 			repoMongo.Sessions = test.NewMockCollection(mt, "auth.sessions", nil)
 			mt.AddMockResponses(mtest.CreateCursorResponse(0, "numan_mongo.auth.sessions", mtest.FirstBatch))
 
-			now := time.Now().UnixMilli()
+			now := domain.NowMillis()
 			test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 				return test.NewMockRows(
 					[]string{"id", "user_id", "master_token", "firebase_installation_id", "device_info", "ip_history", "created_at", "expires_at"},

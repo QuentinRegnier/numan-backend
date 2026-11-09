@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/conversation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/member_models"
@@ -297,7 +298,7 @@ func TestMemberAndInboxOperations(t *testing.T) {
 
 	t.Run("seedMessagingSpeedCache", func(t *testing.T) {
 		_ = test.SetupTestRedis(t)
-		now := time.Now()
+		now := domain.NowTime()
 
 		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			if strings.Contains(query, "func_load_active_conversations") {

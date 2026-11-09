@@ -5,8 +5,8 @@ import (
 	"database/sql/driver"
 	"errors"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
@@ -27,7 +27,7 @@ func TestFuncLoadTimelineSeedPaginated(t *testing.T) {
 	})
 
 	cols := []string{"post_id", "user_id", "created_at"}
-	now := time.Now()
+	now := domain.NowTime()
 
 	t.Run("returns_timeline_seed_successfully", func(t *testing.T) {
 		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {

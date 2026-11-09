@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/like_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
@@ -68,7 +69,7 @@ func TogglePostLike(ctx context.Context, callerID int64, input like_models.LikeP
 		TargetType: variables.LikeTargetTypePost,
 		TargetID:   input.PostID,
 		UserID:     callerID,
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
+		CreatedAt:  domain.NowTime().Format(time.RFC3339),
 	}
 
 	errQueue := redis.EnqueueDB(ctx, likeRecordPayload.ID, 0, redis.EntityLike, redisActionType, likeRecordPayload, redis.TargetAll)

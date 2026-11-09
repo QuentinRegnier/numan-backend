@@ -87,7 +87,7 @@ func Login(ctx context.Context, input auth_models.LoginInput, ipAddresses []stri
 
 	// ── ÉTAPE 3 : GESTION DE LA SESSION DE L'APPAREIL (CASCADE L1->L2->L3) ──
 
-	currentTime := time.Now().UTC()
+	currentTime := domain.NowTime()
 	isNewSession := false
 	deviceFirebaseID := input.FirebaseInstallationID
 

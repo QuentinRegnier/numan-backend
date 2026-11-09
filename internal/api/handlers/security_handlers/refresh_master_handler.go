@@ -234,8 +234,8 @@ func RefreshMaster(c *gin.Context) {
 	sessionRaw.MasterToken = newMasterToken
 	sessionRaw.LastSecret = sessionRaw.FirebaseInstallationID
 	sessionRaw.LastJWT = authHeader
-	sessionRaw.ToleranceTime = domain.TimeToMillis(time.Now().Add(time.Duration(variables.ToleranceTimeSeconds) * time.Second))
-	sessionRaw.ExpiresAt = domain.TimeToMillis(time.Now().Add(time.Duration(variables.MasterTokenExpirationSeconds) * time.Second))
+	sessionRaw.ToleranceTime = domain.TimeToMillis(domain.NowTime().Add(time.Duration(variables.ToleranceTimeSeconds) * time.Second))
+	sessionRaw.ExpiresAt = domain.TimeToMillis(domain.NowTime().Add(time.Duration(variables.MasterTokenExpirationSeconds) * time.Second))
 
 	// Persistance L1
 	if errAdd := cache_service.SetSessionInCache(c, sessionRaw); errAdd != nil {
@@ -262,7 +262,7 @@ func RefreshMaster(c *gin.Context) {
 		return
 	}
 
-	respTs := fmt.Sprintf("%d", time.Now().Unix())
+	respTs := fmt.Sprintf("%d", domain.TimeToSeconds(domain.NowTime()))
 
 	stringToSignResp := security.BuildStringToSign(
 		c.Request.Method,

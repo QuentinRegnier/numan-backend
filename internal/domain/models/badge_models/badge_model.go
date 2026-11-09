@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 )
 
 // BadgeMetadata represents the structured metadata for an individual badge or certification.
@@ -57,8 +59,8 @@ func (b UserBadges) MarshalJSON() ([]byte, error) {
 	if b == nil {
 		return []byte("{}"), nil
 	}
-	type Alias UserBadges
-	return json.Marshal(Alias(b))
+	type alias UserBadges
+	return json.Marshal(alias(b))
 }
 
 // UnmarshalJSON parses JSON object data into UserBadges, supporting backward compatibility
@@ -74,7 +76,7 @@ func (b *UserBadges) UnmarshalJSON(data []byte) error {
 		var legacySlugs []string
 		if err := json.Unmarshal(data, &legacySlugs); err == nil {
 			*b = make(UserBadges, len(legacySlugs))
-			now := time.Now().UTC()
+			now := domain.NowTime()
 			for _, slug := range legacySlugs {
 				if slug != "" {
 					(*b)[slug] = BadgeMetadata{
@@ -87,8 +89,8 @@ func (b *UserBadges) UnmarshalJSON(data []byte) error {
 		}
 	}
 
-	type Alias UserBadges
-	var a Alias
+	type alias UserBadges
+	var a alias
 	if err := json.Unmarshal(data, &a); err != nil {
 		return err
 	}
@@ -100,8 +102,8 @@ func (b *UserBadges) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// HasBadge checks if a badge exists and is currently valid (not expired).
-func (b UserBadges) HasBadge(badgeName string) bool {
+// hasBadge checks if a badge exists and is currently valid (not expired).
+func (b UserBadges) hasBadge(badgeName string) bool {
 	if b == nil {
 		return false
 	}
@@ -109,14 +111,14 @@ func (b UserBadges) HasBadge(badgeName string) bool {
 	if !exists {
 		return false
 	}
-	if meta.ExpiresAt != nil && meta.ExpiresAt.Before(time.Now().UTC()) {
+	if meta.ExpiresAt != nil && meta.ExpiresAt.Before(domain.NowTime()) {
 		return false
 	}
 	return true
 }
 
-// IsExpired checks if a badge exists and has expired.
-func (b UserBadges) IsExpired(badgeName string) bool {
+// isExpired checks if a badge exists and has expired.
+func (b UserBadges) isExpired(badgeName string) bool {
 	if b == nil {
 		return false
 	}
@@ -124,7 +126,7 @@ func (b UserBadges) IsExpired(badgeName string) bool {
 	if !exists {
 		return false
 	}
-	return meta.ExpiresAt != nil && meta.ExpiresAt.Before(time.Now().UTC())
+	return meta.ExpiresAt != nil && meta.ExpiresAt.Before(domain.NowTime())
 }
 
 // Get returns the metadata for a badge and a boolean indicating whether it exists.

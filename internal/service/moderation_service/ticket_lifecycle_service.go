@@ -3,9 +3,8 @@ package moderation_service
 import (
 	"context"
 	"fmt"
-	"time"
 
-	"github.com/QuentinRegnier/numan-backend/internal/domain/models/auth_models"
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/moderation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/report_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
@@ -18,31 +17,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
 
-// ClockFunc permet d'injecter une horloge personnalisée pour tester de manière déterministe le cycle de vie.
-type LifecycleClockFunc func() time.Time
-
-var lifecycleClock LifecycleClockFunc = time.Now
-
-// SetLifecycleClock injecte une horloge personnalisée (utilisé pour les tests).
-func SetLifecycleClock(c LifecycleClockFunc) func() {
-	prev := lifecycleClock
-	if c == nil {
-		lifecycleClock = time.Now
-	} else {
-		lifecycleClock = c
-	}
-	return func() {
-		lifecycleClock = prev
-	}
-}
-
-func getLifecycleTime() time.Time {
-	if lifecycleClock != nil {
-		return lifecycleClock()
-	}
-	return time.Now()
-}
-
 // ClaimTicketService permet à un modérateur de réclamer un ticket Pending pour traitement exclusif (verrou 48h).
 func ClaimTicketService(ctx context.Context, modID int64, reportID int64) (*moderation_models.ModerationTicketPublicView, error) {
 	ticket, err := cache_service.GetModerationTicket(ctx, reportID)
@@ -53,8 +27,7 @@ func ClaimTicketService(ctx context.Context, modID int64, reportID int64) (*mode
 		return nil, numan_error.NewConflict(numan_error.CodeConflict, "Ce ticket n'est pas en attente de traitement.", nil)
 	}
 
-	now := getLifecycleTime()
-	nowMs := now.UnixMilli()
+	nowMs := domain.NowMillis()
 	lockExpiresAtMs := nowMs + int64(variables.ModerationLockTTL.Milliseconds())
 
 	acquired, errLock := cache_service.AcquireTicketLock(ctx, reportID, modID, lockExpiresAtMs, variables.ModerationLockTTL)
@@ -104,7 +77,7 @@ func ReleaseTicketService(ctx context.Context, modID int64, modGrade int, report
 	ticket.State = variables.ReportStatePending
 	ticket.ClaimedByModID = 0
 	ticket.LockExpiresAtMs = 0
-	ticket.UpdatedAt = getLifecycleTime().UnixMilli()
+	ticket.UpdatedAt = domain.NowMillis()
 
 	_ = cache_service.SaveModerationTicket(ctx, ticket)
 	_ = cache_service.IndexTicketInModerationQueue(ctx, variables.ModerationQueueActive, reportID, ticket.PriorityScore)
@@ -131,8 +104,7 @@ func RequestTicketInfoService(ctx context.Context, modID int64, modGrade int, in
 		return nil, numan_error.NewForbidden(numan_error.CodeForbidden, "Vous n'êtes pas le modérateur assigné à ce ticket.", nil)
 	}
 
-	now := getLifecycleTime()
-	nowMs := now.UnixMilli()
+	nowMs := domain.NowMillis()
 	waitingUntilMs := nowMs + int64(variables.ModerationWaitingInfoTTL.Milliseconds())
 
 	// Libération du verrou InProgress et enregistrement de l'échéance de 7 jours
@@ -173,8 +145,7 @@ func ReplyTicketInfoService(ctx context.Context, callerID int64, callerGrade int
 		return nil, numan_error.NewForbidden(numan_error.CodeForbidden, "Seul le plaignant à l'origine du signalement peut répondre à cette demande.", nil)
 	}
 
-	now := getLifecycleTime()
-	nowMs := now.UnixMilli()
+	nowMs := domain.NowMillis()
 	lockExpiresAtMs := nowMs + int64(variables.ModerationLockTTL.Milliseconds())
 
 	_ = cache_service.ClearTicketWaitingInfoExpiration(ctx, input.ReportID)
@@ -209,8 +180,7 @@ func ProposeBlameService(ctx context.Context, modID int64, modGrade int, input m
 		return nil, numan_error.NewForbidden(numan_error.CodeForbidden, "Vous n'êtes pas le modérateur assigné à ce ticket.", nil)
 	}
 
-	now := getLifecycleTime()
-	nowMs := now.UnixMilli()
+	nowMs := domain.NowMillis()
 
 	_ = cache_service.ReleaseTicketLock(ctx, input.ReportID)
 
@@ -251,8 +221,7 @@ func ReviewBlameProposalService(ctx context.Context, modID int64, modGrade int, 
 		return nil, numan_error.NewForbidden(numan_error.CodeForbidden, "Le modérateur proposant ne peut pas valider sa propre proposition de blâme.", nil)
 	}
 
-	now := getLifecycleTime()
-	nowMs := now.UnixMilli()
+	nowMs := domain.NowMillis()
 	_ = cache_service.RemoveTicketFromModerationQueue(ctx, variables.ModerationQueuePeerReview, input.ReportID)
 
 	// CAS 1 : CONSENSUS ATTEINT (Validation du blâme)
@@ -352,8 +321,7 @@ func ResolveFinalVoteService(ctx context.Context, modID int64, modGrade int, inp
 		return nil, numan_error.NewForbidden(numan_error.CodeForbidden, "Seul un Super-Modérateur (fiabilité > 0.90) ou un Administrateur peut voter l'arbitrage final.", nil)
 	}
 
-	now := getLifecycleTime()
-	nowMs := now.UnixMilli()
+	nowMs := domain.NowMillis()
 	_ = cache_service.RemoveTicketFromModerationQueue(ctx, variables.ModerationQueueFinalVote, input.ReportID)
 	_ = cache_service.RemoveTicketFromModerationQueue(ctx, variables.ModerationQueueAdmin, input.ReportID)
 
@@ -409,8 +377,7 @@ func EscalateTicketService(ctx context.Context, modID int64, modGrade int, input
 		return nil, numan_error.NewForbidden(numan_error.CodeForbidden, "Vous n'êtes pas le modérateur assigné à ce ticket.", nil)
 	}
 
-	now := getLifecycleTime()
-	nowMs := now.UnixMilli()
+	nowMs := domain.NowMillis()
 
 	_ = cache_service.ReleaseTicketLock(ctx, input.ReportID)
 
@@ -436,263 +403,13 @@ func EscalateTicketService(ctx context.Context, modID int64, modGrade int, input
 	return &view, nil
 }
 
-// ResolveAdminAuditService permet à un Administrateur (Grade 4) de trancher l'audit des 3 blâmes.
-func ResolveAdminAuditService(ctx context.Context, adminID int64, adminGrade int, input moderation_models.ResolveAdminAuditInput) (*moderation_models.ResolveAdminAuditOutput, error) {
-	if adminGrade != variables.UserGradeAdmin {
-		return nil, numan_error.NewForbidden(numan_error.CodeForbidden, "Seul un Administrateur (Grade 4) peut statuer sur un audit de blâmes.", nil)
-	}
-
-	ticket, err := cache_service.GetModerationTicket(ctx, input.ReportID)
-	if err != nil {
-		return nil, err
-	}
-	if ticket.State != variables.ReportStateEscalated || ticket.EscalationType != "blame_quota_audit" {
-		return nil, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Ce ticket n'est pas un audit de quota de 3 blâmes en attente.", nil)
-	}
-
-	now := getLifecycleTime()
-	nowMs := now.UnixMilli()
-	_ = cache_service.RemoveTicketFromModerationQueue(ctx, variables.ModerationQueueAdmin, ticket.ReportID)
-
-	out := &moderation_models.ResolveAdminAuditOutput{}
-
-	if input.Decision == "validate" {
-		// DÉCISION FATALE : Confirmation des 3 blâmes -> Bannissement définitif (Hard Ban)
-		_, errBan := ExecuteAdminHardBanService(ctx, adminID, moderation_models.AdminHardBanInput{
-			TargetUserID:    ticket.TargetOwnerID,
-			ReportID:        ticket.ReportID,
-			Reason:          fmt.Sprintf("Confirmation de l'audit des 3 blâmes : %s", input.Rationale),
-			CGUFeedbackNote: "Sanction validée par l'Administration suite à 3 infractions répétées.",
-		})
-		if errBan != nil {
-			return nil, errBan
-		}
-		out.TargetBanned = true
-
-		// Récompense des modérateurs ayant instruit les blâmes (+0.02 de T_mod)
-		modIDsToReward := make(map[int64]struct{})
-		for _, b := range ticket.AuditBlameRecords {
-			if b.ProposerModID > 0 {
-				modIDsToReward[b.ProposerModID] = struct{}{}
-			}
-			if b.ValidatorModID > 0 {
-				modIDsToReward[b.ValidatorModID] = struct{}{}
-			}
-		}
-		for mID := range modIDsToReward {
-			st, errSt := cache_service.GetOrInitModeratorStats(ctx, mID, variables.UserGradeModerator)
-			if errSt != nil {
-				return nil, errSt
-			}
-			st.ModeratorTrustScore = clampTrustUnit(st.ModeratorTrustScore + variables.ModTrustValidationBonus)
-			if errSave := cache_service.SaveModeratorStats(ctx, st); errSave != nil {
-				return nil, errSave
-			}
-			out.RewardedModIDs = append(out.RewardedModIDs, mID)
-		}
-
-		ticket.ResolutionOutcome = "blames_validated_fatal_ban"
-	} else {
-		// PARDON / RÉVOCATION : Révocation totale ou partielle des blâmes infondés ou abusifs
-		revokedSet := make(map[int64]bool)
-		if len(input.RevokedBlameReportIDs) > 0 {
-			for _, id := range input.RevokedBlameReportIDs {
-				revokedSet[id] = true
-			}
-		} else {
-			// Si aucun ID spécifique n'est spécifié, tous les blâmes audités sont révoqués
-			for _, b := range ticket.AuditBlameRecords {
-				revokedSet[b.ReportID] = true
-			}
-		}
-
-		// Filtrage des blâmes : on sépare les blâmes révoqués des blâmes conservés
-		var retainedBlames []moderation_models.BlameRecord
-		modIDsToPenalize := make(map[int64]struct{})
-
-		for _, b := range ticket.AuditBlameRecords {
-			if revokedSet[b.ReportID] {
-				// Blâme révoqué : on sanctionne uniquement ses deux modérateurs (A et B)
-				if b.ProposerModID > 0 {
-					modIDsToPenalize[b.ProposerModID] = struct{}{}
-				}
-				if b.ValidatorModID > 0 {
-					modIDsToPenalize[b.ValidatorModID] = struct{}{}
-				}
-			} else {
-				// Blâme maintenu
-				retainedBlames = append(retainedBlames, b)
-			}
-		}
-
-		// Rétablissement ou ajustement du compteur de blâmes de la cible
-		targetStats, errStats := cache_service.GetOrInitModeratorStats(ctx, ticket.TargetOwnerID, 0)
-		if errStats != nil {
-			return nil, errStats
-		}
-		targetStats.BlameHistory = retainedBlames
-		targetStats.BlameCount = len(retainedBlames)
-		targetStats.UpdatedAt = nowMs
-		if errSave := cache_service.SaveModeratorStats(ctx, targetStats); errSave != nil {
-			return nil, errSave
-		}
-
-		// Récompense de réputation suite à contestation gagnée (§C.13 : +0.08)
-		if len(revokedSet) > 0 && ticket.TargetOwnerID > 0 {
-			_ = PublishTrustScoreEvent(
-				ctx,
-				ticket.TargetOwnerID,
-				variables.TrustTriggerSuccessfulAppeal,
-				ticket.TargetID,
-				"Contestation gagnée : révocation de blâme injustifié par l'Administration",
-			)
-		}
-
-		// Application de la pénalité sévère T_mod (-0.25) sur les modérateurs des seuls blâmes révoqués
-		for mID := range modIDsToPenalize {
-			st, errSt := cache_service.GetOrInitModeratorStats(ctx, mID, variables.UserGradeModerator)
-			if errSt != nil {
-				return nil, errSt
-			}
-			st.ModeratorTrustScore = clampTrustUnit(st.ModeratorTrustScore - variables.ModTrustFalseBlamePenalty)
-			out.PenalizedModIDs = append(out.PenalizedModIDs, mID)
-
-			// Révocation automatique des privilèges si T_mod < 0.50
-			if st.ModeratorTrustScore < variables.ModTrustRevocationThreshold {
-				st.Grade = variables.UserGradeUser
-				out.DemotedModIDs = append(out.DemotedModIDs, mID)
-				numan_log.Warn(ctx).
-					Int64("demoted_mod_id", mID).
-					Float64("t_mod", st.ModeratorTrustScore).
-					Msg("Révocation automatique des droits de modérateur suite à blâmes abusifs répétés.")
-
-				// Mise à jour synchrone du cache SPEED L1
-				if uLite, errU := cache_service.GetUserLite(ctx, mID); errU == nil && uLite.ID > 0 {
-					uLite.Grade = variables.UserGradeUser
-					_ = cache_service.UpdateUserLiteInSpeedCache(ctx, uLite)
-				}
-
-				// Persistance asynchrone du grade utilisateur via EnqueueDB (PostgreSQL / MongoDB)
-				uPayload := auth_models.UserPayload{
-					ID:        mID,
-					Grade:     variables.UserGradeUser,
-					UpdatedAt: nowMs,
-				}
-				_ = redis.EnqueueDB(ctx, mID, mID, redis.EntityUser, redis.ActionUpdate, uPayload, redis.TargetAll)
-			}
-			if errSave := cache_service.SaveModeratorStats(ctx, st); errSave != nil {
-				return nil, errSave
-			}
-		}
-
-		if len(retainedBlames) == 0 {
-			ticket.ResolutionOutcome = "blames_revoked_pardon"
-		} else {
-			ticket.ResolutionOutcome = fmt.Sprintf("blames_partially_revoked_%d_retained", len(retainedBlames))
-		}
-	}
-
-	ticket.State = variables.ReportStateClosed
-	ticket.ReviewerRationale = pkg.CleanStr(input.Rationale)
-	ticket.UpdatedAt = nowMs
-	if errSave := cache_service.SaveModerationTicket(ctx, ticket); errSave != nil {
-		return nil, errSave
-	}
-	_ = postgres.FuncArchiveClosedReport(ctx, ticket.ReportID, variables.ReportStateClosed, fmt.Sprintf("Résolution Audit Administrateur : %s", ticket.ResolutionOutcome))
-
-	out.Ticket = ToPublicTicketView(ticket, true)
-	return out, nil
-}
-
-// ExecuteAdminHardBanService exécute le bannissement définitif d'un compte (Hard Ban immédiat).
-func ExecuteAdminHardBanService(ctx context.Context, adminID int64, input moderation_models.AdminHardBanInput) (*moderation_models.AdminHardBanOutput, error) {
-	nowMs := getLifecycleTime().UnixMilli()
-
-	// 1. Mise à 0.00 et marquage du compte banni en cache SPEED L1
-	userLite, errLite := cache_service.GetUserLite(ctx, input.TargetUserID)
-	if errLite == nil && userLite.ID > 0 {
-		userLite.TrustScore = variables.TrustScoreHardBan
-		_ = redis.UsersLite.SetObject(ctx, input.TargetUserID, userLite)
-	}
-
-	// 2. Révocation immédiate des sessions L1 (Tombstone Blacklist + EnqueueDB Delete)
-	sessions, errSess := postgres.FuncLoadAllUserSessions(ctx, input.TargetUserID)
-	if errSess == nil {
-		for _, sess := range sessions {
-			idxKey := fmt.Sprintf("%d:%s", input.TargetUserID, sess.FirebaseInstallationID)
-			_ = redis.SessionBlacklist.SetPrimitive(ctx, idxKey, "revoked")
-			_ = redis.Expire(ctx, idxKey, 24*time.Hour)
-			_ = redis.EnqueueDB(ctx, sess.ID, input.TargetUserID, redis.EntitySession, redis.ActionDelete, sess, redis.TargetAll)
-		}
-	}
-
-	// 3. Enregistrement du bannissement stéganographique (O(1) Redis + Table PostgreSQL)
-	steganoMember := fmt.Sprintf("%d", input.TargetUserID)
-	if redis.SteganoBanlist != nil {
-		_ = redis.SteganoBanlist.SAdd(ctx, "global", steganoMember)
-	}
-	_ = postgres.FuncRegisterSteganoBan(ctx, input.TargetUserID, steganoMember, input.Reason, input.ReportID)
-
-	// 4. Publication de l'événement majeur dans le Worker de réputation
-	_ = PublishTrustScoreEvent(ctx, input.TargetUserID, variables.TrustTriggerMajorInfraction, input.TargetUserID, input.Reason)
-
-	// 5. Clôture éventuelle du ticket associé avec feedback CGU
-	if input.ReportID > 0 {
-		if ticket, errTicket := cache_service.GetModerationTicket(ctx, input.ReportID); errTicket == nil {
-			ticket.State = variables.ReportStateClosed
-			ticket.CGUFeedbackNote = pkg.CleanStr(input.CGUFeedbackNote)
-			ticket.ResolutionOutcome = "hard_ban_executed"
-			ticket.UpdatedAt = nowMs
-			_ = cache_service.SaveModerationTicket(ctx, ticket)
-			_ = cache_service.RemoveTicketFromAllModerationQueues(ctx, ticket.ReportID)
-			_ = postgres.FuncArchiveClosedReport(ctx, ticket.ReportID, variables.ReportStateClosed, fmt.Sprintf("Hard Ban exécuté par l'Administration : %s", input.Reason))
-		}
-	}
-
-	numan_log.Warn(ctx).
-		Int64("admin_id", adminID).
-		Int64("banned_user_id", input.TargetUserID).
-		Msg("Bannissement définitif (Hard Ban) exécuté par l'Administration.")
-
-	return &moderation_models.AdminHardBanOutput{
-		TargetUserID:    input.TargetUserID,
-		Banned:          true,
-		TrustScore:      variables.TrustScoreHardBan,
-		CGUFeedbackNote: input.CGUFeedbackNote,
-		ExecutedAt:      nowMs,
-	}, nil
-}
-
-// SetDelegationSwitchService active ou désactive l'interrupteur de délégation administrative vers les Super-Modérateurs.
-func SetDelegationSwitchService(ctx context.Context, adminGrade int, enabled bool) (*moderation_models.AdminDelegationSwitchOutput, error) {
-	if adminGrade != variables.UserGradeAdmin {
-		return nil, numan_error.NewForbidden(numan_error.CodeForbidden, "Seul un Administrateur peut modifier l'interrupteur de délégation.", nil)
-	}
-	variables.ModerationAdminDelegationEnabled = enabled
-	nowMs := getLifecycleTime().UnixMilli()
-
-	numan_log.Info(ctx).
-		Bool("delegation_enabled", enabled).
-		Msg("Interrupteur de délégation administrative de modération mis à jour.")
-
-	return &moderation_models.AdminDelegationSwitchOutput{
-		Enabled:   enabled,
-		UpdatedAt: nowMs,
-	}, nil
-}
-
-// GetDelegationSwitchService lit l'état actuel de l'interrupteur de délégation.
-func GetDelegationSwitchService(_ context.Context) bool {
-	return variables.ModerationAdminDelegationEnabled
-}
-
 // CloseTicketService clôture un ticket, enregistre l'archivage en base froide et envoie le feedback réputationnel aux signaleurs.
 func CloseTicketService(ctx context.Context, _ int64, isDismiss bool, rationale string, reportID int64) (*moderation_models.CloseTicketOutput, error) {
 	ticket, err := cache_service.GetModerationTicket(ctx, reportID)
 	if err != nil {
 		return nil, err
 	}
-	nowMs := getLifecycleTime().UnixMilli()
+	nowMs := domain.NowMillis()
 
 	ticket.State = variables.ReportStateClosed
 	ticket.ReviewerRationale = pkg.CleanStr(rationale)
@@ -728,7 +445,7 @@ func CloseTicketService(ctx context.Context, _ int64, isDismiss bool, rationale 
 
 // triggerThreeBlameSystemAudit génère un Super-Report Système escaladé en file Administrateur lors du 3ème blâme.
 func triggerThreeBlameSystemAudit(ctx context.Context, targetUserID int64, history []moderation_models.BlameRecord) {
-	nowMs := getLifecycleTime().UnixMilli()
+	nowMs := domain.NowMillis()
 	superReportID := pkg.GenerateID()
 
 	superReport := &moderation_models.ModerationTicketRecord{
@@ -782,14 +499,4 @@ func applyContentSoftDelete(ctx context.Context, targetType int, targetID int64)
 			_ = object_cache_service.SetPostInObjectCache(ctx, post)
 		}
 	}
-}
-
-func clampTrustUnit(v float64) float64 {
-	if v < variables.TrustScoreMin {
-		return variables.TrustScoreMin
-	}
-	if v > variables.TrustScoreMax {
-		return variables.TrustScoreMax
-	}
-	return v
 }

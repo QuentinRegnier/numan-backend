@@ -2,7 +2,6 @@ package member_service
 
 import (
 	"context"
-	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
@@ -126,6 +125,6 @@ func BanMember(ctx context.Context, callerID int64, input member_models.BanMembe
 	latestActivityTimestampMs := cache_service.TouchInboxActivity(ctx, callerID)
 
 	return member_models.BanMemberOutput{
-		InboxUpdateAt: domain.TimeToMillis(time.UnixMilli(latestActivityTimestampMs)),
+		InboxUpdateAt: latestActivityTimestampMs,
 	}, nil
 }

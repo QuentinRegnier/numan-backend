@@ -1,4 +1,4 @@
-package moderation_models
+package admin_models
 
 type AdminHardBanInput struct {
 	TargetUserID    int64  `json:"target_user_id" binding:"required,gt=0"`

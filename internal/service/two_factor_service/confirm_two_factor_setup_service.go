@@ -3,7 +3,6 @@ package two_factor_service
 import (
 	"context"
 	"crypto/hmac"
-	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/two_factor_models"
@@ -56,7 +55,7 @@ func ConfirmTwoFactorSetup(ctx context.Context, userID int64, input two_factor_m
 		if input.Code == "" {
 			return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le code TOTP à 6 chiffres est requis.", nil)
 		}
-		if session.TempTOTPSecret == "" || !security.VerifyTOTP(session.TempTOTPSecret, input.Code, time.Now().UTC()) {
+		if session.TempTOTPSecret == "" || !security.VerifyTOTP(session.TempTOTPSecret, input.Code, domain.NowTime()) {
 			if errInc := cache_service.IncrementPreAuthAttempts(ctx, session); errInc != nil {
 				return errInc
 			}

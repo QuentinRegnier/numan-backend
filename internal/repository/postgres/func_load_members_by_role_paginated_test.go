@@ -5,8 +5,8 @@ import (
 	"database/sql/driver"
 	"errors"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
@@ -30,7 +30,7 @@ func TestFuncLoadMembersByRolePaginated(t *testing.T) {
 		"id", "conversation_id", "user_id", "role",
 		"joined_at", "unread_count", "frozen_message_id", "last_read_message_id", "created_at", "updated_at",
 	}
-	now := time.Now()
+	now := domain.NowMillis()
 
 	t.Run("returns_members_by_role_successfully", func(t *testing.T) {
 		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
@@ -41,8 +41,8 @@ func TestFuncLoadMembersByRolePaginated(t *testing.T) {
 			assert.Equal(t, int64(10), args[2].Value)
 			assert.Equal(t, int64(0), args[3].Value)
 			return test.NewMockRows(cols, [][]driver.Value{
-				{int64(1), int64(10), int64(101), -3, now.UnixMilli(), 0, int64(50), int64(60), now.UnixMilli(), now.UnixMilli()},
-				{int64(2), int64(10), int64(102), -3, now.UnixMilli(), 0, nil, nil, now.UnixMilli(), now.UnixMilli()},
+				{int64(1), int64(10), int64(101), -3, now, 0, int64(50), int64(60), now, now},
+				{int64(2), int64(10), int64(102), -3, now, 0, nil, nil, now, now},
 			}), nil
 		}, nil)
 
@@ -83,7 +83,7 @@ func TestFuncLoadMembersByRolePaginated(t *testing.T) {
 	t.Run("handles_row_iteration_error", func(t *testing.T) {
 		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return test.NewMockRowsWithErr(cols, [][]driver.Value{
-				{int64(1), int64(10), int64(101), -3, now.UnixMilli(), 0, nil, nil, now.UnixMilli(), now.UnixMilli()},
+				{int64(1), int64(10), int64(101), -3, now, 0, nil, nil, now, now},
 			}, errors.New("iter err")), nil
 		}, nil)
 

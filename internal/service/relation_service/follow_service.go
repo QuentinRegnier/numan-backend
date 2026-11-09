@@ -2,7 +2,6 @@ package relation_service
 
 import (
 	"context"
-	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/relation_models"
@@ -59,7 +58,7 @@ func ToggleFollow(ctx context.Context, callerID int64, input relation_models.Rel
 
 	// ── ÉTAPE 4 : MISE À JOUR IMMÉDIATE DU CACHE L1 ─────────────────────────
 	// Impacte instantanément le rendu UI et les futurs Fan-Outs de posts.
-	currentTime := time.Now().UTC()
+	currentTime := domain.NowTime()
 	errCache := cache_service.UpdateRelationState(ctx, input.TargetID, callerID, newRelationState, domain.TimeToMillis(currentTime))
 	if errCache != nil {
 		numan_log.Error(ctx).Err(errCache).Msg("Échec de la mise à jour du Cache L1 lors d'un ToggleFollow")

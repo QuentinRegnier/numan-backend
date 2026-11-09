@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/conversation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/member_models"
@@ -315,7 +315,7 @@ func ProcessNewMessageInSpeedCache(ctx context.Context, messageID int64, convers
 				err,
 			)
 		}
-		err = redis.InboxActivity.SetPrimitive(ctx, currentParticipantID, time.Now().UnixMilli())
+		err = redis.InboxActivity.SetPrimitive(ctx, currentParticipantID, domain.NowMillis())
 		if err != nil {
 			numan_log.Warn(ctx).Err(err).Msg("Échec SetPrimitive lors de la reconstruction SpeedConversation")
 			return nil, numan_error.NewAppError(
@@ -452,7 +452,7 @@ func RemoveMemberFromSpeedCache(ctx context.Context, conversationID int64, userI
 			errRem,
 		)
 	}
-	err := redis.InboxActivity.SetPrimitive(ctx, userID, time.Now().UnixMilli())
+	err := redis.InboxActivity.SetPrimitive(ctx, userID, domain.NowMillis())
 	if err != nil {
 		numan_log.Warn(ctx).Err(err).Msg("Échec SetPrimitive lors de la suppression du membre du Speed Cache")
 		return numan_error.NewAppError(
@@ -492,7 +492,7 @@ func ResetMemberUnreadCountInSpeedCache(ctx context.Context, conversationID int6
 			)
 		}
 
-		err := redis.InboxActivity.SetPrimitive(ctx, userID, time.Now().UnixMilli())
+		err := redis.InboxActivity.SetPrimitive(ctx, userID, domain.NowMillis())
 		if err != nil {
 			return numan_error.NewAppError(
 				http.StatusInternalServerError,
@@ -778,7 +778,7 @@ func UpdateMemberSpeedCache(ctx context.Context, memberPayload lite_models.Membe
 				err,
 			)
 		}
-		err = redis.InboxActivity.SetPrimitive(ctx, memberPayload.UserID, time.Now().UnixMilli())
+		err = redis.InboxActivity.SetPrimitive(ctx, memberPayload.UserID, domain.NowMillis())
 		if err != nil {
 			numan_log.Warn(ctx).Err(err).Msg("Échec SetPrimitive lors de la réhydratation de l'activité de la boîte de réception")
 			return numan_error.NewAppError(
@@ -809,7 +809,7 @@ func AddConversationToUserInbox(ctx context.Context, userID int64, conversationI
 
 // TouchInboxActivity signale une modification dans la boîte de réception de l'utilisateur.
 func TouchInboxActivity(ctx context.Context, userID int64) int64 {
-	currentTimestampMs := time.Now().UnixMilli()
+	currentTimestampMs := domain.NowMillis()
 	err := redis.InboxActivity.SetPrimitive(ctx, userID, currentTimestampMs)
 	if err != nil {
 		numan_log.Warn(ctx).Err(err).Int64("user_id", userID).Msg("Échec de la mise à jour du Timestamp d'Activité (Inbox)")

@@ -5,11 +5,11 @@ import (
 	"context"
 	"database/sql/driver"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/moderation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/post_models"
@@ -17,7 +17,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg/logger"
-	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
@@ -34,10 +33,6 @@ func TestTicketLifecycleService_CompleteWorkflow(t *testing.T) {
 	test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 		return test.NewMockRows([]string{"archived"}, [][]driver.Value{{true}}), nil
 	}, nil)
-
-	baseTime := time.Date(2026, 10, 26, 14, 0, 0, 0, time.UTC)
-	restoreClock := SetLifecycleClock(func() time.Time { return baseTime })
-	defer restoreClock()
 
 	// Initialisation d'un ticket en attente
 	ticketID := int64(8001)
@@ -66,8 +61,8 @@ func TestTicketLifecycleService_CompleteWorkflow(t *testing.T) {
 		Reason:        "Harcèlement ciblé",
 		PriorityScore: 25.0,
 		ReporterIDs:   []int64{reporterID},
-		CreatedAt:     baseTime.UnixMilli(),
-		UpdatedAt:     baseTime.UnixMilli(),
+		CreatedAt:     domain.NowMillis(),
+		UpdatedAt:     domain.NowMillis(),
 	}
 	require.NoError(t, cache_service.SaveModerationTicket(ctx, ticket))
 	require.NoError(t, cache_service.IndexTicketInModerationQueue(ctx, variables.ModerationQueueActive, ticketID, 25.0))
@@ -223,7 +218,7 @@ func TestTicketLifecycleService_ContradictionRoutingAndSuperModerator(t *testing
 	assert.Equal(t, "reject_blame", viewResolved.ResolutionOutcome)
 }
 
-func TestTicketLifecycleService_ThreeBlameAuditAndAdminOutcomes(t *testing.T) {
+func TestTicketLifecycleService_ThreeBlameAuditGeneration(t *testing.T) {
 	_ = test.SetupTestRedis(t)
 	_ = pkg.InitSnowflake(1)
 	ctx := context.Background()
@@ -235,7 +230,6 @@ func TestTicketLifecycleService_ThreeBlameAuditAndAdminOutcomes(t *testing.T) {
 	targetID := int64(7003)
 	modA := int64(3001)
 	modB := int64(3002)
-	adminID := int64(4001)
 
 	// L'auteur a déjà 2 blâmes
 	targetStats := &moderation_models.ModeratorStatsRecord{
@@ -281,133 +275,14 @@ func TestTicketLifecycleService_ThreeBlameAuditAndAdminOutcomes(t *testing.T) {
 	assert.Equal(t, variables.ReportOriginSystem, superReport.ReportOrigin)
 	assert.Equal(t, "blame_quota_audit", superReport.EscalationType)
 	assert.Len(t, superReport.AuditBlameRecords, 3)
-
-	// Résolution Administrateur :
-	// Test avec valeurs réelles par défaut (T_mod initial = 0.85)
-	modC := int64(8003)
-	// Initialise les modérateurs au score officiel par défaut (0.85)
-	require.NoError(t, cache_service.SaveModeratorStats(ctx, &moderation_models.ModeratorStatsRecord{
-		UserID:              modA,
-		Grade:               variables.UserGradeModerator,
-		ModeratorTrustScore: variables.ModTrustInitial, // 0.85
-	}))
-	require.NoError(t, cache_service.SaveModeratorStats(ctx, &moderation_models.ModeratorStatsRecord{
-		UserID:              modB,
-		Grade:               variables.UserGradeModerator,
-		ModeratorTrustScore: variables.ModTrustInitial, // 0.85
-	}))
-	require.NoError(t, cache_service.SaveModeratorStats(ctx, &moderation_models.ModeratorStatsRecord{
-		UserID:              modC,
-		Grade:               variables.UserGradeModerator,
-		ModeratorTrustScore: variables.ModTrustInitial, // 0.85
-	}))
-
-	// Affecte le Blâme 3 à ModA et ModC pour tester la révocation partielle
-	superReport.AuditBlameRecords[2].ProposerModID = modA
-	superReport.AuditBlameRecords[2].ValidatorModID = modC
-	require.NoError(t, cache_service.SaveModerationTicket(ctx, superReport))
-
-	// 1. Révocation PARTIELLE : l'admin ne révoque que le blâme 1 (sur les 3)
-	revokedReportID := superReport.AuditBlameRecords[0].ReportID
-	partialAuditRes, errPartialAudit := ResolveAdminAuditService(ctx, adminID, variables.UserGradeAdmin, moderation_models.ResolveAdminAuditInput{
-		ReportID:              superReportID,
-		Decision:              "revoke",
-		Rationale:             "Le premier blâme était infondé, les deux autres restent à l'étude.",
-		RevokedBlameReportIDs: []int64{revokedReportID},
-	})
-	require.NoError(t, errPartialAudit)
-	assert.False(t, partialAuditRes.TargetBanned)
-	assert.Contains(t, partialAuditRes.PenalizedModIDs, modA)
-	assert.Contains(t, partialAuditRes.PenalizedModIDs, modB)
-	assert.NotContains(t, partialAuditRes.PenalizedModIDs, modC, "ModC n'a pas instruit le blâme 1 et ne doit pas être pénalisé")
-	assert.Empty(t, partialAuditRes.DemotedModIDs, "Avec 0.85 au départ, une seule pénalité de -0.25 (-> 0.60) ne rétrograde pas (seuil = 0.50)")
-
-	// Vérifie que ModA est passé de 0.85 à 0.60
-	modAStats1, _ := cache_service.GetOrInitModeratorStats(ctx, modA, 0)
-	assert.InDelta(t, 0.60, modAStats1.ModeratorTrustScore, 1e-4)
-	assert.Equal(t, variables.UserGradeModerator, modAStats1.Grade)
-
-	// Vérifie que le compteur de blâmes de la cible est à 2 (3 - 1 révoqué)
-	targetStatsPartial, _ := cache_service.GetOrInitModeratorStats(ctx, targetID, 0)
-	assert.Equal(t, 2, targetStatsPartial.BlameCount)
-
-	// Vérifie la publication de l'événement de réputation TrustTriggerSuccessfulAppeal (+0.08)
-	rawAppeal, errAppeal := redis.WorkerQueue.LPop(ctx, variables.WorkerQueueTrustScore)
-	require.NoError(t, errAppeal)
-	assert.Contains(t, rawAppeal, variables.TrustTriggerSuccessfulAppeal)
-	assert.Contains(t, rawAppeal, "5001")
-
-	// 2. Révocation TOTALE : réouverture pour audit des blâmes restants et révocation complète
-	superReport.State = variables.ReportStateEscalated
-	require.NoError(t, cache_service.SaveModerationTicket(ctx, superReport))
-
-	fullAuditRes, errFullAudit := ResolveAdminAuditService(ctx, adminID, variables.UserGradeAdmin, moderation_models.ResolveAdminAuditInput{
-		ReportID:  superReportID,
-		Decision:  "revoke",
-		Rationale: "Après réexamen approfondi, tous les blâmes sont annulés.",
-	})
-	require.NoError(t, errFullAudit)
-	assert.Contains(t, fullAuditRes.PenalizedModIDs, modA)
-	assert.Contains(t, fullAuditRes.PenalizedModIDs, modC)
-
-	// ModA subit une 2ème pénalité : 0.60 - 0.25 = 0.35 (< 0.50) -> Rétrogradation automatique au Grade User (0) !
-	assert.Contains(t, fullAuditRes.DemotedModIDs, modA)
-	modAStats2, _ := cache_service.GetOrInitModeratorStats(ctx, modA, 0)
-	assert.Equal(t, variables.UserGradeUser, modAStats2.Grade)
-	assert.InDelta(t, 0.35, modAStats2.ModeratorTrustScore, 1e-4)
-
-	// Vérifie que le compteur de la cible est désormais totalement réinitialisé à 0
-	restoredTargetStats, _ := cache_service.GetOrInitModeratorStats(ctx, targetID, 0)
-	assert.Equal(t, 0, restoredTargetStats.BlameCount)
 }
 
-func TestTicketLifecycleService_HardBanAndDelegationSwitch(t *testing.T) {
+func TestTicketLifecycleService_CloseTicket(t *testing.T) {
 	_ = test.SetupTestRedis(t)
 	_ = pkg.InitSnowflake(1)
 	ctx := context.Background()
 
 	adminID := int64(4001)
-	targetID := int64(7004)
-
-	// Prépare un profil UserLite actif dans le cache SPEED L1
-	uLite := lite_models.UserLiteRequest{
-		ID:         targetID,
-		Username:   "target_violator",
-		TrustScore: 0.75,
-		Grade:      0,
-	}
-	require.NoError(t, redis.UsersLite.SetObject(ctx, targetID, uLite))
-
-	// Hard Ban exécuté par l'Administration
-	banRes, errBan := ExecuteAdminHardBanService(ctx, adminID, moderation_models.AdminHardBanInput{
-		TargetUserID:    targetID,
-		Reason:          "Pédopornographie avérée (CSAM)",
-		CGUFeedbackNote: "Infraction d'une gravité absolue. Signalement PHAROS effectué.",
-	})
-	require.NoError(t, errBan)
-	assert.True(t, banRes.Banned)
-	assert.Equal(t, variables.TrustScoreHardBan, banRes.TrustScore)
-
-	// Assertions strictes du Hard Ban :
-	// 1. T = 0.00 et compte mis à jour dans le cache SPEED L1
-	bannedUserLite, errBannedLite := cache_service.GetUserLite(ctx, targetID)
-	require.NoError(t, errBannedLite)
-	assert.Equal(t, variables.TrustScoreHardBan, bannedUserLite.TrustScore, "Le Trust Score doit être réinitialisé à 0.00")
-
-	// 2. Bannissement stéganographique enregistré dans le Set Redis O(1)
-	isStegano, errStegano := redis.SteganoBanlist.SIsMember(ctx, "global", fmt.Sprintf("%d", targetID))
-	require.NoError(t, errStegano)
-	assert.True(t, isStegano, "L'identifiant stéganographique doit être inscrit dans le Set Redis")
-
-	// Interrupteur de délégation
-	switchRes, errSwitch := SetDelegationSwitchService(ctx, variables.UserGradeAdmin, true)
-	require.NoError(t, errSwitch)
-	assert.True(t, switchRes.Enabled)
-	assert.True(t, GetDelegationSwitchService(ctx))
-
-	// Rejet si modérateur normal tente de basculer l'interrupteur
-	_, errForbiddenSwitch := SetDelegationSwitchService(ctx, variables.UserGradeModerator, false)
-	require.Error(t, errForbiddenSwitch)
 
 	// Clôture explicite d'un ticket avec feedback signaleurs
 	tClose := &moderation_models.ModerationTicketRecord{
@@ -471,9 +346,9 @@ func TestTicketLifecycleService_PeerReviewAnonymity(t *testing.T) {
 		State:           variables.ReportStateInProgress,
 		Reason:          "Insultes graves",
 		ClaimedByModID:  modA,
-		LockExpiresAtMs: time.Now().Add(48 * time.Hour).UnixMilli(),
-		CreatedAt:       time.Now().UnixMilli(),
-		UpdatedAt:       time.Now().UnixMilli(),
+		LockExpiresAtMs: domain.TimeToMillis(domain.NowTime().Add(48 * time.Hour)),
+		CreatedAt:       domain.NowMillis(),
+		UpdatedAt:       domain.NowMillis(),
 	}
 	require.NoError(t, cache_service.SaveModerationTicket(ctx, ticket))
 

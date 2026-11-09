@@ -6,8 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	repoMongo "github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
@@ -112,7 +112,7 @@ func TestSeedingService(t *testing.T) {
 
 	t.Run("SeedSpeedCache and SeedUserCache", func(t *testing.T) {
 		_ = test.SetupTestRedis(t)
-		now := time.Now()
+		now := domain.NowTime()
 
 		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			switch {

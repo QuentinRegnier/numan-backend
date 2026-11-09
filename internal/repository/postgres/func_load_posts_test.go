@@ -5,8 +5,8 @@ import (
 	"database/sql/driver"
 	"errors"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
@@ -32,7 +32,7 @@ func TestFuncLoadPosts(t *testing.T) {
 		"updated_at", "like_count", "comment_count", "view_count", "report_count",
 		"has_media", "vector", "vector_version", "telemetry_dwell_sum", "telemetry_dwell_sq", "telemetry_clicks",
 	}
-	now := time.Now()
+	now := domain.NowMillis()
 
 	t.Run("returns_posts_successfully", func(t *testing.T) {
 		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
@@ -43,8 +43,8 @@ func TestFuncLoadPosts(t *testing.T) {
 			return test.NewMockRows(cols, [][]driver.Value{
 				{
 					int64(101), int64(202), "Loaded post", "{tag}", "{}", "{}",
-					"{}", 1, 0, nil, now.UnixMilli(),
-					now.UnixMilli(), 2, 0, 10, 0,
+					"{}", 1, 0, nil, now,
+					now, 2, 0, 10, 0,
 					false, "{}", 1, float64(0), float64(0), 0,
 				},
 			}), nil

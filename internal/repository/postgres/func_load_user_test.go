@@ -5,8 +5,8 @@ import (
 	"database/sql/driver"
 	"errors"
 	"testing"
-	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	infradb "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
@@ -33,7 +33,7 @@ func TestFuncLoadUser(t *testing.T) {
 		"desactivated", "banned", "ban_reason", "ban_expires_at", "created_at", "updated_at",
 		"two_factor_enabled", "two_factor_method", "totp_secret", "trust_score", "last_infraction_at",
 	}
-	now := time.Now()
+	now := domain.NowTime()
 
 	t.Run("returns_user_successfully", func(t *testing.T) {
 		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {

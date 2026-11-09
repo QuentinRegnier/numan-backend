@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/comment_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
@@ -41,7 +42,7 @@ func UpdateComment(ctx context.Context, callerID int64, input comment_models.Upd
 	}
 
 	commentPayload.Content = cleanContent
-	commentPayload.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	commentPayload.UpdatedAt = domain.NowTime().Format(time.RFC3339)
 
 	// ── ÉTAPE 3 : SAUVEGARDE ET DÉLÉGATION AUX WORKERS BATCH ────────────────
 

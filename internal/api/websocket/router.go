@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/api/websocket/ws_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
@@ -36,7 +35,7 @@ func (c *client) route(message []byte) {
 		c.sendError(req.RequestID, "Timestamp invalide")
 		return
 	}
-	now := time.Now().Unix()
+	now := domain.TimeToSeconds(domain.NowTime())
 	if math.Abs(float64(now-tsInt)) > float64(variables.ToleranceTimeSeconds) {
 		c.sendError(req.RequestID, "Trame expirée (Anti-Rejeu)")
 		return
@@ -56,7 +55,7 @@ func (c *client) route(message []byte) {
 	isValid := security.CheckHMAC(stringToSign, session.CurrentSecret, req.Signature)
 
 	// Tolérance de rotation de clé (Exactement comme en HTTP)
-	if !isValid && session.LastSecret != "" && session.ToleranceTime > 0 && time.Now().Before(domain.MillisToTime(session.ToleranceTime)) {
+	if !isValid && session.LastSecret != "" && session.ToleranceTime > 0 && domain.NowTime().Before(domain.MillisToTime(session.ToleranceTime)) {
 		isValid = security.CheckHMAC(stringToSign, session.LastSecret, req.Signature)
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
@@ -39,7 +40,7 @@ func RegisterUnread(convID int64, userID int64) {
 		ActorID:   userID, // Le destinataire qui reçoit l'Unread
 		TargetID:  convID, // La conversation concernée
 		Type:      "unread",
-		Timestamp: time.Now().Unix(),
+		Timestamp: domain.TimeToMillis(domain.NowTime()),
 	}:
 	default:
 		// SÉCURITÉ (Backpressure) : Si le tampon est plein, on perd le compteur
@@ -58,7 +59,7 @@ func RegisterMessageReaction(msgID int64, emoji string, delta int) {
 		Type:      "msg_reaction",
 		Emoji:     emoji,
 		Delta:     delta,
-		Timestamp: time.Now().Unix(),
+		Timestamp: domain.TimeToMillis(domain.NowTime()),
 	}:
 	default:
 		numan_log.Warn(context.Background()).Int64("msg_id", msgID).Msg("Interaction Worker : Tampon RAM plein, perte d'un delta de réaction")
