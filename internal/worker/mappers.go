@@ -8,6 +8,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/auth_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/comment_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/conversation_models"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/models/map_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/media_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/member_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/message_models"
@@ -67,12 +68,16 @@ func getMapper(entity redis.EntityType) entityMapper {
 		return &memberMapper{}
 	case redis.EntityReport:
 		return &reportMapper{}
-	case redis.EntityView, redis.EntityTelemetry:
+	case redis.EntityView, redis.EntityTelemetry, redis.EntityPOICounter:
 		// WB-9: Ces entités sont traitées exclusivement au niveau de la dénormalisation des métriques
 		// (updateCountersPostgres) et ne représentent pas de lignes relationnelles indépendantes.
 		return nil
 	case redis.EntityPasskey:
 		return &passkeyMapper{}
+	case redis.EntityPOI:
+		return &poiMapper{}
+	case redis.EntityPOIReview:
+		return &poiReviewMapper{}
 	default:
 		return nil
 	}
@@ -843,6 +848,97 @@ func (m *reportMapper) ToRow(data any) ([]any, error) {
 }
 
 func (m *reportMapper) BuildUpdateQuery(tempTable string) string {
+	return buildGenericUpdateQuery(m.TableName(), tempTable, m.Columns())
+}
+
+// ============================================================================
+// MAPPER : POINTS D'INTÉRÊT (content.pois)
+// ============================================================================
+type poiMapper struct{}
+
+func (m *poiMapper) TableName() string { return "content.pois" }
+
+func (m *poiMapper) Columns() []string {
+	return []string{
+		"id", "type", "title", "description", "latitude", "longitude", "address",
+		"phone", "website", "rating", "comment_count", "media_ids",
+		"google_maps_link", "apple_maps_link", "visibility", "created_at", "updated_at",
+	}
+}
+
+func (m *poiMapper) ToRow(data any) ([]any, error) {
+	jsonBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "POIMapper : Échec de la sérialisation", err)
+	}
+
+	var p map_models.POIPayload
+	if err := json.Unmarshal(jsonBytes, &p); err != nil {
+		return nil, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "POIMapper : Échec de la désérialisation", err)
+	}
+
+	var phoneDB any = p.Phone
+	if p.Phone == "" {
+		phoneDB = nil
+	}
+
+	var websiteDB any = p.Website
+	if p.Website == "" {
+		websiteDB = nil
+	}
+
+	var googleMapsDB any = p.GoogleMapsLink
+	if p.GoogleMapsLink == "" {
+		googleMapsDB = nil
+	}
+
+	var appleMapsDB any = p.AppleMapsLink
+	if p.AppleMapsLink == "" {
+		appleMapsDB = nil
+	}
+
+	mediaIDs := p.MediaIDs
+	if mediaIDs == nil {
+		mediaIDs = []int64{}
+	}
+
+	return []any{
+		p.ID, p.Type, p.Title, p.Description, p.Latitude, p.Longitude, p.Address,
+		phoneDB, websiteDB, p.Rating, p.CommentCount, pq.Array(mediaIDs),
+		googleMapsDB, appleMapsDB, p.Visibility, p.CreatedAt, p.UpdatedAt,
+	}, nil
+}
+
+func (m *poiMapper) BuildUpdateQuery(tempTable string) string {
+	return buildGenericUpdateQuery(m.TableName(), tempTable, m.Columns())
+}
+
+// ============================================================================
+// MAPPER : AVIS & NOTES POI (content.poi_reviews)
+// ============================================================================
+type poiReviewMapper struct{}
+
+func (m *poiReviewMapper) TableName() string { return "content.poi_reviews" }
+
+func (m *poiReviewMapper) Columns() []string {
+	return []string{"id", "poi_id", "user_id", "rating", "content", "visibility", "created_at", "updated_at"}
+}
+
+func (m *poiReviewMapper) ToRow(data any) ([]any, error) {
+	jsonBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "POIReviewMapper : Échec de la sérialisation", err)
+	}
+
+	var r map_models.POIReviewPayload
+	if err := json.Unmarshal(jsonBytes, &r); err != nil {
+		return nil, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "POIReviewMapper : Échec de la désérialisation", err)
+	}
+
+	return []any{r.ID, r.POIID, r.UserID, r.Rating, r.Content, r.Visibility, r.CreatedAt, r.UpdatedAt}, nil
+}
+
+func (m *poiReviewMapper) BuildUpdateQuery(tempTable string) string {
 	return buildGenericUpdateQuery(m.TableName(), tempTable, m.Columns())
 }
 

@@ -129,6 +129,13 @@ var (
 	ModerationExpirations *Collection // ZSETs des échéances temporelles ("locks" 48h, "waiting_info" 7j)
 	ModerationTickets     *Collection // OBJECT (MsgPack) de l'état de cycle de vie des tickets de modération
 	ModeratorStats        *Collection // OBJECT (MsgPack) du profil de fiabilité modérateur (T_mod, blâmes, audits)
+
+	// --- DISCOVERY MAP & POINTS OF INTEREST (TTL 0 — Non-expiring) ---
+	POIs               *Collection // OBJECT (MsgPack) des Points d'Intérêt (TTL 0)
+	POIsGeo            *Collection // GEO / ZSET spatial global des Points d'Intérêt (TTL 0)
+	POIReviews         *Collection // OBJECT (MsgPack) des avis/notes de POI (StandardTTL)
+	POIReviewsByPOI    *Collection // ZSET des avis textuels par POI (StandardTTL)
+	POIReviewUserIndex *Collection // Index (poi_id:user_id -> review_id) pour garantir 1 avis par utilisateur (StandardTTL)
 )
 
 // ============================================================================
@@ -244,6 +251,13 @@ func InitCacheDatabase() {
 	ModerationExpirations = newCollection("moderation:expirations", 0)
 	ModerationTickets = newCollection("moderation:ticket", 0)
 	ModeratorStats = newCollection("moderation:mod_stats", 0)
+
+	// --- DISCOVERY MAP & POINTS OF INTEREST (TTL 0 — Non-expiring) ---
+	POIs = newCollection("object_cache:poi", 0)
+	POIsGeo = newCollection("geo_cache:poi", 0)
+	POIReviews = newCollection("object_cache:poi_review", variables.StandardTTL)
+	POIReviewsByPOI = newCollection("object_cache:poi_reviews:zset", variables.StandardTTL)
+	POIReviewUserIndex = newCollection("index:poi_review:user", variables.StandardTTL)
 }
 
 // ============================================================================
@@ -494,6 +508,35 @@ func (c *Collection) GetMany(ctx context.Context, ids []int64) (*GetManyResult, 
 	return result, nil
 }
 
+// SetMany enregistre un lot d'objets en MsgPack dans Redis via un Pipeline unique (O(1) RTT).
+func (c *Collection) SetMany(ctx context.Context, items map[int64]any) error {
+	if len(items) == 0 {
+		return nil
+	}
+	pipe := c.Client.Pipeline()
+	for id, data := range items {
+		msgpackBytes, err := msgpack.Marshal(data)
+		if err != nil {
+			return err
+		}
+		pipe.Set(ctx, c.Key(id), msgpackBytes, c.DefaultTTL)
+	}
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// DeleteMany supprime un lot d'identifiants de la collection en un seul appel DEL.
+func (c *Collection) DeleteMany(ctx context.Context, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	keys := make([]string, len(ids))
+	for i, id := range ids {
+		keys[i] = c.Key(id)
+	}
+	return c.Client.Del(ctx, keys...).Err()
+}
+
 // ============================================================================
 // 10. CUCKOO FILTER (RedisBloom)
 // ============================================================================
@@ -701,6 +744,7 @@ func RefreshStandardTTL(newTTL time.Duration) {
 		FeedsObject, FeedsMailbox, FeedsPersonalized, ContentVectors, RankedPosts,
 		TagPosts, SessionIndexes, CuckooSeen, LSHBuckets, ConvWatermarks, Passkeys,
 		MessageReactionCounts, MessageUserReactions, NotificationsZSet, TelemetryProfiles,
+		POIReviews, POIReviewsByPOI, POIReviewUserIndex,
 	}
 	for _, col := range collections {
 		if col != nil {

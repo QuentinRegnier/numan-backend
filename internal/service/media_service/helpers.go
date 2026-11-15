@@ -21,6 +21,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 	miniogo "github.com/minio/minio-go/v7"
+	"github.com/vmihailenco/msgpack/v5"
 	"go.mongodb.org/mongo-driver/bson"
 )
 
@@ -79,22 +80,43 @@ func GenerateMediaViewCascade(ctx context.Context, targetMediaID, authorID, cont
 	}, nil
 }
 
-// FormatMediaViewsCascade prend une liste d'IDs, résout la cascade d'auto-guérison pour chacun,
-// et retourne un tableau de MediaViews sécurisées.
+// FormatMediaViewsCascade prend une liste d'IDs, résout la cascade d'auto-guérison en privilégiant
+// un MGET groupé en mémoire L1 pour éviter le problème N+1, et retourne un tableau de MediaViews sécurisées.
 func FormatMediaViewsCascade(ctx context.Context, mediaIDs []int64, authorID, contextID, readerID int64) []media_models.MediaView {
-	var hydratedViews []media_models.MediaView
+	if len(mediaIDs) == 0 {
+		return make([]media_models.MediaView, 0)
+	}
 
-	for _, id := range mediaIDs {
-		// En cas d'erreur (ex: média supprimé modéré), on l'ignore silencieusement
-		// pour ne pas faire crasher l'affichage de l'entier du Post/Conversation.
-		if view, err := GenerateMediaViewCascade(ctx, id, authorID, contextID, readerID); err == nil {
-			hydratedViews = append(hydratedViews, view)
+	hydratedViews := make([]media_models.MediaView, 0, len(mediaIDs))
+
+	// Optimisation Batch L1 : un seul appel MGET Redis lorsque plusieurs médias sont demandés
+	var batchL1 map[int64]media_models.MediaPayload
+	if len(mediaIDs) > 1 && redis.IsReady() && redis.Media != nil {
+		if res, errMany := redis.Media.GetMany(ctx, mediaIDs); errMany == nil && res != nil {
+			batchL1 = make(map[int64]media_models.MediaPayload, len(res.Found))
+			for id, raw := range res.Found {
+				var mp media_models.MediaPayload
+				if errUn := msgpack.Unmarshal(raw, &mp); errUn == nil {
+					batchL1[id] = mp
+				}
+			}
 		}
 	}
 
-	// Prévention stricte du retour `null` en JSON
-	if hydratedViews == nil {
-		hydratedViews = make([]media_models.MediaView, 0)
+	for _, id := range mediaIDs {
+		if mp, ok := batchL1[id]; ok {
+			if mp.Visibility == variables.MediaVisibilityPublic {
+				hydratedViews = append(hydratedViews, media_models.MediaView{
+					MediaID: id,
+					URL:     generateWatermarkedURL(mp.StoragePath, authorID, contextID, readerID),
+				})
+			}
+			continue
+		}
+		// Fallback cascade individuel L1 -> L2 -> L3 en cas de miss L1
+		if view, err := GenerateMediaViewCascade(ctx, id, authorID, contextID, readerID); err == nil {
+			hydratedViews = append(hydratedViews, view)
+		}
 	}
 
 	return hydratedViews

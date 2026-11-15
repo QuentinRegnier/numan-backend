@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/models/map_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/message_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
@@ -71,6 +72,8 @@ func flushPostgres(ctx context.Context, events []redis.AsyncEvent) {
 		redis.EntityComment,
 		redis.EntityLike,
 		redis.EntityMedia,
+		redis.EntityPOI,
+		redis.EntityPOIReview,
 		redis.EntityConversation,
 		redis.EntityMembers,
 		redis.EntityMessage,
@@ -102,9 +105,9 @@ func flushPostgres(ctx context.Context, events []redis.AsyncEvent) {
 // Si le lot échoue, il déclenche le mécanisme de résilience par dichotomie (Slow Path).
 // Retourne uniquement les événements qui ont été persistés avec succès.
 func processEntityEvents(ctx context.Context, entityType redis.EntityType, events []redis.AsyncEvent) []redis.AsyncEvent {
-	// WB-9: Exclusion explicite des entités sans table relationnelle (Vues, Télémétrie).
+	// WB-9: Exclusion explicite des entités sans table relationnelle (Vues, Télémétrie, Compteurs POI).
 	// Elles n'ont pas de mapper et sont consommées exclusivement par updateCountersPostgres.
-	if entityType == redis.EntityView || entityType == redis.EntityTelemetry {
+	if entityType == redis.EntityView || entityType == redis.EntityTelemetry || entityType == redis.EntityPOICounter {
 		return events
 	}
 
@@ -227,6 +230,10 @@ func bulkInsertPostgres(ctx context.Context, entity redis.EntityType, events []r
 	if entity == redis.EntityMessageReaction {
 		return handleMessageReactionUpsert(ctx, events)
 	}
+	// ── CAS PARTICULIER : UPSERT DES AVIS POI (1 avis par user/POI) ─────────
+	if entity == redis.EntityPOIReview {
+		return handlePOIReviewUpsert(ctx, events)
+	}
 
 	mapper := getMapper(entity)
 	if mapper == nil {
@@ -316,11 +323,71 @@ func handleMessageReactionUpsert(ctx context.Context, events []redis.AsyncEvent)
 	return nil
 }
 
+// handlePOIReviewUpsert gère la création ou mise à jour idempotente d'un avis/note POI (1 seul avis par user/POI).
+func handlePOIReviewUpsert(ctx context.Context, events []redis.AsyncEvent) error {
+	// Déduplication Last-Write-Wins sur la clé composite (poi_id, user_id) dans le même lot
+	type reviewKey struct {
+		poiID  int64
+		userID int64
+	}
+	dedup := make(map[reviewKey]map_models.POIReviewPayload, len(events))
+	orderedKeys := make([]reviewKey, 0, len(events))
+
+	for _, e := range events {
+		jsonBytes, err := json.Marshal(e.Payload)
+		if err != nil {
+			return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "POIReview Upsert : Échec sérialisation payload", err)
+		}
+		var r map_models.POIReviewPayload
+		if err := json.Unmarshal(jsonBytes, &r); err != nil {
+			return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "POIReview Upsert : Échec désérialisation payload", err)
+		}
+		k := reviewKey{poiID: r.POIID, userID: r.UserID}
+		if _, exists := dedup[k]; !exists {
+			orderedKeys = append(orderedKeys, k)
+		}
+		dedup[k] = r
+	}
+
+	tx, errTx := postgres.PostgresDB.BeginTx(ctx, nil)
+	if errTx != nil {
+		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction POIReview Upsert", errTx)
+	}
+
+	stmt, errStmt := tx.Prepare("SELECT content.func_upsert_poi_review($1, $2, $3, $4, $5, $6, $7, $8)")
+	if errStmt != nil {
+		_ = tx.Rollback()
+		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec préparation statement POIReview Upsert", errStmt)
+	}
+	defer func(stmt *sql.Stmt) {
+		if errClose := stmt.Close(); errClose != nil {
+			numan_log.Error(ctx).Err(errClose).Msg("Erreur fermeture statement POIReview Upsert")
+		}
+	}(stmt)
+
+	for _, k := range orderedKeys {
+		r := dedup[k]
+		if _, errExec := stmt.Exec(r.ID, r.POIID, r.UserID, r.Rating, r.Content, r.Visibility, r.CreatedAt, r.UpdatedAt); errExec != nil {
+			_ = tx.Rollback()
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec exécution ligne POIReview Upsert", errExec)
+		}
+	}
+
+	if errCommit := tx.Commit(); errCommit != nil {
+		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Commit POIReview Upsert", errCommit)
+	}
+	return nil
+}
+
 // ============================================================================
 // 2. BULK UPDATE (Table Temporaire + COPY IN + UPDATE FROM)
 // ============================================================================
 
 func bulkUpdatePostgres(ctx context.Context, entity redis.EntityType, events []redis.AsyncEvent) error {
+	if entity == redis.EntityPOIReview {
+		return handlePOIReviewUpsert(ctx, events)
+	}
+
 	mapper := getMapper(entity)
 	if mapper == nil {
 		err := errors.New("Aucun mapper Postgres défini")
@@ -560,6 +627,55 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 		return nil
 	}
 
+	// ── CAS SPÉCIAL : AVIS & NOTES POI (Clé Composite poi_id, user_id) ──────
+	if entity == redis.EntityPOIReview {
+		tx, errTx := postgres.PostgresDB.BeginTx(ctx, nil)
+		if errTx != nil {
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction POIReview Delete", errTx)
+		}
+
+		stmt, errStmt := tx.Prepare("SELECT content.func_soft_delete_poi_review($1, $2)")
+		if errStmt != nil {
+			_ = tx.Rollback()
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec préparation statement POIReview Soft Delete", errStmt)
+		}
+		defer func(stmt *sql.Stmt) {
+			if errClose := stmt.Close(); errClose != nil {
+				numan_log.Error(ctx).Err(errClose).Msg("Erreur fermeture statement Soft Delete POIReview")
+			}
+		}(stmt)
+
+		for _, e := range events {
+			jsonBytes, err := json.Marshal(e.Payload)
+			if err != nil {
+				_ = tx.Rollback()
+				return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "POIReview Soft Delete : Échec sérialisation payload", err)
+			}
+			var del struct {
+				POIID  int64 `json:"poi_id"`
+				UserID int64 `json:"user_id"`
+			}
+			if err := json.Unmarshal(jsonBytes, &del); err != nil {
+				_ = tx.Rollback()
+				return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "POIReview Soft Delete : Échec désérialisation payload", err)
+			}
+			if del.POIID <= 0 || del.UserID <= 0 {
+				_ = tx.Rollback()
+				return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "POIReview Soft Delete : poi_id ou user_id manquant", nil)
+			}
+
+			if _, errExec := stmt.Exec(del.POIID, del.UserID); errExec != nil {
+				_ = tx.Rollback()
+				return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec exécution POIReview Soft Delete", errExec)
+			}
+		}
+
+		if errCommit := tx.Commit(); errCommit != nil {
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Commit POIReview Soft Delete", errCommit)
+		}
+		return nil
+	}
+
 	// ── COMPORTEMENT STANDARD (Par IDs) ─────────────────────────────────────
 	ids := make([]int64, len(events))
 	for i, e := range events {
@@ -589,6 +705,13 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 		}
 		return nil
 
+	} else if entity == redis.EntityPOI {
+		query = "SELECT content.func_bulk_soft_delete_pois($1)"
+		if _, errExec := postgres.PostgresDB.ExecContext(ctx, query, pq.Array(ids)); errExec != nil {
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Soft Delete POIs & Cascades", errExec)
+		}
+		return nil
+
 	} else {
 		parts := strings.SplitN(mapper.TableName(), ".", 2)
 		if len(parts) == 2 {
@@ -604,6 +727,11 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 		}
 		return nil
 	}
+}
+
+type poiBatchCounterDelta struct {
+	ratingSum   int64
+	reviewCount int
 }
 
 // updateCountersPostgres regroupe les événements (Deltas) en mémoire avant d'appeler
@@ -622,6 +750,9 @@ func updateCountersPostgres(ctx context.Context, events []redis.AsyncEvent) {
 	telemetryDwellSq := make(map[int64]float64)
 	telemetryClicks := make(map[int64]int)
 	messageReactionDeltas := make(map[int64]map[string]int)
+	// Compteurs POI agrégés exclusivement via EntityPOICounter (émis par interaction_worker.go)
+	// pour éviter tout double comptage avec EntityPOIReview.
+	poiCounterDeltas := make(map[int64]poiBatchCounterDelta)
 
 	// A. Agréggation des Métriques
 	for _, e := range events {
@@ -747,6 +878,18 @@ func updateCountersPostgres(ctx context.Context, events []redis.AsyncEvent) {
 					messageReactionDeltas[p.MessageID][emoji] += d
 				}
 			}
+		} else if e.Type == redis.EntityPOICounter {
+			var p struct {
+				POIID       int64 `json:"poi_id"`
+				RatingSum   int64 `json:"rating_sum"`
+				ReviewCount int   `json:"review_count"`
+			}
+			if err := json.Unmarshal(jsonBytes, &p); err == nil && p.POIID != 0 {
+				d := poiCounterDeltas[p.POIID]
+				d.ratingSum += p.RatingSum
+				d.reviewCount += p.ReviewCount
+				poiCounterDeltas[p.POIID] = d
+			}
 		}
 	}
 
@@ -824,6 +967,14 @@ func updateCountersPostgres(ctx context.Context, events []redis.AsyncEvent) {
 			if _, errExec := postgres.PostgresDB.ExecContext(ctx, "SELECT messaging.func_apply_reaction_delta($1, $2::jsonb)", msgID, string(deltasJSON)); errExec != nil {
 				numan_log.Error(ctx).Err(errExec).Int64("message_id", msgID).Msg("Échec exécution fonction func_apply_reaction_delta")
 			}
+		}
+	}
+	for poiID, d := range poiCounterDeltas {
+		if d.ratingSum == 0 && d.reviewCount == 0 {
+			continue
+		}
+		if _, errExec := postgres.PostgresDB.ExecContext(ctx, "SELECT content.func_increment_poi_counters($1, $2, $3)", poiID, d.ratingSum, d.reviewCount); errExec != nil {
+			numan_log.Error(ctx).Err(errExec).Int64("poi_id", poiID).Msg("Échec exécution fonction func_increment_poi_counters")
 		}
 	}
 }

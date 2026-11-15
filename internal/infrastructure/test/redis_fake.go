@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"sort"
 	"strconv"
@@ -17,6 +18,11 @@ import (
 	goredis "github.com/go-redis/redis/v8"
 )
 
+type geoPoint struct {
+	lon float64
+	lat float64
+}
+
 type FakeRedisServer struct {
 	listener  net.Listener
 	mu        sync.RWMutex
@@ -24,6 +30,7 @@ type FakeRedisServer struct {
 	hashes    map[string]map[string]string
 	sets      map[string]map[string]struct{}
 	zsets     map[string]map[string]float64
+	geos      map[string]map[string]geoPoint
 	lists     map[string][]string
 	ttls      map[string]time.Duration
 	failCmds  map[string]error
@@ -45,6 +52,7 @@ func newFakeRedisServer(t *testing.T) (*FakeRedisServer, *goredis.Client) {
 		hashes:    make(map[string]map[string]string),
 		sets:      make(map[string]map[string]struct{}),
 		zsets:     make(map[string]map[string]float64),
+		geos:      make(map[string]map[string]geoPoint),
 		lists:     make(map[string][]string),
 		ttls:      make(map[string]time.Duration),
 		failCmds:  make(map[string]error),
@@ -229,6 +237,7 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 		s.hashes = make(map[string]map[string]string)
 		s.sets = make(map[string]map[string]struct{})
 		s.zsets = make(map[string]map[string]float64)
+		s.geos = make(map[string]map[string]geoPoint)
 		s.lists = make(map[string][]string)
 		s.ttls = make(map[string]time.Duration)
 		return respSimple("OK")
@@ -327,6 +336,10 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 				delete(s.zsets, k)
 				found = true
 			}
+			if _, ok := s.geos[k]; ok {
+				delete(s.geos, k)
+				found = true
+			}
 			if _, ok := s.lists[k]; ok {
 				delete(s.lists, k)
 				found = true
@@ -397,6 +410,16 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 			}
 		}
 		for k := range s.sets {
+			if strings.HasPrefix(k, prefix) {
+				seen[k] = struct{}{}
+			}
+		}
+		for k := range s.lists {
+			if strings.HasPrefix(k, prefix) {
+				seen[k] = struct{}{}
+			}
+		}
+		for k := range s.geos {
 			if strings.HasPrefix(k, prefix) {
 				seen[k] = struct{}{}
 			}
@@ -586,6 +609,40 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 		key := args[1]
 		return respInt(int64(len(s.lists[key])))
 
+	case "LRANGE":
+		if len(args) < 4 {
+			return respErr("wrong number of arguments for LRANGE")
+		}
+		key := args[1]
+		start, _ := strconv.ParseInt(args[2], 10, 64)
+		stop, _ := strconv.ParseInt(args[3], 10, 64)
+		lst := s.lists[key]
+		n := int64(len(lst))
+		if n == 0 {
+			return respArray(nil)
+		}
+		if start < 0 {
+			start = n + start
+		}
+		if stop < 0 {
+			stop = n + stop
+		}
+		if start < 0 {
+			start = 0
+		}
+		if start >= n || start > stop {
+			return respArray(nil)
+		}
+		if stop >= n {
+			stop = n - 1
+		}
+		slice := lst[start : stop+1]
+		out := make([]string, 0, len(slice))
+		for _, item := range slice {
+			out = append(out, respBulk(item))
+		}
+		return respArray(out)
+
 	case "ZADD":
 		key := args[1]
 		if s.zsets[key] == nil {
@@ -615,20 +672,210 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 	case "ZREM":
 		key := args[1]
 		zs := s.zsets[key]
-		if zs == nil {
+		gs := s.geos[key]
+		if zs == nil && gs == nil {
 			return respInt(0)
 		}
 		var removed int64
 		for _, m := range args[2:] {
-			if _, exists := zs[m]; exists {
-				delete(zs, m)
+			var found bool
+			if zs != nil {
+				if _, exists := zs[m]; exists {
+					delete(zs, m)
+					found = true
+				}
+			}
+			if gs != nil {
+				if _, exists := gs[m]; exists {
+					delete(gs, m)
+					found = true
+				}
+			}
+			if found {
 				removed++
 			}
 		}
 		if len(zs) == 0 {
 			delete(s.zsets, key)
 		}
+		if len(gs) == 0 {
+			delete(s.geos, key)
+		}
 		return respInt(removed)
+
+	case "GEOADD":
+		if len(args) < 5 {
+			return respErr("wrong number of arguments for GEOADD")
+		}
+		key := args[1]
+		if s.geos[key] == nil {
+			s.geos[key] = make(map[string]geoPoint)
+		}
+		if s.zsets[key] == nil {
+			s.zsets[key] = make(map[string]float64)
+		}
+		// Skip optional flags NX, XX, CH
+		idx := 2
+		chFlag := false
+		for idx < len(args) {
+			up := strings.ToUpper(args[idx])
+			if up == "NX" || up == "XX" {
+				idx++
+			} else if up == "CH" {
+				chFlag = true
+				idx++
+			} else {
+				break
+			}
+		}
+		var added int64
+		for i := idx; i+2 < len(args); i += 3 {
+			lon, err1 := strconv.ParseFloat(args[i], 64)
+			lat, err2 := strconv.ParseFloat(args[i+1], 64)
+			if err1 != nil || err2 != nil {
+				return respErr("invalid longitude or latitude")
+			}
+			member := args[i+2]
+			prev, exists := s.geos[key][member]
+			if !exists {
+				added++
+			} else if chFlag && (prev.lon != lon || prev.lat != lat) {
+				added++
+			}
+			s.geos[key][member] = geoPoint{lon: lon, lat: lat}
+			s.zsets[key][member] = 0
+		}
+		return respInt(added)
+
+	case "GEOPOS":
+		if len(args) < 2 {
+			return respErr("wrong number of arguments for GEOPOS")
+		}
+		key := args[1]
+		gs := s.geos[key]
+		out := make([]string, 0, len(args)-2)
+		for _, m := range args[2:] {
+			if gs != nil {
+				if pt, ok := gs[m]; ok {
+					out = append(out, respArray([]string{
+						respBulk(strconv.FormatFloat(pt.lon, 'f', 6, 64)),
+						respBulk(strconv.FormatFloat(pt.lat, 'f', 6, 64)),
+					}))
+					continue
+				}
+			}
+			out = append(out, respNil())
+		}
+		return respArray(out)
+
+	case "GEOSEARCH":
+		if len(args) < 2 {
+			return respErr("wrong number of arguments for GEOSEARCH")
+		}
+		key := args[1]
+		gs := s.geos[key]
+		if len(gs) == 0 {
+			return respArray(nil)
+		}
+		var centerLon, centerLat float64
+		var byBox, byRadius bool
+		var widthKm, heightKm, radiusKm float64
+		var count int
+		var sortOrder string
+
+		for i := 2; i < len(args); i++ {
+			token := strings.ToUpper(args[i])
+			switch token {
+			case "FROMLONLAT":
+				if i+2 < len(args) {
+					centerLon, _ = strconv.ParseFloat(args[i+1], 64)
+					centerLat, _ = strconv.ParseFloat(args[i+2], 64)
+					i += 2
+				}
+			case "FROMMEMBER":
+				if i+1 < len(args) {
+					if pt, ok := gs[args[i+1]]; ok {
+						centerLon = pt.lon
+						centerLat = pt.lat
+					}
+					i++
+				}
+			case "BYBOX":
+				if i+3 < len(args) {
+					byBox = true
+					w, _ := strconv.ParseFloat(args[i+1], 64)
+					h, _ := strconv.ParseFloat(args[i+2], 64)
+					unit := strings.ToLower(args[i+3])
+					widthKm = toKilometers(w, unit)
+					heightKm = toKilometers(h, unit)
+					i += 3
+				}
+			case "BYRADIUS":
+				if i+2 < len(args) {
+					byRadius = true
+					r, _ := strconv.ParseFloat(args[i+1], 64)
+					unit := strings.ToLower(args[i+2])
+					radiusKm = toKilometers(r, unit)
+					i += 2
+				}
+			case "ASC", "DESC":
+				sortOrder = token
+			case "COUNT":
+				if i+1 < len(args) {
+					count, _ = strconv.Atoi(args[i+1])
+					i++
+					if i+1 < len(args) && strings.ToUpper(args[i+1]) == "ANY" {
+						i++
+					}
+				}
+			}
+		}
+
+		type geoCandidate struct {
+			member string
+			distKm float64
+		}
+		var matched []geoCandidate
+		for member, pt := range gs {
+			distKm := haversineKm(centerLat, centerLon, pt.lat, pt.lon)
+			if byRadius {
+				if distKm <= radiusKm {
+					matched = append(matched, geoCandidate{member: member, distKm: distKm})
+				}
+			} else if byBox {
+				// Rectangular bounding box approximation around centerLon, centerLat
+				latDiffKm := haversineKm(centerLat, centerLon, pt.lat, centerLon)
+				lonDiffKm := haversineKm(pt.lat, centerLon, pt.lat, pt.lon)
+				if latDiffKm <= (heightKm/2.0)+0.001 && lonDiffKm <= (widthKm/2.0)+0.001 {
+					matched = append(matched, geoCandidate{member: member, distKm: distKm})
+				}
+			} else {
+				matched = append(matched, geoCandidate{member: member, distKm: distKm})
+			}
+		}
+
+		sort.Slice(matched, func(i, j int) bool {
+			if sortOrder == "DESC" {
+				if matched[i].distKm == matched[j].distKm {
+					return matched[i].member > matched[j].member
+				}
+				return matched[i].distKm > matched[j].distKm
+			}
+			if matched[i].distKm == matched[j].distKm {
+				return matched[i].member < matched[j].member
+			}
+			return matched[i].distKm < matched[j].distKm
+		})
+
+		if count > 0 && len(matched) > count {
+			matched = matched[:count]
+		}
+
+		out := make([]string, 0, len(matched))
+		for _, c := range matched {
+			out = append(out, respBulk(c.member))
+		}
+		return respArray(out)
 
 	case "ZCARD":
 		key := args[1]
@@ -922,4 +1169,30 @@ func matchLexBound(member, bound string, isMin bool) bool {
 		return member <= clean
 	}
 	return member < clean
+}
+
+func toKilometers(val float64, unit string) float64 {
+	switch strings.ToLower(unit) {
+	case "m":
+		return val / 1000.0
+	case "mi":
+		return val * 1.60934
+	case "ft":
+		return val * 0.0003048
+	default:
+		return val
+	}
+}
+
+func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
+	const earthRadiusKm = 6371.0088
+	dLat := (lat2 - lat1) * math.Pi / 180.0
+	dLon := (lon2 - lon1) * math.Pi / 180.0
+	rLat1 := lat1 * math.Pi / 180.0
+	rLat2 := lat2 * math.Pi / 180.0
+
+	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
+		math.Cos(rLat1)*math.Cos(rLat2)*math.Sin(dLon/2)*math.Sin(dLon/2)
+	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
+	return earthRadiusKm * c
 }

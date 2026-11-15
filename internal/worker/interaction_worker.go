@@ -10,14 +10,15 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
 
-// interaction représente un micro-événement de la messagerie (Réaction ou Non-lu).
+// interaction représente un micro-événement (Réaction, Non-lu ou Avis/Note POI).
 type interaction struct {
-	ActorID   int64
-	TargetID  int64
-	Type      string
-	Timestamp int64
-	Emoji     string // Spécifique pour les réactions ("❤️", "😂")
-	Delta     int    // Direction du compteur (+1 ou -1)
+	ActorID     int64
+	TargetID    int64
+	Type        string
+	Timestamp   int64
+	Emoji       string // Spécifique pour les réactions ("❤️", "😂")
+	Delta       int    // Direction du compteur (+1, -1, ou delta net d'avis)
+	RatingDelta int64  // Delta cumulé de note (spécifique pour poi_review)
 }
 
 // Canal asynchrone bufferisé global pour absorber les pics de charge (Backpressure)
@@ -66,6 +67,25 @@ func RegisterMessageReaction(msgID int64, emoji string, delta int) {
 	}
 }
 
+// RegisterPOIReview place dans le tampon RAM une mise à jour de compteurs d'avis/notes POI
+// afin de les regrouper en un seul appel batch PostgreSQL par POI et par fenêtre de flush.
+func RegisterPOIReview(poiID int64, ratingDelta int64, reviewCountDelta int) {
+	if poiID <= 0 || (ratingDelta == 0 && reviewCountDelta == 0) {
+		return
+	}
+	select {
+	case interactionChan <- interaction{
+		TargetID:    poiID,
+		Type:        "poi_review",
+		RatingDelta: ratingDelta,
+		Delta:       reviewCountDelta,
+		Timestamp:   domain.TimeToMillis(domain.NowTime()),
+	}:
+	default:
+		numan_log.Warn(context.Background()).Int64("poi_id", poiID).Msg("Interaction Worker : Tampon RAM plein, perte d'un delta d'avis POI")
+	}
+}
+
 // flushInteractionsPeriodically est la boucle infinie qui consomme le tampon RAM
 // et envoie des paquets agrégés vers la file Redis.
 func flushInteractionsPeriodically() {
@@ -95,19 +115,33 @@ func flushInteractionsPeriodically() {
 	}
 }
 
+type poiCounterDelta struct {
+	ratingSum   int64
+	reviewCount int
+}
+
 // processCacheUpdates agrège mathématiquement les paquets de compteurs en RAM
 // avant de les formater et de les expédier vers les bases de données via le Write-Behind.
 func processCacheUpdates(ctx context.Context, batch []interaction) {
 
 	// ── ÉTAPE 1 : AGRÉGATION MATHÉMATIQUE EN RAM (RÉDUCTION DES I/O) ────────
 	reactionsToAdd := make(map[int64]map[string]int) // Map tridimensionnelle: msgID -> emoji -> delta
+	poiCounterDeltas := make(map[int64]poiCounterDelta)
 
-	for _, interaction := range batch {
-		if interaction.Type == "msg_reaction" {
-			if reactionsToAdd[interaction.TargetID] == nil {
-				reactionsToAdd[interaction.TargetID] = make(map[string]int)
+	for _, item := range batch {
+		switch item.Type {
+		case "msg_reaction":
+			if reactionsToAdd[item.TargetID] == nil {
+				reactionsToAdd[item.TargetID] = make(map[string]int)
 			}
-			reactionsToAdd[interaction.TargetID][interaction.Emoji] += interaction.Delta
+			reactionsToAdd[item.TargetID][item.Emoji] += item.Delta
+		case "poi_review":
+			if item.TargetID > 0 {
+				d := poiCounterDeltas[item.TargetID]
+				d.ratingSum += item.RatingDelta
+				d.reviewCount += item.Delta
+				poiCounterDeltas[item.TargetID] = d
+			}
 		}
 	}
 
@@ -138,6 +172,23 @@ func processCacheUpdates(ctx context.Context, batch []interaction) {
 		}
 	}
 
+	for poiID, d := range poiCounterDeltas {
+		if d.ratingSum == 0 && d.reviewCount == 0 {
+			continue
+		}
+		eventsToQueue = append(eventsToQueue, redis.AsyncEvent{
+			ID:     poiID,
+			Type:   redis.EntityPOICounter,
+			Action: redis.ActionUpdate,
+			Payload: map[string]interface{}{
+				"poi_id":       poiID,
+				"rating_sum":   d.ratingSum,
+				"review_count": d.reviewCount,
+			},
+			Targets: redis.TargetPostgres,
+		})
+	}
+
 	// ── ÉTAPE 3 : ENVOI SUR LA FILE REDIS (WRITE-BEHIND) ────────────────────
 	for _, event := range eventsToQueue {
 		payloadMap, ok := event.Payload.(map[string]interface{})
@@ -148,11 +199,13 @@ func processCacheUpdates(ctx context.Context, batch []interaction) {
 		// Définition de la Clé de Partitionnement (Sharding Redis) pour assurer l'ordre.
 		var partitionKey int64
 		if event.Type == redis.EntityMembers {
-			partitionKey = payloadMap["conversation_id"].(int64)
+			partitionKey, _ = payloadMap["conversation_id"].(int64)
 		} else if event.Type == redis.EntityMessage {
-			partitionKey = payloadMap["message_id"].(int64)
+			partitionKey, _ = payloadMap["message_id"].(int64)
+		} else if event.Type == redis.EntityPOICounter {
+			partitionKey, _ = payloadMap["poi_id"].(int64)
 		} else {
-			partitionKey = payloadMap["target_id"].(int64)
+			partitionKey, _ = payloadMap["target_id"].(int64)
 		}
 
 		// Transfert de la charge au Worker Principal (worker.go)

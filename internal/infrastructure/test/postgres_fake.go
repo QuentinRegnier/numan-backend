@@ -24,12 +24,59 @@ type mockDriverConn struct {
 	onExec  execHandler
 }
 
-func (c *mockDriverConn) Prepare(query string) (driver.Stmt, error) {
-	return nil, errors.New("prepare not implemented in mock")
+type mockTx struct{}
+
+func (t *mockTx) Commit() error   { return nil }
+func (t *mockTx) Rollback() error { return nil }
+
+type mockStmt struct {
+	conn  *mockDriverConn
+	query string
 }
+
+func (s *mockStmt) Close() error  { return nil }
+func (s *mockStmt) NumInput() int { return -1 }
+
+func (s *mockStmt) Exec(args []driver.Value) (driver.Result, error) {
+	named := make([]driver.NamedValue, len(args))
+	for i, v := range args {
+		named[i] = driver.NamedValue{Ordinal: i + 1, Value: v}
+	}
+	return s.conn.ExecContext(context.Background(), s.query, named)
+}
+
+func (s *mockStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
+	return s.conn.ExecContext(ctx, s.query, args)
+}
+
+func (s *mockStmt) Query(args []driver.Value) (driver.Rows, error) {
+	named := make([]driver.NamedValue, len(args))
+	for i, v := range args {
+		named[i] = driver.NamedValue{Ordinal: i + 1, Value: v}
+	}
+	return s.conn.QueryContext(context.Background(), s.query, named)
+}
+
+func (s *mockStmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) {
+	return s.conn.QueryContext(ctx, s.query, args)
+}
+
+func (c *mockDriverConn) Prepare(query string) (driver.Stmt, error) {
+	return &mockStmt{conn: c, query: query}, nil
+}
+
+func (c *mockDriverConn) PrepareContext(_ context.Context, query string) (driver.Stmt, error) {
+	return &mockStmt{conn: c, query: query}, nil
+}
+
 func (c *mockDriverConn) Close() error { return nil }
+
 func (c *mockDriverConn) Begin() (driver.Tx, error) {
-	return nil, errors.New("transactions not implemented in mock")
+	return &mockTx{}, nil
+}
+
+func (c *mockDriverConn) BeginTx(_ context.Context, _ driver.TxOptions) (driver.Tx, error) {
+	return &mockTx{}, nil
 }
 
 func (c *mockDriverConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {

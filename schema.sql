@@ -2038,5 +2038,283 @@ END;
 $$;
 
 /* =============================================================================
+   SECTION 10 — DISCOVERY MAP & POINTS OF INTEREST (POI - L3 AUTHORITATIVE)
+   ============================================================================= */
+
+DO $$
+BEGIN
+    CREATE EXTENSION IF NOT EXISTS postgis;
+EXCEPTION
+    WHEN OTHERS THEN
+        RAISE NOTICE 'numan: PostGIS extension unavailable (%). Falling back to B-Tree spatial coordinate indexing.', SQLERRM;
+END;
+$$;
+
+CREATE TABLE content.pois (
+    id               bigint           NOT NULL,
+    type             smallint         DEFAULT 0 NOT NULL,
+    title            varchar(200)     NOT NULL,
+    description      varchar(500)     DEFAULT ''::varchar NOT NULL,
+    latitude         double precision NOT NULL,
+    longitude        double precision NOT NULL,
+    address          varchar(500)     DEFAULT ''::varchar NOT NULL,
+    phone            varchar(64),
+    website          varchar(512),
+    rating           double precision DEFAULT 0.0 NOT NULL,
+    comment_count    integer          DEFAULT 0 NOT NULL,
+    media_ids        bigint[]         DEFAULT '{}'::bigint[] NOT NULL,
+    google_maps_link varchar(512),
+    apple_maps_link  varchar(512),
+    visibility       smallint         DEFAULT 0 NOT NULL,
+    created_at       bigint           DEFAULT util.now_ms() NOT NULL,
+    updated_at       bigint           DEFAULT util.now_ms() NOT NULL,
+    CONSTRAINT pois_pkey PRIMARY KEY (id),
+    CONSTRAINT pois_latitude_range CHECK (latitude >= -90.0 AND latitude <= 90.0),
+    CONSTRAINT pois_longitude_range CHECK (longitude >= -180.0 AND longitude <= 180.0),
+    CONSTRAINT pois_rating_range CHECK (rating >= 0.0 AND rating <= 5.0),
+    CONSTRAINT pois_comment_count_nonneg CHECK (comment_count >= 0),
+    CONSTRAINT pois_visibility_valid CHECK (visibility IN (-1, 0))
+);
+
+CREATE INDEX idx_pois_lat_lng ON content.pois USING btree (latitude, longitude);
+CREATE INDEX idx_pois_live_lat_lng ON content.pois USING btree (latitude, longitude) WHERE (visibility >= 0);
+CREATE INDEX idx_pois_type ON content.pois USING btree (type);
+
+CREATE TABLE content.poi_reviews (
+    id         bigint   NOT NULL,
+    poi_id     bigint   NOT NULL,
+    user_id    bigint   NOT NULL,
+    rating     smallint NOT NULL,
+    content    text     DEFAULT ''::text NOT NULL,
+    visibility smallint DEFAULT 0 NOT NULL,
+    created_at bigint   DEFAULT util.now_ms() NOT NULL,
+    updated_at bigint   DEFAULT util.now_ms() NOT NULL,
+    CONSTRAINT poi_reviews_pkey PRIMARY KEY (id),
+    CONSTRAINT poi_reviews_poi_id_fkey FOREIGN KEY (poi_id) REFERENCES content.pois(id),
+    CONSTRAINT poi_reviews_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
+    CONSTRAINT poi_reviews_rating_range CHECK (rating >= 1 AND rating <= 5),
+    CONSTRAINT poi_reviews_visibility_valid CHECK (visibility IN (-1, 0))
+);
+
+CREATE UNIQUE INDEX idx_poi_reviews_active_poi_user_unique ON content.poi_reviews USING btree (poi_id, user_id) WHERE (visibility >= 0);
+CREATE INDEX idx_poi_reviews_poi_text ON content.poi_reviews USING btree (poi_id, created_at DESC, id DESC) WHERE (visibility >= 0 AND btrim(content) <> '');
+CREATE INDEX idx_poi_reviews_user_id ON content.poi_reviews USING btree (user_id);
+
+-- Vue L3 exposant les métriques pré-calculées de content.pois (sans AVG() coûteux)
+CREATE VIEW content.pois_l3 AS
+SELECT
+    p.id,
+    p.type,
+    p.title,
+    p.description,
+    p.latitude,
+    p.longitude,
+    p.address,
+    p.phone,
+    p.website,
+    p.rating,
+    p.comment_count,
+    p.media_ids,
+    p.google_maps_link,
+    p.apple_maps_link,
+    p.visibility,
+    p.created_at,
+    p.updated_at
+FROM content.pois p;
+
+-- Mise à jour atomique par lots des compteurs pré-calculés (Rating moyen + CommentCount) sans AVG() global
+CREATE FUNCTION content.func_increment_poi_counters(
+    p_poi_id       bigint,
+    p_rating_sum   bigint,
+    p_review_count integer
+) RETURNS void
+    LANGUAGE sql AS $$
+    UPDATE content.pois
+    SET
+        rating = CASE
+            WHEN GREATEST(0, comment_count + p_review_count) = 0 THEN 0.0
+            ELSE GREATEST(
+                0.0,
+                LEAST(
+                    5.0,
+                    ((rating * comment_count::double precision) + p_rating_sum::double precision)
+                    / GREATEST(0, comment_count + p_review_count)::double precision
+                )
+            )
+        END,
+        comment_count = GREATEST(0, comment_count + p_review_count),
+        updated_at = util.now_ms()
+    WHERE id = p_poi_id;
+$$;
+
+-- Upsert atomique d'un avis/note POI actif (1 seul avis actif par utilisateur et par POI ; conserve les anciens avis soft-deleted)
+CREATE FUNCTION content.func_upsert_poi_review(
+    p_id         bigint,
+    p_poi_id     bigint,
+    p_user_id    bigint,
+    p_rating     smallint,
+    p_content    text,
+    p_visibility smallint,
+    p_created_at bigint,
+    p_updated_at bigint
+) RETURNS void
+    LANGUAGE sql AS $$
+    INSERT INTO content.poi_reviews (id, poi_id, user_id, rating, content, visibility, created_at, updated_at)
+    VALUES (p_id, p_poi_id, p_user_id, p_rating, COALESCE(p_content, ''), COALESCE(p_visibility, 0), p_created_at, p_updated_at)
+    ON CONFLICT (poi_id, user_id) WHERE (visibility >= 0) DO UPDATE SET
+        rating     = EXCLUDED.rating,
+        content    = EXCLUDED.content,
+        visibility = EXCLUDED.visibility,
+        updated_at = EXCLUDED.updated_at;
+$$;
+
+-- Suppression logique (Soft Delete) de l'avis/note actif d'un utilisateur pour un POI (conservation légale)
+CREATE FUNCTION content.func_soft_delete_poi_review(p_poi_id bigint, p_user_id bigint) RETURNS void
+    LANGUAGE sql AS $$
+    UPDATE content.poi_reviews
+    SET visibility = -1, updated_at = util.now_ms()
+    WHERE poi_id = p_poi_id AND user_id = p_user_id AND visibility >= 0;
+$$;
+
+-- Récupération de l'avis actif unique d'un utilisateur pour un POI actif donné
+CREATE FUNCTION content.func_get_poi_review_by_user(p_poi_id bigint, p_user_id bigint)
+    RETURNS SETOF content.poi_reviews
+    LANGUAGE sql STABLE AS $$
+    SELECT r.id, r.poi_id, r.user_id, r.rating, r.content, r.visibility, r.created_at, r.updated_at
+    FROM content.poi_reviews r
+    WHERE r.poi_id = p_poi_id
+      AND r.user_id = p_user_id
+      AND r.visibility >= 0
+      AND EXISTS (SELECT 1 FROM content.pois p WHERE p.id = r.poi_id AND p.visibility >= 0)
+    LIMIT 1;
+$$;
+
+-- Récupération paginée des avis textuels actifs (ignore les notes pures sans texte et les lignes soft-deleted)
+CREATE FUNCTION content.func_get_poi_reviews_paginated(
+    p_poi_id bigint,
+    p_limit  integer DEFAULT 20,
+    p_offset integer DEFAULT 0
+) RETURNS SETOF content.poi_reviews
+    LANGUAGE sql STABLE AS $$
+    SELECT r.id, r.poi_id, r.user_id, r.rating, r.content, r.visibility, r.created_at, r.updated_at
+    FROM content.poi_reviews r
+    WHERE r.poi_id = p_poi_id
+      AND r.visibility >= 0
+      AND r.content IS NOT NULL
+      AND btrim(r.content) <> ''
+      AND EXISTS (SELECT 1 FROM content.pois p WHERE p.id = r.poi_id AND p.visibility >= 0)
+    ORDER BY r.created_at DESC, r.id DESC
+    LIMIT COALESCE(NULLIF(p_limit, 0), 20)
+    OFFSET GREATEST(0, p_offset);
+$$;
+
+-- Récupération en lot des avis textuels actifs par IDs (auto-guérison L3 -> L1)
+CREATE FUNCTION content.func_get_poi_reviews_by_ids(p_ids bigint[])
+    RETURNS SETOF content.poi_reviews
+    LANGUAGE sql STABLE AS $$
+    SELECT r.id, r.poi_id, r.user_id, r.rating, r.content, r.visibility, r.created_at, r.updated_at
+    FROM content.poi_reviews r
+    WHERE r.id = ANY(p_ids)
+      AND r.visibility >= 0
+      AND r.content IS NOT NULL
+      AND btrim(r.content) <> ''
+      AND EXISTS (SELECT 1 FROM content.pois p WHERE p.id = r.poi_id AND p.visibility >= 0)
+    ORDER BY r.created_at DESC, r.id DESC;
+$$;
+
+-- Récupération en lot de POIs actifs par identifiants (utilisé lors d'un cache miss partiel L1)
+CREATE FUNCTION content.func_get_pois_by_ids(p_poi_ids bigint[]) RETURNS SETOF content.pois_l3
+    LANGUAGE sql STABLE AS $$
+    SELECT
+        id, type, title, description, latitude, longitude, address,
+        phone, website, rating, comment_count, media_ids, google_maps_link, apple_maps_link, visibility, created_at, updated_at
+    FROM content.pois_l3
+    WHERE id = ANY(p_poi_ids)
+      AND visibility >= 0
+    ORDER BY id ASC;
+$$;
+
+-- Récupération spatiale par Bounding Box en PostgreSQL L3 (utilisé en fallback lors d'un cache miss GEO L1)
+CREATE FUNCTION content.func_get_pois_in_bbox(
+    p_sw_lat double precision,
+    p_sw_lng double precision,
+    p_ne_lat double precision,
+    p_ne_lng double precision,
+    p_limit  integer DEFAULT 500
+) RETURNS SETOF content.pois_l3
+    LANGUAGE sql STABLE AS $$
+    SELECT
+        id, type, title, description, latitude, longitude, address,
+        phone, website, rating, comment_count, media_ids, google_maps_link, apple_maps_link, visibility, created_at, updated_at
+    FROM content.pois_l3
+    WHERE visibility >= 0
+      AND latitude >= p_sw_lat
+      AND latitude <= p_ne_lat
+      AND longitude >= p_sw_lng
+      AND longitude <= p_ne_lng
+    ORDER BY rating DESC, id ASC
+    LIMIT COALESCE(NULLIF(p_limit, 0), 500);
+$$;
+
+-- Upsert atomique d'un POI (idempotent pour les imports et créations asynchrones)
+CREATE FUNCTION content.func_upsert_poi(
+    p_id               bigint,
+    p_type             smallint,
+    p_title            varchar,
+    p_description      varchar,
+    p_latitude         double precision,
+    p_longitude        double precision,
+    p_address          varchar,
+    p_phone            varchar,
+    p_website          varchar,
+    p_rating           double precision,
+    p_comment_count    integer,
+    p_media_ids        bigint[],
+    p_google_maps_link varchar,
+    p_apple_maps_link  varchar,
+    p_visibility       smallint,
+    p_created_at       bigint,
+    p_updated_at       bigint
+) RETURNS void
+    LANGUAGE sql AS $$
+    INSERT INTO content.pois (
+        id, type, title, description, latitude, longitude, address,
+        phone, website, rating, comment_count, media_ids, google_maps_link, apple_maps_link, visibility, created_at, updated_at
+    ) VALUES (
+        p_id, p_type, p_title, p_description, p_latitude, p_longitude, p_address,
+        p_phone, p_website, p_rating, p_comment_count, COALESCE(p_media_ids, '{}'::bigint[]), p_google_maps_link, p_apple_maps_link, COALESCE(p_visibility, 0), p_created_at, p_updated_at
+    )
+    ON CONFLICT (id) DO UPDATE SET
+        type             = EXCLUDED.type,
+        title            = EXCLUDED.title,
+        description      = EXCLUDED.description,
+        latitude         = EXCLUDED.latitude,
+        longitude        = EXCLUDED.longitude,
+        address          = EXCLUDED.address,
+        phone            = EXCLUDED.phone,
+        website          = EXCLUDED.website,
+        rating           = EXCLUDED.rating,
+        comment_count    = EXCLUDED.comment_count,
+        media_ids        = EXCLUDED.media_ids,
+        google_maps_link = EXCLUDED.google_maps_link,
+        apple_maps_link  = EXCLUDED.apple_maps_link,
+        visibility       = EXCLUDED.visibility,
+        updated_at       = EXCLUDED.updated_at;
+$$;
+
+-- Suppression logique (Soft Delete) en masse de POIs et de leurs avis associés (conservation légale)
+CREATE FUNCTION content.func_bulk_soft_delete_pois(p_ids bigint[]) RETURNS void
+    LANGUAGE sql AS $$
+    UPDATE content.pois
+    SET visibility = -1, updated_at = util.now_ms()
+    WHERE id = ANY(p_ids) AND visibility >= 0;
+
+    UPDATE content.poi_reviews
+    SET visibility = -1, updated_at = util.now_ms()
+    WHERE poi_id = ANY(p_ids) AND visibility >= 0;
+$$;
+
+/* =============================================================================
    END OF SCHEMA
    ============================================================================= */
+

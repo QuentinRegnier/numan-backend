@@ -51,6 +51,9 @@ const (
 	EntitySaved           EntityType = "Saved"
 	EntityPasskey         EntityType = "Passkeys"
 	EntityNotification    EntityType = "Notifications"
+	EntityPOI             EntityType = "POIs"
+	EntityPOIReview       EntityType = "POIReviews"
+	EntityPOICounter      EntityType = "POICounters"
 )
 
 // DBTarget : Bitmask pour savoir où envoyer (Mongo, Postgres, ou les deux)

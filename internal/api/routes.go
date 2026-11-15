@@ -12,6 +12,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/conversation_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/feed_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/like_handlers"
+	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/map_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/media_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/member_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/message_handlers"
@@ -215,6 +216,12 @@ func SetupRoutes(r *gin.Engine) {
 	secured.POST("/media/upload", middleware.TrustScoreMiddleware(), media_handlers.UploadMediaHandler) // Vérifie le TrustScore (<0.40 -> Quarantaine S3)
 	secured.POST("/media/sign", media_handlers.SignMediaHandler)                                        //
 
+	// --- Discovery Map & Points d'Intérêt (POI) ---
+	secured.POST("/map/poi/get", map_handlers.GetPOIsInBBoxHandler)
+	secured.POST("/map/poi/review/set", map_handlers.SetPOIReviewHandler)
+	secured.POST("/map/poi/review/get", map_handlers.GetPOIReviewsHandler)
+	secured.DELETE("/map/poi/review/delete", map_handlers.DeletePOIReviewHandler)
+
 	// --- Recherche ---
 	secured.POST("/search/autocomplete/text", search_handlers.AutocompleteTextHandler) //
 	secured.POST("/search/autocomplete/tags", search_handlers.AutocompleteTagHandler)  //
@@ -242,6 +249,12 @@ func SetupRoutes(r *gin.Engine) {
 	adminGroup.POST("/moderation/hard-ban", admin_handlers.AdminHardBanHandler)
 	adminGroup.GET("/moderation/delegation-switch", admin_handlers.GetDelegationSwitchHandler)
 	adminGroup.POST("/moderation/delegation-switch", admin_handlers.SetDelegationSwitchHandler)
+
+	// --- Admin Discovery Map & Points d'Intérêt (POI) ---
+	adminGroup.POST("/map/poi/import", map_handlers.ImportPOIsHandler)
+	adminGroup.POST("/map/poi/set", map_handlers.SetPOIHandler)
+	adminGroup.PUT("/map/poi/update", map_handlers.UpdatePOIHandler)
+	adminGroup.DELETE("/map/poi/delete", map_handlers.DeletePOIHandler)
 
 	// =========================================================================
 	// 4. ROUTES MODÉRATION (JWT + HMAC + Rôle Modérateur Grade >= 3 ou Admin)

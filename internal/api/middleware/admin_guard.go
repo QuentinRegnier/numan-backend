@@ -57,6 +57,7 @@ func AdminGuard() gin.HandlerFunc {
 			return
 		}
 
+		c.Set("user_grade", userLite.Grade)
 		c.Next()
 	}
 }
