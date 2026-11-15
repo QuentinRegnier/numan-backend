@@ -17,6 +17,12 @@ import (
 
 // DisableTwoFactor désactive une méthode spécifique (1, 2, 3) ou toute la 2FA (0) après vérification du mot de passe.
 func DisableTwoFactor(ctx context.Context, userID int64, input two_factor_models.DisableTwoFactorInput) error {
+	if userID <= 0 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return err
+	}
 	userPayload, errUser := loadUserByIDCascade(ctx, userID)
 	if errUser != nil {
 		return errUser
@@ -42,6 +48,9 @@ func DisableTwoFactor(ctx context.Context, userID int64, input two_factor_models
 	}
 
 	userPayload.UpdatedAt = domain.NowMillis()
+	if err := userPayload.Validate(); err != nil {
+		return err
+	}
 
 	if errQueue := redis.EnqueueDB(ctx, userPayload.ID, userPayload.ID, redis.EntityUser, redis.ActionUpdate, userPayload, redis.TargetAll); errQueue != nil {
 		return numan_error.NewInternal(errQueue)

@@ -23,11 +23,15 @@ import (
 
 // SuggestContacts orchestre la suggestion de membres selon l'intention demandée.
 func SuggestContacts(ctx context.Context, callerID int64, input conversation_models.SuggestInput) (conversation_models.SuggestOutput, error) {
-	// 1. Validation de la pagination
-	var errOffset, errLimit *numan_error.AppError
-	input.Offset, errOffset, input.Limit, errLimit = pkg.BatchVerif(input.Offset, input.Limit)
-	if errOffset != nil || errLimit != nil {
-		return conversation_models.SuggestOutput{}, numan_error.Combine(errOffset, errLimit)
+	// 1. Validation du payload et de la pagination
+	if callerID <= 0 {
+		return conversation_models.SuggestOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return conversation_models.SuggestOutput{}, err
+	}
+	if input.Limit == 0 {
+		input.Limit = 20
 	}
 
 	// 2. Déduction de l'intention métier

@@ -47,6 +47,10 @@ func DispatchNotification(ctx context.Context, targetUserID int64, actorUserID i
 		CreatedAt: domain.NowMillis(),
 	}
 
+	if err := notificationPayload.Validate(); err != nil {
+		return err
+	}
+
 	// ── ÉTAPE 3 : CACHE L1 IMMÉDIAT (JSON + ZSET) ───────────────────────────
 	_ = object_cache_service.SetNotificationInObjectCache(ctx, notificationPayload)
 	_ = cache_service.AddNotificationToZSET(ctx, targetUserID, notificationPayload.ID, notificationPayload.CreatedAt)

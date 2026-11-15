@@ -21,6 +21,12 @@ import (
 
 // SetupTwoFactor initie l'enrôlement d'une méthode 2FA (1: Email, 2: TOTP, 3: Passkey) en RAM L1.
 func SetupTwoFactor(ctx context.Context, userID int64, input two_factor_models.SetupTwoFactorInput) (two_factor_models.SetupTwoFactorOutput, error) {
+	if userID <= 0 {
+		return two_factor_models.SetupTwoFactorOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return two_factor_models.SetupTwoFactorOutput{}, err
+	}
 	userPayload, errUser := loadUserByIDCascade(ctx, userID)
 	if errUser != nil {
 		return two_factor_models.SetupTwoFactorOutput{}, errUser
@@ -39,6 +45,9 @@ func SetupTwoFactor(ctx context.Context, userID int64, input two_factor_models.S
 		DeviceName: pkg.CleanStr(input.DeviceName),
 		Attempts:   0,
 		CreatedAt:  domain.NowMillis(),
+	}
+	if err := session.Validate(); err != nil {
+		return two_factor_models.SetupTwoFactorOutput{}, err
 	}
 
 	output := two_factor_models.SetupTwoFactorOutput{

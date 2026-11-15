@@ -8,7 +8,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/profile_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
-	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
@@ -26,10 +25,14 @@ import (
 // GetProfile est le Hub central qui orchestre la récupération de toutes
 // les strates d'un profil (Identité, Posts, Interactions, Paramètres de confidentialité).
 func GetProfile(ctx context.Context, callerID int64, input profile_models.GetProfileInput) (profile_models.GetProfileOutput, error) {
-	var errOffset, errLimit numan_error.Error
-	input.Offset, errOffset, input.Limit, errLimit = pkg.BatchVerif(input.Offset, input.Limit)
-	if errOffset != nil || errLimit != nil {
-		return profile_models.GetProfileOutput{}, numan_error.Combine(errOffset, errLimit)
+	if callerID <= 0 {
+		return profile_models.GetProfileOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return profile_models.GetProfileOutput{}, err
+	}
+	if input.Limit == 0 {
+		input.Limit = 20
 	}
 
 	targetID := input.TargetID

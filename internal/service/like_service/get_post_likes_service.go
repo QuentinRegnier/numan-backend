@@ -9,7 +9,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/post_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
-	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
@@ -25,10 +24,11 @@ import (
 
 // GetPostLikes récupère les abonnés ayant liké un post en appliquant les règles de visibilité.
 func GetPostLikes(ctx context.Context, input like_models.GetPostLikesInput) (like_models.GetPostLikesOutput, error) {
-	var err_offset, err_limit numan_error.Error
-	input.Offset, err_offset, input.Limit, err_limit = pkg.BatchVerif(input.Offset, input.Limit)
-	if err_offset != nil || err_limit != nil {
-		return like_models.GetPostLikesOutput{}, numan_error.Combine(err_offset, err_limit)
+	if err := input.Validate(); err != nil {
+		return like_models.GetPostLikesOutput{}, err
+	}
+	if input.Limit == 0 {
+		input.Limit = 20
 	}
 
 	// ── ÉTAPE 1 : CONTRÔLE D'ACCÈS AU POST (CASCADE L1 -> L2 -> L3) ─────────

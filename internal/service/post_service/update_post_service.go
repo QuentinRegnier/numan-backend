@@ -13,7 +13,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/service/algorithm_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/security_service"
-	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
 
 // ############################################################################
@@ -22,9 +21,9 @@ import (
 
 // UpdatePost gère la modification des métadonnées et du contenu d'un post en récupérant l'objet complet pour nourrir le Bulk Update des workers.
 func UpdatePost(ctx context.Context, callerID int64, input post_models.UpdatePostInput) error {
-	// ── ÉTAPE 0 : VÉRIFICATION DU NIVEAU DE VISIBILITÉ ──────────────────────
-	if input.Visibility < variables.PostVisibilityAll || input.Visibility > variables.PostVisibilityFriend {
-		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Niveau de visibilité non supporté.", nil)
+	// ── ÉTAPE 0 : VÉRIFICATION DU PAYLOAD ───────────────────────────────────
+	if err := input.Validate(); err != nil {
+		return err
 	}
 
 	// ── ÉTAPE 1 : CONTRÔLE D'ACCÈS ZERO-TRUST ET RÉCUPÉRATION DE L'OBJET ────
@@ -35,13 +34,6 @@ func UpdatePost(ctx context.Context, callerID int64, input post_models.UpdatePos
 	}
 
 	// ── ÉTAPE 2 : APPLICATION DES MODIFICATIONS MÉTIER ──────────────────────
-	if len(input.Hashtags) > 20 {
-		input.Hashtags = input.Hashtags[:20]
-	}
-	if len(input.Identifiers) > 10 {
-		input.Identifiers = input.Identifiers[:10]
-	}
-
 	postPayload.Content = pkg.CleanStr(input.Content)
 	postPayload.Hashtags = pkg.SliceUniqueStr(input.Hashtags)
 	postPayload.Identifiers = pkg.SliceUniqueInt64(input.Identifiers)
@@ -55,6 +47,10 @@ func UpdatePost(ctx context.Context, callerID int64, input post_models.UpdatePos
 	// ── ÉTAPE 3 : RE-VECTORISATION SYNCHRONE DU CONTENU ─────────────────────
 	// On met à jour le vecteur avec les nouvelles données textuelles/thématiques.
 	postPayload.Vector = algorithm_service.ComputeContentVectorFull(ctx, postPayload, nil)
+
+	if err := postPayload.Validate(); err != nil {
+		return err
+	}
 
 	// ── ÉTAPE 4 : SAUVEGARDE ET DÉLÉGATION AUX WORKERS BATCH ────────────────
 

@@ -94,11 +94,6 @@ func GetCommunityRequestsHandler(c *gin.Context) {
 		return
 	}
 
-	// Valeur par défaut pour la limite si elle n'est pas fournie
-	if input.Limit == 0 {
-		input.Limit = 20
-	}
-
 	// 3. Appel du service métier
 	output, err := member_service.GetCommunityRequests(c.Request.Context(), callerID, input)
 	if err != nil {

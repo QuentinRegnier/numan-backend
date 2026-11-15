@@ -25,10 +25,14 @@ import (
 
 // GetUserConversationsPaginated récupère l'inbox avec une cascade complète et promotion en mémoire.
 func GetUserConversationsPaginated(ctx context.Context, callerID int64, input conversation_models.GetUserConversationsInput) (conversation_models.GetUserInboxOutput, error) {
-	var err_offset, err_limit numan_error.Error
-	input.Offset, err_offset, input.Limit, err_limit = pkg.BatchVerif(input.Offset, input.Limit)
-	if err_offset != nil || err_limit != nil {
-		return conversation_models.GetUserInboxOutput{}, numan_error.Combine(err_offset, err_limit)
+	if callerID <= 0 {
+		return conversation_models.GetUserInboxOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return conversation_models.GetUserInboxOutput{}, err
+	}
+	if input.Limit == 0 {
+		input.Limit = 50
 	}
 	var rawInboxItems []cache_service.InboxItemView
 

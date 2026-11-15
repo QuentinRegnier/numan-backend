@@ -20,6 +20,12 @@ import (
 
 // AddCertification gère le use case complet de la vérification de licence et d'attribution du badge.
 func AddCertification(ctx context.Context, userID int64, input auth_models.AddCertificationInput) (auth_models.AddCertificationOutput, error) {
+	if userID <= 0 {
+		return auth_models.AddCertificationOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return auth_models.AddCertificationOutput{}, err
+	}
 	// ÉTAPE 1 : SIMULATION DE L'APPEL EXTERNE AU PRESTATAIRE
 	httpStatus, errCall := callFederationAPI(ctx, input.Prestataire, input.CertificationID)
 	if errCall != nil || httpStatus != http.StatusOK {
@@ -60,6 +66,9 @@ func AddCertification(ctx context.Context, userID int64, input auth_models.AddCe
 		ExpiresAt: &expiresAt,
 	}
 	userPayload.UpdatedAt = domain.NowMillis()
+	if err := userPayload.Validate(); err != nil {
+		return auth_models.AddCertificationOutput{}, err
+	}
 
 	// ÉTAPE 4 : SYNCHRONISATION DES CACHES ET BDD
 

@@ -8,7 +8,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/member_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
-	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/media_service"
@@ -23,10 +22,14 @@ import (
 // GetMutedMembers récupère la liste des utilisateurs mutés (Interdiction d'écrire).
 // Réservé aux administrateurs (1) et propriétaires (2) du groupe.
 func GetMutedMembers(ctx context.Context, callerID int64, input member_models.GetMutedMembersInput) (member_models.GetMutedMembersOutput, error) {
-	var err_offset, err_limit numan_error.Error
-	input.Offset, err_offset, input.Limit, err_limit = pkg.BatchVerif(input.Offset, input.Limit)
-	if err_offset != nil || err_limit != nil {
-		return member_models.GetMutedMembersOutput{}, numan_error.Combine(err_offset, err_limit)
+	if callerID <= 0 {
+		return member_models.GetMutedMembersOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return member_models.GetMutedMembersOutput{}, err
+	}
+	if input.Limit == 0 {
+		input.Limit = 50
 	}
 
 	// ── ÉTAPE 1 : CONTRÔLE D'ACCÈS (SÉCURITÉ ZERO-TRUST) ────────────────────

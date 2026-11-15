@@ -28,6 +28,12 @@ import (
 
 // AcceptCommunityRequest valide l'adhésion d'un membre en attente et l'intègre officiellement.
 func AcceptCommunityRequest(ctx context.Context, callerID int64, input member_models.AcceptCommunityRequestInput) (member_models.AcceptCommunityRequestOutput, error) {
+	if callerID <= 0 {
+		return member_models.AcceptCommunityRequestOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return member_models.AcceptCommunityRequestOutput{}, err
+	}
 
 	// ── ÉTAPE 1 : CONTRÔLE D'ACCÈS DU DÉCIDEUR (ADMIN OU OWNER) ─────────────
 	callerMemberPayload, errSecurity := security_service.LeftMember(ctx, input.ConversationID, callerID)
@@ -72,6 +78,10 @@ func AcceptCommunityRequest(ctx context.Context, callerID int64, input member_mo
 	targetMemberPayload.Settings = member_models.DefaultMemberSettings(variables.ConversationTypeCommunityPub)
 	targetMemberPayload.JoinedAt = currentTimeMs
 	targetMemberPayload.UpdatedAt = currentTimeMs
+
+	if err := targetMemberPayload.Validate(); err != nil {
+		return member_models.AcceptCommunityRequestOutput{}, err
+	}
 
 	// ── ÉTAPE 4 : MISE À JOUR SYNCHRONE DES CACHES RAM L1 ───────────────────
 	_ = object_cache_service.SetMemberInObjectCache(ctx, targetMemberPayload)

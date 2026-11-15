@@ -19,6 +19,12 @@ import (
 // SyncActivity vérifie le delta temporel et les curseurs ID pour ne renvoyer
 // que les nouvelles notifications sans hydratations inutiles.
 func SyncActivity(ctx context.Context, callerID int64, input sync_models.SyncActivityInput) (sync_models.SyncActivityOutput, error) {
+	if callerID <= 0 {
+		return sync_models.SyncActivityOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return sync_models.SyncActivityOutput{}, err
+	}
 
 	syncOutput := sync_models.SyncActivityOutput{
 		NeedUpdate: false,

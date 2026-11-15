@@ -164,11 +164,11 @@ func handleBlockAction(c *gin.Context, action bool) {
 	}
 
 	var input relation_models.RelationActionInput
-	input.Action = action
 	if err := c.ShouldBindJSON(&input); err != nil {
 		numan_error.RespondWithError(c, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Format JSON invalide ou paramètres manquants.", err))
 		return
 	}
+	input.Action = action
 
 	if err := relation_service.ToggleBlock(c.Request.Context(), callerID, input); err != nil {
 		numan_error.RespondWithError(c, err)

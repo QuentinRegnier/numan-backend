@@ -19,6 +19,12 @@ import (
 
 // UpdateNotifications fusionne les nouveaux réglages de notifications et délègue la sauvegarde au Write-Behind.
 func UpdateNotifications(ctx context.Context, userID int64, input user_settings_models.UpdateNotificationsInput) (user_settings_models.UpdateNotificationsOutput, error) {
+	if userID <= 0 {
+		return user_settings_models.UpdateNotificationsOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return user_settings_models.UpdateNotificationsOutput{}, err
+	}
 
 	// ── ÉTAPE 1 : RÉCUPÉRATION DES PARAMÈTRES (CASCADE L1 -> L2 -> L3) ──────
 	userSettingsPayload, errCache := object_cache_service.GetUserSettingsCascade(ctx, userID)
@@ -38,6 +44,10 @@ func UpdateNotifications(ctx context.Context, userID int64, input user_settings_
 	userSettingsPayload.Notifications.NotifyGroupInvites = input.NotifyGroupInvites
 
 	userSettingsPayload.UpdatedAt = domain.NowMillis()
+
+	if err := userSettingsPayload.Validate(); err != nil {
+		return user_settings_models.UpdateNotificationsOutput{}, err
+	}
 
 	// ── ÉTAPE 3 : MISE À JOUR IMMÉDIATE L1 EN RAM ───────────────────────────
 	if errSet := object_cache_service.SetUserSettings(ctx, userSettingsPayload); errSet != nil {

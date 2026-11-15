@@ -23,6 +23,15 @@ import (
 // GetMessageReactions exécute le Slow Path pour récupérer la liste paginée et détaillée
 // des utilisateurs ayant réagi à un message spécifique (UI Bottom Sheet).
 func GetMessageReactions(ctx context.Context, callerID int64, input message_models.GetMessageReactionsInput) (message_models.GetMessageReactionsOutput, error) {
+	if callerID <= 0 {
+		return message_models.GetMessageReactionsOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return message_models.GetMessageReactionsOutput{}, err
+	}
+	if input.Limit == 0 {
+		input.Limit = 50
+	}
 
 	// ── ÉTAPE 1 : CONTRÔLE D'ACCÈS AU MESSAGE (ZERO-TRUST) ──────────────────
 

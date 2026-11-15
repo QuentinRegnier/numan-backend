@@ -16,6 +16,12 @@ import (
 
 // GetFeed orchestre la distribution, la rotation (A/B/C), l'élargissement et l'hydratation des posts.
 func GetFeed(ctx context.Context, callerID int64, input feed_models.GetFeedInput) ([]post_models.GetPostOutput, int, string, error) {
+	if err := input.Validate(); err != nil {
+		return nil, 0, "", err
+	}
+	if callerID <= 0 {
+		return nil, 0, "", numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant de l'utilisateur doit être strictement positif.", nil)
+	}
 	isManualRefresh := input.Force
 
 	// ── ÉTAPE 1 : Rapatriement du Graphe Social (O(1) L1) ─────────────────

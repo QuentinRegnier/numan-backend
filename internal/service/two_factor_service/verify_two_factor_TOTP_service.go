@@ -14,6 +14,9 @@ import (
 
 // VerifyTwoFactorTOTP valide une preuve 2FA par code d'application TOTP RFC 6238 (Login ou SignUp).
 func VerifyTwoFactorTOTP(ctx context.Context, input two_factor_models.VerifyTwoFactorTOTPInput) (two_factor_models.VerifyTwoFactorOutput, error) {
+	if err := input.Validate(); err != nil {
+		return two_factor_models.VerifyTwoFactorOutput{}, err
+	}
 	preAuth, err := cache_service.GetPreAuthSession(ctx, input.PreAuthToken)
 	if err != nil {
 		return two_factor_models.VerifyTwoFactorOutput{}, err

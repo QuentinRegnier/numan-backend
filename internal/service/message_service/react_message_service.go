@@ -22,6 +22,12 @@ import (
 
 // ReactToMessage gère l'ajout ou la modification d'une réaction sur un message via le Hash Cache L1.
 func ReactToMessage(ctx context.Context, callerID int64, input message_models.ReactMessageInput) error {
+	if callerID <= 0 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return err
+	}
 
 	// ── ÉTAPE 1 : CONTRÔLE D'ACCÈS AU MESSAGE (ZERO-TRUST) ──────────────────
 
@@ -79,6 +85,10 @@ func ReactToMessage(ctx context.Context, callerID int64, input message_models.Re
 		UserID:    callerID,
 		Reaction:  sanitizedEmoji,
 		CreatedAt: domain.NowMillis(),
+	}
+
+	if err := reactionPayload.Validate(); err != nil {
+		return err
 	}
 
 	// L'ActionCreate déclenchera un UPSERT côté Worker grâce à la contrainte UNIQUE SQL (message_id, user_id)

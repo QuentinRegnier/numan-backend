@@ -22,6 +22,12 @@ import (
 // UpdateMemberSettings gère la mise à jour partielle des paramètres de silence et de médias
 // d'un membre pour une conversation spécifique.
 func UpdateMemberSettings(ctx context.Context, callerID int64, input member_models.UpdateMemberSettingsInput) (member_models.UpdateMemberSettingsOutput, error) {
+	if callerID <= 0 {
+		return member_models.UpdateMemberSettingsOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return member_models.UpdateMemberSettingsOutput{}, err
+	}
 
 	// ── ÉTAPE 1 : RÉCUPÉRATION ET CONTRÔLE D'ACCÈS ──────────────────────────
 
@@ -36,6 +42,10 @@ func UpdateMemberSettings(ctx context.Context, callerID int64, input member_mode
 	memberPayload.Settings.MuteExpireAt = input.MuteExpiresAt
 	memberPayload.Settings.MediaAutoDownload = input.MediaAutoDownload
 	memberPayload.UpdatedAt = domain.NowMillis()
+
+	if err := memberPayload.Validate(); err != nil {
+		return member_models.UpdateMemberSettingsOutput{}, err
+	}
 
 	// ── ÉTAPE 3 : MISE À JOUR SYNCHRONE DU CACHE RAM L1 ─────────────────────
 

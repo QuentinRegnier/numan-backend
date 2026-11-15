@@ -15,7 +15,18 @@ import (
 // DispatchEmail applique la matrice de confidentialité utilisateur en O(1) RAM,
 // puis empile le message dans la file Redis pour traitement asynchrone par le worker.
 func DispatchEmail(ctx context.Context, userID int64, targetEmail string, templateName string, subject string, data map[string]any) error {
-	// 1. FILTRAGE PRIVACY L1 (Cascade L1 -> L2 -> L3)
+	// 1. PRÉPARATION ET VALIDATION DU PAYLOAD
+	payload := email_models.EmailPayload{
+		RecipientEmail: targetEmail,
+		TemplateName:   templateName,
+		Subject:        subject,
+		Data:           data,
+	}
+	if errVal := payload.Validate(); errVal != nil {
+		return errVal
+	}
+
+	// 2. FILTRAGE PRIVACY L1 (Cascade L1 -> L2 -> L3)
 	if userID > 0 {
 		userSettings, errSettings := object_cache_service.GetUserSettingsCascade(ctx, userID)
 		if errSettings != nil {
@@ -30,14 +41,6 @@ func DispatchEmail(ctx context.Context, userID int64, targetEmail string, templa
 		if !userSettings.Notifications.MasterEmailEnabled {
 			return nil
 		}
-	}
-
-	// 2. PRÉPARATION DU PAYLOAD
-	payload := email_models.EmailPayload{
-		RecipientEmail: targetEmail,
-		TemplateName:   templateName,
-		Subject:        subject,
-		Data:           data,
 	}
 
 	payloadBytes, errMarshal := json.Marshal(payload)
@@ -70,6 +73,9 @@ func DispatchSecurityEmail(ctx context.Context, targetEmail string, templateName
 		TemplateName:   templateName,
 		Subject:        subject,
 		Data:           data,
+	}
+	if errVal := payload.Validate(); errVal != nil {
+		return errVal
 	}
 	payloadBytes, errMarshal := json.Marshal(payload)
 	if errMarshal != nil {

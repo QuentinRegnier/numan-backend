@@ -18,6 +18,12 @@ import (
 // GetWatermarks récupère les curseurs de lecture (LastReadMessageID) en O(1)
 // depuis la RAM pour tous les participants d'une conversation donnée.
 func GetWatermarks(ctx context.Context, callerID int64, input conversation_models.GetWatermarksInput) (conversation_models.GetWatermarksOutput, error) {
+	if callerID <= 0 {
+		return conversation_models.GetWatermarksOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return conversation_models.GetWatermarksOutput{}, err
+	}
 
 	// ── ÉTAPE 1 : CONTRÔLE D'ACCÈS ZERO-TRUST ────────────────────────────────
 	callerMemberPayload, errSecurity := security_service.LeftMember(ctx, input.ConversationID, callerID)

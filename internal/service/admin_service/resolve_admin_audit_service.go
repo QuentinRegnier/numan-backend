@@ -19,8 +19,14 @@ import (
 
 // ResolveAdminAuditService permet à un Administrateur (Grade 4) de trancher l'audit des 3 blâmes.
 func ResolveAdminAuditService(ctx context.Context, adminID int64, adminGrade int, input admin_models.ResolveAdminAuditInput) (admin_models.ResolveAdminAuditOutput, error) {
+	if adminID <= 0 {
+		return admin_models.ResolveAdminAuditOutput{}, numan_error.NewUnauthorized(numan_error.CodeUnauthorized, "Authentification requise.", nil)
+	}
 	if adminGrade != variables.UserGradeAdmin {
 		return admin_models.ResolveAdminAuditOutput{}, numan_error.NewForbidden(numan_error.CodeForbidden, "Seul un Administrateur (Grade 4) peut statuer sur un audit de blâmes.", nil)
+	}
+	if errVal := input.Validate(); errVal != nil {
+		return admin_models.ResolveAdminAuditOutput{}, errVal
 	}
 
 	ticket, err := cache_service.GetModerationTicket(ctx, input.ReportID)

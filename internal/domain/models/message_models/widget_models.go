@@ -4,8 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/media_models"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
 
 // WidgetPayload représente les données structurées d'un message widget stockées dans attachments.widget.
@@ -18,6 +23,30 @@ type WidgetPayload struct {
 	CoverMediaView *media_models.MediaView `json:"cover_media_view,omitempty" bson:"cover_media_view,omitempty"`
 }
 
+// Validate vérifie la validité métier d'un WidgetPayload.
+func (p *WidgetPayload) Validate() error {
+	if p == nil {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le payload du widget est nul.", nil)
+	}
+	widgetType := strings.TrimSpace(p.Type)
+	if !slices.Contains(variables.AllowedWidgetTypes, widgetType) {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Type de widget non supporté.", nil)
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(p.Title)) > 120 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le titre du widget ne peut pas dépasser 120 caractères.", nil)
+	}
+	if utf8.RuneCountInString(p.Description) > 500 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "La description du widget ne peut pas dépasser 500 caractères.", nil)
+	}
+	if err := p.Action.Validate(); err != nil {
+		return err
+	}
+	if err := p.Visuals.Validate(); err != nil {
+		return err
+	}
+	return nil
+}
+
 // WidgetAction représente l'action interactive associée au widget.
 type WidgetAction struct {
 	Label      string `json:"label" bson:"label"`
@@ -25,11 +54,36 @@ type WidgetAction struct {
 	IsExternal bool   `json:"is_external" bson:"is_external"`
 }
 
+// Validate vérifie les contraintes de l'action d'un widget.
+func (p *WidgetAction) Validate() error {
+	if p == nil {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'action du widget est nulle.", nil)
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(p.Label)) > 80 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le libellé de l'action du widget ne peut pas dépasser 80 caractères.", nil)
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(p.URL)) > 2048 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'URL de l'action du widget ne peut pas dépasser 2048 caractères.", nil)
+	}
+	return nil
+}
+
 // WidgetVisuals contient les attributs visuels et médias du widget.
 type WidgetVisuals struct {
 	Style        string `json:"style" bson:"style"`
 	Icon         string `json:"icon" bson:"icon"`
 	CoverMediaID int64  `json:"cover_media_id,omitempty" bson:"cover_media_id,omitempty"`
+}
+
+// Validate vérifie les attributs visuels d'un widget.
+func (p *WidgetVisuals) Validate() error {
+	if p == nil {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Les visuels du widget sont nuls.", nil)
+	}
+	if p.CoverMediaID < 0 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant de couverture du widget ne peut pas être négatif.", nil)
+	}
+	return nil
 }
 
 // normalizeInterfaceMap convertit récursivement les map[any]any (ex: issues de MsgPack/BSON) en map[string]any

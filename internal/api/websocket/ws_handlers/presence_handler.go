@@ -6,7 +6,6 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/sync_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/realtime_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/security_service"
@@ -24,8 +23,8 @@ func HandleSyncPresence(ctx context.Context, rawPayload []byte) (any, error) {
 		return nil, numan_error.NewBadRequest("INVALID_PAYLOAD", "Payload invalide.", err)
 	}
 
-	if err := pkg.ValidateStruct(&input); err != nil {
-		return nil, numan_error.NewBadRequest("VALIDATION_FAILED", "Validation échouée.", err)
+	if err := input.Validate(); err != nil {
+		return nil, err
 	}
 
 	presenceMap, err := cache_service.AreUsersOnline(ctx, input)
@@ -49,8 +48,8 @@ func HandleFocusConversation(ctx context.Context, callerID int64, rawPayload []b
 		return numan_error.NewBadRequest("INVALID_PAYLOAD", "Payload invalide.", err)
 	}
 
-	if err := pkg.ValidateStruct(&input); err != nil {
-		return numan_error.NewBadRequest("VALIDATION_FAILED", "Validation échouée.", err)
+	if err := input.Validate(); err != nil {
+		return err
 	}
 
 	// 1. SÉCURITÉ ZERO-TRUST : On vérifie que l'utilisateur est bien membre de la conversation

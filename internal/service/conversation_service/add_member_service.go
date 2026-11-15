@@ -30,6 +30,13 @@ import (
 // AddMembersToConversation orchestre l'ajout direct de membres ou l'envoi d'invitations
 // en appliquant les matrices de confidentialité et les autorisations de groupe.
 func AddMembersToConversation(ctx context.Context, callerID int64, input conversation_models.AddMemberInput) (conversation_models.AddMemberOutput, error) {
+	if callerID <= 0 {
+		return conversation_models.AddMemberOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return conversation_models.AddMemberOutput{}, err
+	}
+
 	numan_log.Info(ctx).
 		Entity("conversation", input.ConversationID).
 		Int("participants_count", len(input.ParticipantIDs)).
@@ -67,10 +74,6 @@ func AddMembersToConversation(ctx context.Context, callerID int64, input convers
 	currentTime := domain.NowTime()
 
 	// ── ÉTAPE 3 : FILTRAGE ET TRAITEMENT DES CANDIDATS ──────────────────────
-	if err := pkg.ListLimitVerif(input.ParticipantIDs, variables.MaxAddMemberCount); err != nil {
-		return conversation_models.AddMemberOutput{}, err
-	}
-
 	for _, targetUserID := range input.ParticipantIDs {
 		if targetUserID == callerID {
 			continue // Exclusion de l'émetteur
@@ -132,6 +135,10 @@ func AddMembersToConversation(ctx context.Context, callerID int64, input convers
 				UnreadCount:       0,
 				CreatedAt:         domain.TimeToMillis(currentTime),
 				UpdatedAt:         domain.TimeToMillis(currentTime),
+			}
+
+			if err := memberPayload.Validate(); err != nil {
+				return conversation_models.AddMemberOutput{}, err
 			}
 
 			_ = object_cache_service.SetMemberInObjectCache(ctx, memberPayload)

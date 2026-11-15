@@ -94,10 +94,6 @@ func GetPostLikesHandler(c *gin.Context) {
 
 	input.CallerID = callerID
 
-	if input.Limit <= 0 || input.Limit > 100 {
-		input.Limit = 20
-	}
-
 	output, err := like_service.GetPostLikes(c.Request.Context(), input)
 	if err != nil {
 		numan_error.RespondWithError(c, err)

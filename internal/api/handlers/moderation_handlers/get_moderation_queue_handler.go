@@ -98,9 +98,6 @@ func GetModerationQueueHandler(c *gin.Context) {
 			return
 		}
 	}
-	if input.Limit == 0 {
-		input.Limit = 50
-	}
 
 	output, errSvc := moderation_service.GetModerationQueue(c.Request.Context(), callerID, input)
 	if errSvc != nil {

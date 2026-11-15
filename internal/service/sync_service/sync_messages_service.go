@@ -24,6 +24,12 @@ import (
 // SyncMessages récupère les payloads frais et hydratés des messages ayant muté
 // depuis sinceMs (Création, Édition, Soft Delete).
 func SyncMessages(ctx context.Context, callerID int64, input sync_models.SyncMessagesInput) (sync_models.SyncMessagesOutput, error) {
+	if callerID <= 0 {
+		return sync_models.SyncMessagesOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return sync_models.SyncMessagesOutput{}, err
+	}
 
 	// ── ÉTAPE 1 : CONTRÔLE D'ACCÈS ZERO-TRUST (CASCADE) ─────────────────────
 

@@ -2,6 +2,7 @@ package map_models
 
 import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/media_models"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 )
 
 // POIView représente la vue publique enrichie d'un Point d'Intérêt renvoyée au client mobile/web.
@@ -57,6 +58,14 @@ type GetPoisInBBoxInput struct {
 	SWLng float64 `json:"sw_lng"`
 	NELat float64 `json:"ne_lat"`
 	NELng float64 `json:"ne_lng"`
+}
+
+// Validate vérifie les coordonnées et la cohérence géométrique de la Bounding Box.
+func (p *GetPoisInBBoxInput) Validate() error {
+	if p == nil {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Les coordonnées de la zone géographique sont nulles.", nil)
+	}
+	return ValidateBBox(p.SWLat, p.SWLng, p.NELat, p.NELng)
 }
 
 // GetPoisInBBoxOutput contient la liste des POIs trouvés dans la Bounding Box demandée.

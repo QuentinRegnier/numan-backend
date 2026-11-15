@@ -18,6 +18,9 @@ import (
 
 // DeleteComment gère la rétractation d'un commentaire (Purge L1, Soft Delete asynchrone et décrémentation du parent).
 func DeleteComment(ctx context.Context, callerID int64, input comment_models.DeleteCommentInput) error {
+	if err := input.Validate(); err != nil {
+		return err
+	}
 
 	// ── ÉTAPE 1 : VÉRIFICATION DES DROITS (SÉCURITÉ) ────────────────────────
 

@@ -19,6 +19,13 @@ import (
 
 // RevokeSession vérifie la propriété et détruit une session active spécifique.
 func RevokeSession(ctx context.Context, callerID int64, targetSessionID int64) error {
+	if callerID <= 0 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	deleteInput := auth_models.DeleteSessionInput{SessionID: targetSessionID}
+	if err := deleteInput.Validate(); err != nil {
+		return err
+	}
 	var sessionPayload auth_models.SessionsPayload
 
 	// ── ÉTAPE 1 : TENTATIVE L1 (RAM) ─────────────────────────────────────────

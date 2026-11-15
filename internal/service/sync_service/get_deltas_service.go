@@ -16,6 +16,12 @@ import (
 // GetDeltas interroge le Ledger granulaire SQLite (synchronisé via Redis)
 // pour récupérer toutes les conversations ayant subi une mutation depuis le timestamp fourni.
 func GetDeltas(ctx context.Context, callerID int64, input sync_models.GetDeltasInput) (sync_models.GetDeltasOutput, error) {
+	if callerID <= 0 {
+		return sync_models.GetDeltasOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return sync_models.GetDeltasOutput{}, err
+	}
 
 	// ── ÉTAPE 1 : DÉLÉGATION AU CACHE SERVICE (O(log N)) ────────────────────
 

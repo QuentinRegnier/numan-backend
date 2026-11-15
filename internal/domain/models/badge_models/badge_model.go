@@ -4,9 +4,11 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 )
 
 // BadgeMetadata represents the structured metadata for an individual badge or certification.
@@ -15,8 +17,39 @@ type BadgeMetadata struct {
 	ExpiresAt *time.Time `bson:"expires_at" json:"expires_at" msgpack:"expires_at"`
 }
 
+// Validate checks temporal integrity of a badge's issuance and optional expiration dates.
+func (m *BadgeMetadata) Validate() error {
+	if m == nil {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Les métadonnées du badge sont nulles.", nil)
+	}
+	if m.IssuedAt.IsZero() {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "La date d'émission du badge est requise.", nil)
+	}
+	if m.ExpiresAt != nil && m.ExpiresAt.Before(m.IssuedAt) {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "La date d'expiration du badge ne peut pas précéder la date d'émission.", nil)
+	}
+	return nil
+}
+
 // UserBadges represents a map of badge identifiers to their structured metadata.
 type UserBadges map[string]BadgeMetadata
+
+// Validate checks each badge key and metadata entry in the collection.
+func (b *UserBadges) Validate() error {
+	if b == nil {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "La collection de badges est nulle.", nil)
+	}
+	for key, meta := range *b {
+		if strings.TrimSpace(key) == "" || len(key) > 100 {
+			return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant de badge est invalide.", nil)
+		}
+		metaCopy := meta
+		if err := metaCopy.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // Scan implements the sql.Scanner interface for PostgreSQL JSONB scanning.
 func (b *UserBadges) Scan(value any) error {

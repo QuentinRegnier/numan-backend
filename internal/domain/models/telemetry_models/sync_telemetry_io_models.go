@@ -1,7 +1,17 @@
 package telemetry_models
 
+import "github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+
 type SyncTelemetryInput struct {
 	Payload SyncTelemetryPayload `json:"payload"`
+}
+
+// Validate vérifie la validité du payload de synchronisation télémétrique.
+func (p *SyncTelemetryInput) Validate() error {
+	if p == nil {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'entrée de synchronisation télémétrique est nulle.", nil)
+	}
+	return p.Payload.Validate()
 }
 
 type SyncTelemetryOutput struct {

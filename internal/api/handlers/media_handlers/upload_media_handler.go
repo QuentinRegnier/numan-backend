@@ -131,8 +131,8 @@ func UploadMediaHandler(c *gin.Context) {
 	var iaScore float64
 	if rawIAScore := strings.TrimSpace(c.PostForm("ia_score")); rawIAScore != "" {
 		parsedScore, errParse := strconv.ParseFloat(rawIAScore, 64)
-		if errParse != nil || parsedScore < 0.0 || parsedScore > 1.0 {
-			numan_error.RespondWithError(c, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le paramètre ia_score doit être un nombre compris entre 0.0 et 1.0.", errParse))
+		if errParse != nil {
+			numan_error.RespondWithError(c, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le paramètre ia_score doit être un nombre valide.", errParse))
 			return
 		}
 		iaScore = parsedScore

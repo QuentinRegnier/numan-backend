@@ -6,7 +6,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/post_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
-	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
@@ -18,10 +17,11 @@ import (
 
 // GetUserPosts retourne la timeline complète d'un utilisateur.
 func GetUserPosts(ctx context.Context, callerID int64, input post_models.GetUserPostsInput) ([]post_models.GetPostOutput, error) {
-	var errOffset, errLimit *numan_error.AppError
-	input.Offset, errOffset, input.Limit, errLimit = pkg.BatchVerif(input.Offset, input.Limit)
-	if errOffset != nil || errLimit != nil {
-		return []post_models.GetPostOutput{}, numan_error.Combine(errOffset, errLimit)
+	if err := input.Validate(); err != nil {
+		return []post_models.GetPostOutput{}, err
+	}
+	if input.Limit == 0 {
+		input.Limit = 50
 	}
 
 	// ── ÉTAPE 1 : TENTATIVE L1 (ZSET USER CACHE) ────────────────────────────

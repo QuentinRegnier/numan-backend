@@ -1,7 +1,12 @@
 package lite_models
 
 import (
+	"strings"
+	"unicode/utf8"
+
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
 
 type ConversationSettings struct {
@@ -14,6 +19,20 @@ type ConversationSettings struct {
 	SendSurveyPermission bool  `json:"send_survey_permission" bson:"send_survey_permission" msgpack:"send_survey_permission"`
 }
 
+// Validate vérifie les invariants métier des paramètres allégés de conversation.
+func (p *ConversationSettings) Validate() error {
+	if p == nil {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Les paramètres de conversation sont nuls.", nil)
+	}
+	if p.WritePermission < 0 || p.WritePermission > 2 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "La permission d'écriture doit être comprise entre 0 et 2.", nil)
+	}
+	if p.JoinWithLinkDuration < 0 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "La durée du lien d'invitation ne peut pas être négative.", nil)
+	}
+	return nil
+}
+
 type ConvLiteRequest struct {
 	ID            int64                `bson:"id" json:"id"`
 	Type          int                  `bson:"type" json:"type"`
@@ -23,4 +42,36 @@ type ConvLiteRequest struct {
 	LastMessageID int64                `bson:"last_message_id" json:"last_message_id"`
 	Settings      ConversationSettings `bson:"settings" json:"settings"` // Remplacement de Laws
 	ExternalLink  models.ExternalLinks `bson:"external_links" json:"external_links"`
+}
+
+// Validate vérifie les invariants métier d'une conversation allégée en cache.
+func (p *ConvLiteRequest) Validate() error {
+	if p == nil {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le payload allégé de conversation est nul.", nil)
+	}
+	if p.ID <= 0 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant de conversation doit être strictement positif.", nil)
+	}
+	if p.Type < variables.ConversationTypeDirect || p.Type > variables.ConversationTypeCommunityPub {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le type de conversation est invalide.", nil)
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(p.Title)) > 100 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le titre de la conversation ne peut pas dépasser 100 caractères.", nil)
+	}
+	if utf8.RuneCountInString(p.Description) > 500 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "La description de la conversation ne peut pas dépasser 500 caractères.", nil)
+	}
+	if p.AvatarID < 0 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant d'avatar ne peut pas être négatif.", nil)
+	}
+	if p.LastMessageID < 0 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant du dernier message ne peut pas être négatif.", nil)
+	}
+	if err := p.Settings.Validate(); err != nil {
+		return err
+	}
+	if err := p.ExternalLink.Validate(); err != nil {
+		return err
+	}
+	return nil
 }

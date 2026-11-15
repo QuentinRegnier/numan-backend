@@ -25,6 +25,12 @@ import (
 
 // DemoteMember rétrograde un administrateur au rang de membre standard (Rôle = 0).
 func DemoteMember(ctx context.Context, callerID int64, input member_models.DemoteMemberInput) (member_models.DemoteMemberOutput, error) {
+	if callerID <= 0 {
+		return member_models.DemoteMemberOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return member_models.DemoteMemberOutput{}, err
+	}
 
 	// ── ÉTAPE 1 : CONTRÔLE D'ACCÈS ET HIERARCHIE ────────────────────────────
 	callerMemberPayload, errSecurity := security_service.LeftMember(ctx, input.ConversationID, callerID)
@@ -81,6 +87,10 @@ func DemoteMember(ctx context.Context, callerID int64, input member_models.Demot
 	// ── ÉTAPE 4 : APPLICATION DE LA DESTITUTION ─────────────────────────────
 	targetMemberPayload.Role = variables.MemberRoleNormal
 	targetMemberPayload.UpdatedAt = domain.NowMillis()
+
+	if err := targetMemberPayload.Validate(); err != nil {
+		return member_models.DemoteMemberOutput{}, err
+	}
 
 	// ── ÉTAPE 5 : MISE À JOUR SYNCHRONE RAM L1 ──────────────────────────────
 	_ = object_cache_service.SetMemberInObjectCache(ctx, targetMemberPayload)

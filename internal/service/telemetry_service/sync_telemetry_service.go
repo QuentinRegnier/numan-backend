@@ -23,6 +23,13 @@ import (
 // ProcessSyncTelemetry orchestre la synchronisation bidirectionnelle du vecteur
 // comportemental, du Trust Score (ConfidenceScore serveur) et l'envoi asynchrone des Analytics aux Workers.
 func ProcessSyncTelemetry(ctx context.Context, callerID int64, input telemetry_models.SyncTelemetryInput) (telemetry_models.SyncTelemetryOutput, error) {
+	if callerID <= 0 {
+		return telemetry_models.SyncTelemetryOutput{}, numan_error.NewUnauthorized(numan_error.CodeUserIsNotIdentified, "Utilisateur non identifié.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return telemetry_models.SyncTelemetryOutput{}, err
+	}
+
 	// Résolution en O(1) RAM du Trust Score faisant autorité côté serveur
 	authoritativeTrustScore := variables.TrustScoreInitial
 	if callerLite, errLite := cache_service.GetUserLite(ctx, callerID); errLite == nil && callerLite.TrustScore > 0 {
@@ -62,6 +69,9 @@ func ProcessSyncTelemetry(ctx context.Context, callerID int64, input telemetry_m
 				ConfidenceScore: authoritativeTrustScore,
 				TimestampMs:     clientTelemetryTimestamp,
 			}
+			if err := newProfile.Validate(); err != nil {
+				return telemetry_models.SyncTelemetryOutput{}, err
+			}
 			_ = cache_service.SetTelemetryProfile(ctx, callerID, newProfile)
 		}
 
@@ -75,6 +85,10 @@ func ProcessSyncTelemetry(ctx context.Context, callerID int64, input telemetry_m
 			userSettingsPayload.TelemetryTags = input.Payload.TopTags
 			userSettingsPayload.TelemetryTimestamp = clientTelemetryTimestamp
 			userSettingsPayload.UpdatedAt = domain.NowMillis()
+
+			if err := userSettingsPayload.Validate(); err != nil {
+				return telemetry_models.SyncTelemetryOutput{}, err
+			}
 
 			// 1. Écrasement synchronisé de l'Object Cache LFU (L1)
 			_ = object_cache_service.SetUserSettings(ctx, userSettingsPayload)

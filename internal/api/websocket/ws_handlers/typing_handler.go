@@ -5,13 +5,19 @@ import (
 	"encoding/json"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/service/realtime_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/security_service"
 )
 
 type typingPayload struct {
-	ConversationID int64 `json:"conversation_id" binding:"required"` // J'ai ajouté le binding required ici pour que la validation fonctionne
+	ConversationID int64 `json:"conversation_id" binding:"required"`
+}
+
+func (p *typingPayload) Validate() error {
+	if p == nil || p.ConversationID <= 0 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant de conversation doit être strictement positif.", nil)
+	}
+	return nil
 }
 
 func HandleTyping(ctx context.Context, callerID int64, rawPayload []byte, isTyping bool) error {
@@ -20,8 +26,8 @@ func HandleTyping(ctx context.Context, callerID int64, rawPayload []byte, isTypi
 		return numan_error.NewBadRequest("INVALID_PAYLOAD", "Payload invalide.", err)
 	}
 
-	if err := pkg.ValidateStruct(&input); err != nil {
-		return numan_error.NewBadRequest("VALIDATION_FAILED", "Validation échouée.", err)
+	if err := input.Validate(); err != nil {
+		return err
 	}
 
 	// 1. SÉCURITÉ ZERO-TRUST : L1 Speed Cache

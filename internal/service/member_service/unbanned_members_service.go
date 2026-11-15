@@ -8,7 +8,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/member_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
-	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
@@ -23,7 +22,10 @@ import (
 // UnbanMembers annule le bannissement d'un lot d'utilisateurs.
 // L'action les passe au statut "A Quitté" (-1), leur permettant de postuler à nouveau.
 func UnbanMembers(ctx context.Context, callerID int64, input member_models.UnbanMembersInput) (member_models.UnbanMembersOutput, error) {
-	if err := pkg.ListLimitVerifDefault(input.TargetUserIDs); err != nil {
+	if callerID <= 0 {
+		return member_models.UnbanMembersOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
 		return member_models.UnbanMembersOutput{}, err
 	}
 

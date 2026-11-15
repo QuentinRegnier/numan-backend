@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/admin_models"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
@@ -17,6 +18,12 @@ import (
 
 // ExecuteAdminHardBanService exécute le bannissement définitif d'un compte (Hard Ban immédiat).
 func ExecuteAdminHardBanService(ctx context.Context, adminID int64, input admin_models.AdminHardBanInput) (admin_models.AdminHardBanOutput, error) {
+	if adminID <= 0 {
+		return admin_models.AdminHardBanOutput{}, numan_error.NewUnauthorized(numan_error.CodeUnauthorized, "Authentification requise.", nil)
+	}
+	if errVal := input.Validate(); errVal != nil {
+		return admin_models.AdminHardBanOutput{}, errVal
+	}
 	nowMs := domain.NowMillis()
 
 	// 1. Mise à 0.00 et marquage du compte banni en cache SPEED L1
@@ -54,6 +61,9 @@ func ExecuteAdminHardBanService(ctx context.Context, adminID int64, input admin_
 			ticket.CGUFeedbackNote = pkg.CleanStr(input.CGUFeedbackNote)
 			ticket.ResolutionOutcome = "hard_ban_executed"
 			ticket.UpdatedAt = nowMs
+			if errTicketVal := ticket.Validate(); errTicketVal != nil {
+				return admin_models.AdminHardBanOutput{}, errTicketVal
+			}
 			_ = cache_service.SaveModerationTicket(ctx, ticket)
 			_ = cache_service.RemoveTicketFromAllModerationQueues(ctx, ticket.ReportID)
 			_ = postgres.FuncArchiveClosedReport(ctx, ticket.ReportID, variables.ReportStateClosed, fmt.Sprintf("Hard Ban exécuté par l'Administration : %s", input.Reason))

@@ -28,7 +28,10 @@ import (
 // Login retourne la réponse de connexion (tokens directs ou challenge 2FA).
 // Les métadonnées complètes (profil, avatar) seront appelées plus tard via /sync.
 func Login(ctx context.Context, input auth_models.LoginInput, ipAddresses []string) (auth_models.LoginResponse, error) {
-	numan_log.Info(ctx).Str("email", input.Email).Msg("Tentative de connexion entrante...")
+	if err := input.Validate(); err != nil {
+		return auth_models.LoginResponse{}, err
+	}
+	numan_log.Info(ctx).Msg("Tentative de connexion entrante...")
 
 	var userPayload auth_models.UserPayload
 	var sessionPayload auth_models.SessionsPayload
@@ -176,6 +179,10 @@ func Login(ctx context.Context, input auth_models.LoginInput, ipAddresses []stri
 	newJWT, errJwt := pkg.GenerateToken(userPayload.ID, sessionPayload.FirebaseInstallationID, variables.JWTExpirationSeconds)
 	if errJwt != nil {
 		return auth_models.LoginResponse{}, numan_error.NewInternal()
+	}
+
+	if err := sessionPayload.Validate(); err != nil {
+		return auth_models.LoginResponse{}, err
 	}
 
 	// ── ÉTAPE 4 : SYNCHRONISATION L1 & SPEED CACHE (Cold Start User) ────────

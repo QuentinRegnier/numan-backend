@@ -105,10 +105,6 @@ func GetMessagesHandler(c *gin.Context) {
 		return
 	}
 
-	if input.Limit <= 0 || input.Limit > 100 {
-		input.Limit = 50
-	}
-
 	messages, err := message_service.GetMessages(c.Request.Context(), callerID, input)
 	if err != nil {
 		numan_error.RespondWithError(c, err)

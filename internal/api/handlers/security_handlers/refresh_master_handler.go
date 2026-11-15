@@ -126,8 +126,8 @@ func RefreshMaster(c *gin.Context) {
 		return
 	}
 
-	if err := pkg.ValidateStruct(&input); err != nil {
-		numan_error.RespondWithError(c, numan_error.NewBadRequest("VALIDATION_FAILED", "Validation failed.", err))
+	if err := input.Validate(); err != nil {
+		numan_error.RespondWithError(c, err)
 		return
 	}
 

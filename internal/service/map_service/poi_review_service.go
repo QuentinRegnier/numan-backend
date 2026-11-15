@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/map_models"
@@ -46,29 +45,11 @@ func CreatePOIReviewService(
 			nil,
 		)
 	}
-	if input.POIID <= 0 {
-		return map_models.CreatePOIReviewOutput{}, numan_error.NewBadRequest(
-			numan_error.CodeInvalidPayload,
-			"L'identifiant du point d'intérêt (poi_id) est invalide.",
-			nil,
-		)
-	}
-	if input.Rating < int8(variables.MinPOIReviewRating) || input.Rating > int8(variables.MaxPOIReviewRating) {
-		return map_models.CreatePOIReviewOutput{}, numan_error.NewBadRequest(
-			numan_error.CodeInvalidPayload,
-			fmt.Sprintf("La note doit être comprise entre %d et %d.", variables.MinPOIReviewRating, variables.MaxPOIReviewRating),
-			nil,
-		)
+	if err := input.Validate(); err != nil {
+		return map_models.CreatePOIReviewOutput{}, err
 	}
 
 	content := strings.TrimSpace(input.Content)
-	if utf8.RuneCountInString(content) > variables.MaxPOIReviewContentLength {
-		return map_models.CreatePOIReviewOutput{}, numan_error.NewBadRequest(
-			numan_error.CodeInvalidPayload,
-			fmt.Sprintf("Le commentaire ne peut pas dépasser %d caractères.", variables.MaxPOIReviewContentLength),
-			nil,
-		)
-	}
 
 	// 1. Récupération du POI parent (L1 -> L3)
 	poi, errPOI := getPOIWithFallback(ctx, input.POIID)
@@ -184,26 +165,8 @@ func GetPOIReviewsService(
 	callerID int64,
 	input map_models.GetPOIReviewsInput,
 ) (map_models.GetPOIReviewsOutput, error) {
-	if input.POIID <= 0 {
-		return map_models.GetPOIReviewsOutput{}, numan_error.NewBadRequest(
-			numan_error.CodeInvalidPayload,
-			"L'identifiant du point d'intérêt (poi_id) est obligatoire.",
-			nil,
-		)
-	}
-	if input.Offset < 0 {
-		return map_models.GetPOIReviewsOutput{}, numan_error.NewBadRequest(
-			numan_error.CodeInvalidPayload,
-			"L'offset de pagination doit être positif ou nul.",
-			nil,
-		)
-	}
-	if input.Limit < 0 {
-		return map_models.GetPOIReviewsOutput{}, numan_error.NewBadRequest(
-			numan_error.CodeInvalidPayload,
-			"La limite de pagination doit être strictement positive.",
-			nil,
-		)
+	if err := input.Validate(); err != nil {
+		return map_models.GetPOIReviewsOutput{}, err
 	}
 
 	limit := input.Limit
@@ -302,12 +265,8 @@ func DeletePOIReviewService(
 			nil,
 		)
 	}
-	if input.POIID <= 0 {
-		return map_models.DeletePOIReviewOutput{}, numan_error.NewBadRequest(
-			numan_error.CodeInvalidPayload,
-			"L'identifiant du point d'intérêt (poi_id) est obligatoire.",
-			nil,
-		)
+	if err := input.Validate(); err != nil {
+		return map_models.DeletePOIReviewOutput{}, err
 	}
 
 	poi, errPOI := getPOIWithFallback(ctx, input.POIID)

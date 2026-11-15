@@ -28,19 +28,8 @@ func ImportPOIsService(
 	adminID int64,
 	input map_models.ImportPOIsInput,
 ) (map_models.ImportPOIsOutput, error) {
-	if len(input.POIs) == 0 {
-		return map_models.ImportPOIsOutput{}, numan_error.NewBadRequest(
-			numan_error.CodeInvalidPayload,
-			"La liste des points d'intérêt à importer ne peut pas être vide.",
-			nil,
-		)
-	}
-	if len(input.POIs) > variables.MaxPOIImportBatch {
-		return map_models.ImportPOIsOutput{}, numan_error.NewBadRequest(
-			numan_error.CodeInvalidPayload,
-			fmt.Sprintf("L'import est limité à %d points d'intérêt par requête.", variables.MaxPOIImportBatch),
-			nil,
-		)
+	if err := input.Validate(); err != nil {
+		return map_models.ImportPOIsOutput{}, err
 	}
 
 	payloads, ids, err := buildAndValidatePOIPayloads(input.POIs)
@@ -83,23 +72,11 @@ func SetPOIsService(
 	adminID int64,
 	input map_models.SetPOIInput,
 ) (map_models.SetPOIOutput, error) {
-	items := input.NormalizeItems()
-	if len(items) == 0 {
-		return map_models.SetPOIOutput{}, numan_error.NewBadRequest(
-			numan_error.CodeInvalidPayload,
-			"Aucun point d'intérêt valide fourni pour la création.",
-			nil,
-		)
-	}
-	if len(items) > variables.MaxPOISetBatch {
-		return map_models.SetPOIOutput{}, numan_error.NewBadRequest(
-			numan_error.CodeInvalidPayload,
-			fmt.Sprintf("La création simultanée est limitée à %d points d'intérêt.", variables.MaxPOISetBatch),
-			nil,
-		)
+	if err := input.Validate(); err != nil {
+		return map_models.SetPOIOutput{}, err
 	}
 
-	payloads, ids, err := buildAndValidatePOIPayloads(items)
+	payloads, ids, err := buildAndValidatePOIPayloads(input.NormalizeItems())
 	if err != nil {
 		return map_models.SetPOIOutput{}, err
 	}
@@ -139,40 +116,13 @@ func UpdatePOIsService(
 	adminID int64,
 	input map_models.UpdatePOIInput,
 ) (map_models.UpdatePOIOutput, error) {
-	items := input.NormalizeItems()
-	if len(items) == 0 {
-		return map_models.UpdatePOIOutput{}, numan_error.NewBadRequest(
-			numan_error.CodeInvalidPayload,
-			"Aucun point d'intérêt valide fourni pour la mise à jour.",
-			nil,
-		)
-	}
-	if len(items) > variables.MaxPOIUpdateBatch {
-		return map_models.UpdatePOIOutput{}, numan_error.NewBadRequest(
-			numan_error.CodeInvalidPayload,
-			fmt.Sprintf("La mise à jour simultanée est limitée à %d points d'intérêt.", variables.MaxPOIUpdateBatch),
-			nil,
-		)
+	if err := input.Validate(); err != nil {
+		return map_models.UpdatePOIOutput{}, err
 	}
 
+	items := input.NormalizeItems()
 	targetIDs := make([]int64, 0, len(items))
-	seen := make(map[int64]struct{}, len(items))
 	for _, item := range items {
-		if item.ID <= 0 {
-			return map_models.UpdatePOIOutput{}, numan_error.NewBadRequest(
-				numan_error.CodeInvalidPayload,
-				"Chaque point d'intérêt à modifier doit posséder un identifiant strictement positif.",
-				nil,
-			)
-		}
-		if _, dup := seen[item.ID]; dup {
-			return map_models.UpdatePOIOutput{}, numan_error.NewBadRequest(
-				numan_error.CodeInvalidPayload,
-				"Identifiant de point d'intérêt en doublon dans la requête de mise à jour.",
-				nil,
-			)
-		}
-		seen[item.ID] = struct{}{}
 		targetIDs = append(targetIDs, item.ID)
 	}
 
@@ -292,31 +242,13 @@ func DeletePOIsService(
 	adminID int64,
 	input map_models.DeletePOIInput,
 ) (map_models.DeletePOIOutput, error) {
-	if len(input.POIIDs) == 0 {
-		return map_models.DeletePOIOutput{}, numan_error.NewBadRequest(
-			numan_error.CodeInvalidPayload,
-			"La liste des identifiants de points d'intérêt à supprimer ne peut pas être vide.",
-			nil,
-		)
-	}
-	if len(input.POIIDs) > variables.MaxPOIDeleteBatch {
-		return map_models.DeletePOIOutput{}, numan_error.NewBadRequest(
-			numan_error.CodeInvalidPayload,
-			fmt.Sprintf("La suppression simultanée est limitée à %d points d'intérêt.", variables.MaxPOIDeleteBatch),
-			nil,
-		)
+	if err := input.Validate(); err != nil {
+		return map_models.DeletePOIOutput{}, err
 	}
 
 	uniqueIDs := make([]int64, 0, len(input.POIIDs))
 	seen := make(map[int64]struct{}, len(input.POIIDs))
 	for _, id := range input.POIIDs {
-		if id <= 0 {
-			return map_models.DeletePOIOutput{}, numan_error.NewBadRequest(
-				numan_error.CodeInvalidPayload,
-				"Tous les identifiants de points d'intérêt doivent être strictement positifs.",
-				nil,
-			)
-		}
 		if _, exists := seen[id]; !exists {
 			seen[id] = struct{}{}
 			uniqueIDs = append(uniqueIDs, id)

@@ -18,13 +18,9 @@ import (
 // et génère l'URL HMAC pour le client mobile ou web.
 func GetSignedURLForClient(ctx context.Context, readerID int64, input media_models.SignMediaInput) (media_models.SignMediaOutput, error) {
 
-	// ── ÉTAPE 0 : ANTI-AMBIGUÏTÉ DU CONTEXTE ────────────────────────────────
-	if input.PostID > 0 && input.ConversationID > 0 {
-		return media_models.SignMediaOutput{}, numan_error.NewBadRequest(
-			"AMBIGUOUS_CONTEXT",
-			"Impossible de spécifier simultanément un post_id et un conversation_id.",
-			nil,
-		)
+	// ── ÉTAPE 0 : VALIDATION DU PAYLOAD & ANTI-AMBIGUÏTÉ DU CONTEXTE ────────
+	if err := input.Validate(); err != nil {
+		return media_models.SignMediaOutput{}, err
 	}
 
 	// ── ÉTAPE 1 : RÉCUPÉRATION DU MÉDIA (CASCADE L1 -> L2 -> L3) ────────────

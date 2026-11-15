@@ -25,10 +25,14 @@ import (
 // GetConversationMembers extrait les membres d'une conversation avec pagination,
 // vérifie les droits d'accès et hydrate les profils avec auto-guérison.
 func GetConversationMembers(ctx context.Context, callerID int64, input member_models.GetConversationMembersInput) (member_models.GetConversationMembersOutput, error) {
-	var err_offset, err_limit numan_error.Error
-	input.Offset, err_offset, input.Limit, err_limit = pkg.BatchVerif(input.Offset, input.Limit)
-	if err_offset != nil || err_limit != nil {
-		return member_models.GetConversationMembersOutput{}, numan_error.Combine(err_offset, err_limit)
+	if callerID <= 0 {
+		return member_models.GetConversationMembersOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return member_models.GetConversationMembersOutput{}, err
+	}
+	if input.Limit == 0 {
+		input.Limit = 50
 	}
 
 	// ── ÉTAPE 1 : VÉRIFICATION D'APPARTENANCE (SÉCURITÉ) ──────────────────

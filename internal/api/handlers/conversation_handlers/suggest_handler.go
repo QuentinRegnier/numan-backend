@@ -78,11 +78,6 @@ func SuggestContactsHandler(c *gin.Context) {
 		return
 	}
 
-	// Application manuelle de la valeur par défaut pour la pagination JSON
-	if input.Limit == 0 {
-		input.Limit = 20
-	}
-
 	output, errService := conversation_service.SuggestContacts(c.Request.Context(), callerID, input)
 	if errService != nil {
 		numan_error.RespondWithError(c, errService)

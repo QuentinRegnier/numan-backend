@@ -6,7 +6,6 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/conversation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/service/conversation_service"
 )
 
@@ -16,8 +15,8 @@ func HandleReadReceipt(ctx context.Context, callerID int64, rawPayload []byte) (
 	if err := json.Unmarshal(rawPayload, &input); err != nil {
 		return nil, numan_error.NewBadRequest("INVALID_PAYLOAD", "Payload invalide.", err)
 	}
-	if err := pkg.ValidateStruct(&input); err != nil {
-		return nil, numan_error.NewBadRequest("VALIDATION_FAILED", "Validation échouée.", err)
+	if err := input.Validate(); err != nil {
+		return nil, err
 	}
 
 	output, err := conversation_service.MarkConversationAsRead(ctx, callerID, input.ConversationID)

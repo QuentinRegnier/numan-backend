@@ -6,7 +6,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/comment_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/media_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/post_models"
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/comment_service"
@@ -21,16 +20,10 @@ import (
 // GetPosts orchestre la récupération d'une liste de posts, applique le filtrage de
 // visibilité et hydrate massivement les relations (Commentaires, Médias, Auteur).
 func GetPosts(ctx context.Context, callerID int64, input post_models.GetPostInput) ([]post_models.GetPostOutput, error) {
-	// 1. Sécurisation de la taille du lot (Correction de l'appel au package security)
-	if err := pkg.ListLimitVerifDefault(input.PostIDs); err != nil {
-		return nil, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "La liste des publications demandées est invalide.", nil)
+	if err := input.Validate(); err != nil {
+		return nil, err
 	}
 	uniquePostIDs := pkg.SliceUniqueInt64(input.PostIDs)
-
-	// 2. Fin du "nil" silencieux : Si la liste est vide, on lève une vraie erreur métier[cite: 9]
-	if len(uniquePostIDs) == 0 {
-		return nil, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "La liste des publications demandées est vide.", nil)
-	}
 
 	hydratedPostsResults := make([]post_models.GetPostOutput, 0, len(uniquePostIDs))
 

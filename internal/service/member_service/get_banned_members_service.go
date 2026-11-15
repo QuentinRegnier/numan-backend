@@ -21,6 +21,15 @@ import (
 
 // GetBannedMembers retourne la liste paginée des utilisateurs bannis d'une conversation.
 func GetBannedMembers(ctx context.Context, callerID int64, input member_models.GetBannedMembersInput) (member_models.GetBannedMembersOutput, error) {
+	if callerID <= 0 {
+		return member_models.GetBannedMembersOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return member_models.GetBannedMembersOutput{}, err
+	}
+	if input.Limit == 0 {
+		input.Limit = 50
+	}
 
 	// ── ÉTAPE 1 : CONTRÔLE D'ACCÈS ZERO-TRUST ────────────────────────────────
 	callerMemberPayload, errSecurity := security_service.LeftMember(ctx, input.ConversationID, callerID)

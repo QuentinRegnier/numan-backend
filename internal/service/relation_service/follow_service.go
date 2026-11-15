@@ -20,6 +20,12 @@ import (
 
 // ToggleFollow gère l'abonnement et le désabonnement avec idempotence en RAM.
 func ToggleFollow(ctx context.Context, callerID int64, input relation_models.RelationActionInput) error {
+	if callerID <= 0 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return err
+	}
 
 	// ── ÉTAPE 1 : RÈGLE MÉTIER (AUTO-FOLLOW INTERDIT) ───────────────────────
 	if callerID == input.TargetID {
@@ -73,6 +79,10 @@ func ToggleFollow(ctx context.Context, callerID int64, input relation_models.Rel
 		State:       newRelationState,
 		CreatedAt:   domain.TimeToMillis(currentTime),
 		UpdatedAt:   domain.TimeToMillis(currentTime),
+	}
+
+	if err := relationPayload.Validate(); err != nil {
+		return err
 	}
 
 	// PartitionKey = targetID pour centraliser les requêtes sur le shard de la cible.

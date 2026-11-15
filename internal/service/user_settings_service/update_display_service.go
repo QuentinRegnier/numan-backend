@@ -19,6 +19,12 @@ import (
 
 // UpdateDisplay fusionne les réglages esthétiques et de contenu puis délègue la sauvegarde au Write-Behind.
 func UpdateDisplay(ctx context.Context, userID int64, input user_settings_models.UpdateDisplayInput) (user_settings_models.UpdateDisplayOutput, error) {
+	if userID <= 0 {
+		return user_settings_models.UpdateDisplayOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return user_settings_models.UpdateDisplayOutput{}, err
+	}
 
 	// ── ÉTAPE 1 : RÉCUPÉRATION DU PAYLOAD (CASCADE L1 -> L2 -> L3) ──────────
 	userSettingsPayload, errCache := object_cache_service.GetUserSettingsCascade(ctx, userID)
@@ -31,6 +37,10 @@ func UpdateDisplay(ctx context.Context, userID int64, input user_settings_models
 	userSettingsPayload.DisplayAndContent.Theme = input.Theme
 	userSettingsPayload.DisplayAndContent.SafeForCommute = input.SafeForCommute
 	userSettingsPayload.UpdatedAt = domain.NowMillis()
+
+	if err := userSettingsPayload.Validate(); err != nil {
+		return user_settings_models.UpdateDisplayOutput{}, err
+	}
 
 	// ── ÉTAPE 3 : SAUVEGARDE L1 EN RAM ──────────────────────────────────────
 	if errSet := object_cache_service.SetUserSettings(ctx, userSettingsPayload); errSet != nil {

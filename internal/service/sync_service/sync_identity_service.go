@@ -22,6 +22,13 @@ import (
 // SyncIdentity synchronise uniquement l'identité (Profil et Settings) pour le Cold Start de l'App.
 // Utilise le principe de Delta Sync : on ne renvoie la donnée que si elle a muté côté serveur.
 func SyncIdentity(ctx context.Context, callerID int64, input sync_models.SyncIdentityInput) (sync_models.SyncIdentityOutput, error) {
+	if callerID <= 0 {
+		return sync_models.SyncIdentityOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return sync_models.SyncIdentityOutput{}, err
+	}
+
 	output := sync_models.SyncIdentityOutput{
 		ProfileUpdated:  false,
 		SettingsUpdated: false,

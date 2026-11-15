@@ -149,6 +149,10 @@ func initiateLoginTwoFactorChallenge(
 		}
 	}
 
+	if err := preAuthSession.Validate(); err != nil {
+		return auth_models.LoginResponse{}, err
+	}
+
 	if errCache := cache_service.SavePreAuthSession(ctx, preAuthSession); errCache != nil {
 		return auth_models.LoginResponse{}, errCache
 	}
@@ -179,6 +183,9 @@ func initiateSignupTwoFactorChallenge(
 		IPAddresses:      []string{ipAddress},
 		Attempts:         0,
 		CreatedAt:        domain.NowMillis(),
+	}
+	if err := preAuthSession.Validate(); err != nil {
+		return auth_models.SignUpResponse{}, err
 	}
 
 	response := auth_models.SignUpResponse{

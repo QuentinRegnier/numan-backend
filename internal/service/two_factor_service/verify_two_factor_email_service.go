@@ -14,6 +14,9 @@ import (
 
 // VerifyTwoFactorEmail valide une preuve 2FA par code Email à 6 chiffres (Login ou SignUp).
 func VerifyTwoFactorEmail(ctx context.Context, input two_factor_models.VerifyTwoFactorEmailInput) (two_factor_models.VerifyTwoFactorOutput, error) {
+	if err := input.Validate(); err != nil {
+		return two_factor_models.VerifyTwoFactorOutput{}, err
+	}
 	preAuth, err := cache_service.GetPreAuthSession(ctx, input.PreAuthToken)
 	if err != nil {
 		return two_factor_models.VerifyTwoFactorOutput{}, err

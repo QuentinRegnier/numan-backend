@@ -1,5 +1,12 @@
 package map_models
 
+import (
+	"fmt"
+
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
+)
+
 // SetPOIInput permet l'ajout d'un ou plusieurs POIs par un administrateur.
 // Supporte un tableau `pois` ou les champs d'un POI unique à la racine du JSON pour flexibilité maximale.
 type SetPOIInput struct {
@@ -18,6 +25,46 @@ type SetPOIInput struct {
 	MediaIDs       []int64              `json:"media_ids,omitempty" bson:"media_ids,omitempty" msgpack:"media_ids,omitempty"`
 	GoogleMapsLink string               `json:"google_maps_link,omitempty" bson:"google_maps_link,omitempty" msgpack:"google_maps_link,omitempty"`
 	AppleMapsLink  string               `json:"apple_maps_link,omitempty" bson:"apple_maps_link,omitempty" msgpack:"apple_maps_link,omitempty"`
+}
+
+// Validate vérifie les contraintes métier de la requête de création d'un ou plusieurs POIs.
+func (p *SetPOIInput) Validate() error {
+	if p == nil {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le payload de création des POIs est nul.", nil)
+	}
+	items := p.NormalizeItems()
+	if len(items) == 0 {
+		return numan_error.NewBadRequest(
+			numan_error.CodeInvalidPayload,
+			"Aucun point d'intérêt valide fourni pour la création.",
+			nil,
+		)
+	}
+	if len(items) > variables.MaxPOISetBatch {
+		return numan_error.NewBadRequest(
+			numan_error.CodeInvalidPayload,
+			fmt.Sprintf("La création simultanée est limitée à %d points d'intérêt.", variables.MaxPOISetBatch),
+			nil,
+		)
+	}
+	seenIDs := make(map[int64]struct{}, len(items))
+	for i := range items {
+		item := items[i]
+		if err := item.Validate(); err != nil {
+			return err
+		}
+		if item.ID > 0 {
+			if _, dup := seenIDs[item.ID]; dup {
+				return numan_error.NewBadRequest(
+					numan_error.CodeInvalidPayload,
+					fmt.Sprintf("L'identifiant de point d'intérêt %d est présent en doublon dans le lot.", item.ID),
+					nil,
+				)
+			}
+			seenIDs[item.ID] = struct{}{}
+		}
+	}
+	return nil
 }
 
 // NormalizeItems extrait la liste unifiée des POIs à créer depuis SetPOIInput.

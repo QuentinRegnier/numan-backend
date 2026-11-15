@@ -23,6 +23,12 @@ import (
 // LeaveConversation gère la suppression locale (MP) et le départ (Groupe/Communauté),
 // incluant le transfert de propriété obligatoire pour l'Owner.
 func LeaveConversation(ctx context.Context, callerID int64, input conversation_models.LeaveConversationInput) (conversation_models.LeaveConversationOutput, error) {
+	if callerID <= 0 {
+		return conversation_models.LeaveConversationOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return conversation_models.LeaveConversationOutput{}, err
+	}
 
 	// ── ÉTAPE 1 : CONTRÔLE D'ACCÈS ET RÉCUPÉRATION L1 ───────────────────────
 	// LeftMember renvoie déjà une AppError formatée si nécessaire

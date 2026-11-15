@@ -299,6 +299,13 @@ func EvaluateAndTriggerAutoReport(
 		CreatedAt:        nowMs,
 		UpdatedAt:        nowMs,
 	}
+	if errVal := autoReportPayload.Validate(); errVal != nil {
+		return false, shouldQuarantinePost, priority
+	}
+	if errVal := ticketRec.Validate(); errVal != nil {
+		return false, shouldQuarantinePost, priority
+	}
+
 	if redis.ModerationTickets != nil {
 		_ = redis.ModerationTickets.SetObject(ctx, reportID, ticketRec)
 	}

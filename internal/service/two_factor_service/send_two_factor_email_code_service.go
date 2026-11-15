@@ -15,6 +15,9 @@ import (
 // SendTwoFactorEmailCode génère et expédie un nouveau code OTP par email pour une session PreAuth active.
 // Permet à l'utilisateur qui a plusieurs méthodes 2FA de choisir l'Email à la volée lors du Login.
 func SendTwoFactorEmailCode(ctx context.Context, input two_factor_models.SendTwoFactorEmailInput) error {
+	if err := input.Validate(); err != nil {
+		return err
+	}
 	preAuth, err := cache_service.GetPreAuthSession(ctx, input.PreAuthToken)
 	if err != nil {
 		return err
@@ -43,6 +46,9 @@ func SendTwoFactorEmailCode(ctx context.Context, input two_factor_models.SendTwo
 	}
 
 	preAuth.CodeHash = codeHash
+	if err := preAuth.Validate(); err != nil {
+		return err
+	}
 	if errSave := cache_service.SavePreAuthSession(ctx, preAuth); errSave != nil {
 		return errSave
 	}

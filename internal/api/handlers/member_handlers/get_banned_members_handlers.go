@@ -93,11 +93,6 @@ func GetBannedMembersHandler(c *gin.Context) {
 		return
 	}
 
-	// Gestion de la valeur par défaut pour le JSON
-	if input.Limit == 0 {
-		input.Limit = 50
-	}
-
 	output, errOut := member_service.GetBannedMembers(c.Request.Context(), callerID, input)
 	if errOut != nil {
 		numan_error.RespondWithError(c, errOut)

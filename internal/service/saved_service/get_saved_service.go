@@ -21,6 +21,15 @@ import (
 // GetSavedPosts récupère la liste paginée des favoris d'un utilisateur
 // avec la garantie d'auto-guérison en cascade L1 -> L2 -> L3.
 func GetSavedPosts(ctx context.Context, callerID int64, input saved_models.GetSavedInput) ([]post_models.GetPostOutput, error) {
+	if callerID <= 0 {
+		return nil, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant de l'utilisateur doit être strictement positif.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return nil, err
+	}
+	if input.Limit == 0 {
+		input.Limit = 50
+	}
 	var targetPostIDs []int64
 
 	// ── ÉTAPE 1 : TENTATIVE L1 (RAM REDIS ZSET) ─────────────────────────────

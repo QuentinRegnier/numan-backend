@@ -23,13 +23,15 @@ import (
 // applique le Shadowban préventif si requis (Impact > 0.40 ou 3 signalements standards),
 // et envoie le ticket aux workers pour persistance dans PostgreSQL.
 func SubmitReport(ctx context.Context, callerID int64, input report_models.CreateReportInput) error {
+	if callerID <= 0 {
+		return numan_error.NewUnauthorized(numan_error.CodeUnauthorized, "Authentification requise.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return err
+	}
 	currentTime := domain.NowTime()
 
 	// ── ÉTAPE 1 : CALCUL DU SCORE D'URGENCE ÉCONOMIQUE & TRUST IMPACT (O(1)) ─
-	err := pkg.ListLimitVerif(input.TargetIDs, variables.MaxReportTargets)
-	if err != nil {
-		return err
-	}
 
 	economicValueScore := calculateEconomicImportance(ctx, input)
 
@@ -152,6 +154,12 @@ func SubmitReport(ctx context.Context, callerID int64, input report_models.Creat
 		ReporterIDs:      []int64{callerID},
 		CreatedAt:        nowMs,
 		UpdatedAt:        nowMs,
+	}
+	if errVal := reportPayload.Validate(); errVal != nil {
+		return errVal
+	}
+	if errVal := ticketRecord.Validate(); errVal != nil {
+		return errVal
 	}
 	_ = cache_service.SaveModerationTicket(ctx, ticketRecord)
 	_ = cache_service.IndexTicketInModerationQueue(ctx, variables.ModerationQueueActive, reportID, finalPriority)

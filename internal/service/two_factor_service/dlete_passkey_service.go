@@ -13,6 +13,12 @@ import (
 
 // DeletePasskey révoque une Passkey appartenant à l'utilisateur et ajuste son bitmask s'il n'en reste plus.
 func DeletePasskey(ctx context.Context, userID int64, input two_factor_models.DeletePasskeyInput) error {
+	if userID <= 0 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return err
+	}
 	passkeys, err := object_cache_service.GetUserPasskeysCascade(ctx, userID)
 	if err != nil {
 		return err
@@ -43,6 +49,9 @@ func DeletePasskey(ctx context.Context, userID int64, input two_factor_models.De
 				userPayload.TwoFactorEnabled = false
 			}
 			userPayload.UpdatedAt = domain.NowMillis()
+			if err := userPayload.Validate(); err != nil {
+				return err
+			}
 			_ = redis.EnqueueDB(ctx, userPayload.ID, userPayload.ID, redis.EntityUser, redis.ActionUpdate, userPayload, redis.TargetAll)
 		}
 	}

@@ -216,8 +216,8 @@ func TestActivateMediaBatchWithMaxIAScore(t *testing.T) {
 	ctx := context.Background()
 
 	ownerID := int64(8001)
-	m1 := media_models.MediaPayload{ID: 101, OwnerID: ownerID, Visibility: variables.MediaVisibilityPending, IAScore: 0.12}
-	m2 := media_models.MediaPayload{ID: 102, OwnerID: ownerID, Visibility: variables.MediaVisibilityPending, IAScore: 0.78}
+	m1 := media_models.MediaPayload{ID: 101, OwnerID: ownerID, StoragePath: "users/8001/media/101.avif", Visibility: variables.MediaVisibilityPending, IAScore: 0.12}
+	m2 := media_models.MediaPayload{ID: 102, OwnerID: ownerID, StoragePath: "users/8001/media/102.avif", Visibility: variables.MediaVisibilityPending, IAScore: 0.78}
 	require.NoError(t, object_cache_service.SetMediaInObjectCache(ctx, m1))
 	require.NoError(t, object_cache_service.SetMediaInObjectCache(ctx, m2))
 

@@ -32,6 +32,9 @@ func PublishTrustScoreEvent(ctx context.Context, userID int64, eventType string,
 		Reason:       reason,
 		OccurredAtMs: domain.NowMillis(),
 	}
+	if errVal := evt.Validate(); errVal != nil {
+		return errVal
+	}
 	payloadBytes, err := json.Marshal(evt)
 	if err != nil {
 		return numan_error.NewInternal(err)
@@ -45,6 +48,48 @@ func PublishTrustScoreEvent(ctx context.Context, userID int64, eventType string,
 		)
 	}
 	return nil
+}
+
+// ModBatchLikeService valide et empile un événement de réputation positif groupé pour un lot d'auteurs.
+func ModBatchLikeService(ctx context.Context, callerID int64, input moderation_models.ModBatchLikeInput) (moderation_models.ModBatchLikeOutput, error) {
+	if callerID <= 0 {
+		return moderation_models.ModBatchLikeOutput{}, numan_error.NewUnauthorized(numan_error.CodeUnauthorized, "Authentification requise.", nil)
+	}
+	if errVal := input.Validate(); errVal != nil {
+		return moderation_models.ModBatchLikeOutput{}, errVal
+	}
+
+	nowMs := domain.NowMillis()
+	eventID := pkg.GenerateID()
+	evt := moderation_models.TrustScoreEventPayload{
+		EventID:      eventID,
+		UserIDs:      input.AuthorUserIDs,
+		EventType:    variables.TrustTriggerModBatchLike,
+		Reason:       pkg.CleanStr(input.Reason),
+		OccurredAtMs: nowMs,
+	}
+	if errVal := evt.Validate(); errVal != nil {
+		return moderation_models.ModBatchLikeOutput{}, errVal
+	}
+
+	payloadBytes, errMarshal := json.Marshal(evt)
+	if errMarshal != nil {
+		return moderation_models.ModBatchLikeOutput{}, numan_error.NewInternal(errMarshal)
+	}
+	if errQueue := redis.WorkerQueue.LPush(ctx, variables.WorkerQueueTrustScore, payloadBytes); errQueue != nil {
+		return moderation_models.ModBatchLikeOutput{}, numan_error.NewAppError(
+			http.StatusInternalServerError,
+			numan_error.CodeCacheError,
+			"Impossible d'enregistrer l'action groupée dans la file de réputation.",
+			errQueue,
+		)
+	}
+
+	return moderation_models.ModBatchLikeOutput{
+		EventID:    eventID,
+		UsersCount: len(input.AuthorUserIDs),
+		QueuedAt:   nowMs,
+	}, nil
 }
 
 // ApplyPreventiveShadowbanToPost masque préventivement un post (Visibility = 3) et ses médias (Visibility = 2) en L1, L2 et L3.
@@ -85,6 +130,10 @@ func ApplyPreventiveShadowbanToPost(ctx context.Context, postID int64) {
 
 // ReviewQuarantineMedia traite la décision d'un modérateur sur un média/post en quarantaine.
 func ReviewQuarantineMedia(ctx context.Context, moderatorID int64, input moderation_models.ReviewQuarantineInput) (moderation_models.ReviewQuarantineOutput, error) {
+	if errVal := input.Validate(); errVal != nil {
+		return moderation_models.ReviewQuarantineOutput{}, errVal
+	}
+
 	// Vérification de sécurité : le modérateur doit avoir Grade >= UserGradeModerator (3)
 	modLite, errMod := cache_service.GetUserLite(ctx, moderatorID)
 	if errMod != nil || modLite.Grade < variables.UserGradeModerator {
@@ -192,6 +241,10 @@ func ReviewQuarantineMedia(ctx context.Context, moderatorID int64, input moderat
 
 // GetModerationQueue récupère les médias en quarantaine et les signalements en attente (triés par priorité).
 func GetModerationQueue(ctx context.Context, callerID int64, input moderation_models.GetModerationQueueInput) (moderation_models.GetModerationQueueOutput, error) {
+	if errVal := input.Validate(); errVal != nil {
+		return moderation_models.GetModerationQueueOutput{}, errVal
+	}
+
 	modLite, errMod := cache_service.GetUserLite(ctx, callerID)
 	if errMod != nil || modLite.Grade < variables.UserGradeModerator {
 		return moderation_models.GetModerationQueueOutput{}, numan_error.NewForbidden(

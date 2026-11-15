@@ -1,5 +1,12 @@
 package two_factor_models
 
+import (
+	"strings"
+	"unicode/utf8"
+
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+)
+
 type PasskeyPayload struct {
 	ID              int64    `bson:"id" json:"id" msgpack:"id"`
 	UserID          int64    `bson:"user_id" json:"user_id" msgpack:"user_id"`
@@ -12,4 +19,30 @@ type PasskeyPayload struct {
 	Transports      []string `bson:"transports" json:"transports" msgpack:"transports"`
 	CreatedAt       int64    `bson:"created_at" json:"created_at" msgpack:"created_at"`
 	UpdatedAt       int64    `bson:"updated_at" json:"updated_at" msgpack:"updated_at"`
+}
+
+// Validate vérifie les invariants métier d'une passkey persistée.
+func (p *PasskeyPayload) Validate() error {
+	if p == nil {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le payload de la passkey est nul.", nil)
+	}
+	if p.ID <= 0 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant de la passkey doit être strictement positif.", nil)
+	}
+	if p.UserID <= 0 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur doit être strictement positif.", nil)
+	}
+	if strings.TrimSpace(p.CredentialID) == "" {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant WebAuthn (credential_id) est obligatoire.", nil)
+	}
+	if len(p.PublicKey) == 0 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "La clé publique de la passkey est obligatoire.", nil)
+	}
+	if p.SignCount < 0 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le compteur de signatures ne peut pas être négatif.", nil)
+	}
+	if utf8.RuneCountInString(p.DeviceName) > 64 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le nom de l'appareil ne peut pas dépasser 64 caractères.", nil)
+	}
+	return nil
 }

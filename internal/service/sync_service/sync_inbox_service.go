@@ -19,6 +19,12 @@ import (
 // SyncInbox vérifie le delta temporel en RAM (O(1)) et ne retourne l'Inbox hydratée
 // que si le serveur possède des données plus récentes que le client.
 func SyncInbox(ctx context.Context, callerID int64, input sync_models.SyncInboxInput) (sync_models.SyncInboxOutput, error) {
+	if callerID <= 0 {
+		return sync_models.SyncInboxOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return sync_models.SyncInboxOutput{}, err
+	}
 
 	syncOutput := sync_models.SyncInboxOutput{
 		NeedUpdate: false,

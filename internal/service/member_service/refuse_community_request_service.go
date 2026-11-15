@@ -25,6 +25,12 @@ import (
 
 // RefuseCommunityRequest rejette une candidature en attente et passe le membre au rôle -4 (Rejeté).
 func RefuseCommunityRequest(ctx context.Context, callerID int64, input member_models.RefuseCommunityRequestInput) (member_models.RefuseCommunityRequestOutput, error) {
+	if callerID <= 0 {
+		return member_models.RefuseCommunityRequestOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return member_models.RefuseCommunityRequestOutput{}, err
+	}
 
 	// ── ÉTAPE 1 : CONTRÔLE D'ACCÈS DU DÉCIDEUR ──────────────────────────────
 
@@ -77,6 +83,10 @@ func RefuseCommunityRequest(ctx context.Context, callerID int64, input member_mo
 
 	targetMemberPayload.Role = variables.MemberRolePendingApproval // Devient -4 (Rejeté)
 	targetMemberPayload.UpdatedAt = domain.NowMillis()
+
+	if err := targetMemberPayload.Validate(); err != nil {
+		return member_models.RefuseCommunityRequestOutput{}, err
+	}
 
 	// ── ÉTAPE 4 : MISE À JOUR SYNCHRONE DES CACHES RAM L1 ───────────────────
 

@@ -24,6 +24,18 @@ import (
 
 // GetMessages récupère l'historique d'une conversation avec une hydratation riche (Avatars, pseudos, réactions).
 func GetMessages(ctx context.Context, callerID int64, input message_models.GetMessagesInput) ([]message_models.MessageView, error) {
+	if callerID <= 0 {
+		return nil, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return nil, err
+	}
+	if input.Limit == 0 {
+		input.Limit = 50
+	}
+	if input.Direction == "" {
+		input.Direction = "top"
+	}
 
 	// ── ÉTAPE 1 : CONTRÔLE D'ACCÈS (SÉCURITÉ ZERO-TRUST) ────────────────────
 

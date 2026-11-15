@@ -82,11 +82,6 @@ func GetNotificationsHandler(c *gin.Context) {
 		return
 	}
 
-	// 🛡️ BOUCLIER DE PAGINATION
-	if input.Limit <= 0 || input.Limit > 100 {
-		input.Limit = 50
-	}
-
 	notifs, err := notification_service.GetNotifications(c.Request.Context(), callerID, input)
 	if err != nil {
 		numan_error.RespondWithError(c, err)

@@ -21,6 +21,12 @@ import (
 
 // ConfirmTwoFactorSetup valide la preuve d'enrôlement et active la méthode dans le bitmask de l'utilisateur.
 func ConfirmTwoFactorSetup(ctx context.Context, userID int64, input two_factor_models.ConfirmTwoFactorSetupInput) error {
+	if userID <= 0 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return err
+	}
 	session, err := cache_service.GetPreAuthSession(ctx, input.SetupToken)
 	if err != nil {
 		return err
@@ -101,6 +107,9 @@ func ConfirmTwoFactorSetup(ctx context.Context, userID int64, input two_factor_m
 			CreatedAt:       nowMs,
 			UpdatedAt:       nowMs,
 		}
+		if err := newPasskey.Validate(); err != nil {
+			return err
+		}
 
 		_ = object_cache_service.SetPasskeyInObjectCache(ctx, newPasskey)
 		if errQueuePk := redis.EnqueueDB(ctx, newPasskey.ID, userID, redis.EntityPasskey, redis.ActionCreate, newPasskey, redis.TargetAll); errQueuePk != nil {
@@ -114,6 +123,10 @@ func ConfirmTwoFactorSetup(ctx context.Context, userID int64, input two_factor_m
 	userPayload.TwoFactorEnabled = true
 	userPayload.TwoFactorMethod |= methodToBit(session.Method)
 	userPayload.UpdatedAt = nowMs
+
+	if err := userPayload.Validate(); err != nil {
+		return err
+	}
 
 	_ = cache_service.DeletePreAuthSession(ctx, session.Token)
 

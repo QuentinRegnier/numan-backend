@@ -27,25 +27,8 @@ import (
 // d'identification, en activant les médias et en calculant le vecteur sémantique.
 func CreatePost(ctx context.Context, callerID int64, input post_models.CreatePostInput) (int64, error) {
 	// ── ÉTAPE 0 : VÉRIFICATION DE LA CONFORMITÉ DU PAYLOAD  ────────────
-
-	if len(input.MediaIDs) == 0 {
-		return -1, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Au moins un média est requis.", nil)
-	}
-
-	if err_hashtags := pkg.ListLimitVerif(pkg.SliceUniqueStr(input.Hashtags), variables.MaxHashtagsPerPost); err_hashtags != nil {
-		return -1, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le nombre de hashtags dépasse la limite autorisée.", err_hashtags)
-	}
-
-	if err_identifiers := pkg.ListLimitVerif(pkg.SliceUniqueInt64(input.Identifiers), variables.MaxIdentifiersPerPost); err_identifiers != nil {
-		return -1, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le nombre d'identifiants dépasse la limite autorisée.", err_identifiers)
-	}
-
-	if err_media := pkg.ListLimitVerif(pkg.SliceUniqueInt64(input.MediaIDs), variables.MaxMediaPerPost); err_media != nil {
-		return -1, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le nombre de médias dépasse la limite autorisée.", err_media)
-	}
-
-	if input.Visibility < variables.PostVisibilityAll || input.Visibility > variables.PostVisibilityFriend {
-		return -1, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Niveau de visibilité non supporté.", nil)
+	if err := input.Validate(); err != nil {
+		return -1, err
 	}
 
 	// ── ÉTAPE 1 : BOUCLIER DE CONFIDENTIALITÉ (TAGS ET MENTIONS) ────────────
@@ -180,6 +163,10 @@ func CreatePost(ctx context.Context, callerID int64, input post_models.CreatePos
 
 	// ── ÉTAPE 6 : VECTORISATION SÉMANTIQUE SYNCHRONE (O(1)) ─────────────────
 	postPayload.Vector = algorithm_service.ComputeContentVectorFull(ctx, postPayload, nil)
+
+	if err := postPayload.Validate(); err != nil {
+		return -1, err
+	}
 
 	// ── ÉTAPE 7 : CACHE REDIS L1 ET INDEXATION TIMELINE ─────────────────────
 	if errCache := object_cache_service.SetPostInObjectCache(ctx, postPayload); errCache != nil {

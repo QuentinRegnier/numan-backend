@@ -7,7 +7,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/post_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
-	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
@@ -24,10 +23,11 @@ import (
 // Elle renvoie un tableau d'enveloppes (GetCommentOutput) pour isoler les erreurs partielles
 // sans faire crasher la liste entière.
 func GetComments(ctx context.Context, callerID int64, input comment_models.GetCommentsInput) ([]comment_models.GetCommentOutput, error) {
-	var err_offset, err_limit *numan_error.AppError
-	input.Offset, err_offset, input.Limit, err_limit = pkg.BatchVerif(input.Offset, input.Limit)
-	if err_offset != nil || err_limit != nil {
-		return nil, numan_error.Combine(err_offset, err_limit)
+	if err := input.Validate(); err != nil {
+		return nil, err
+	}
+	if input.Limit == 0 {
+		input.Limit = 50
 	}
 	var finalResults []comment_models.GetCommentOutput
 
@@ -84,11 +84,6 @@ func GetComments(ctx context.Context, callerID int64, input comment_models.GetCo
 	}
 
 	// ── ÉTAPE 1 : TENTATIVE L1 (VIP PARKING ZSET REDIS) ─────────────────────
-
-	// 🛡️ BOUCLIER DE PAGINATION
-	if input.Limit <= 0 || input.Limit > 100 {
-		input.Limit = 50
-	}
 
 	// On n'utilise le ZSET L1 que pour les premiers commentaires (Offset faible)
 	if input.Offset < int64(variables.MaxZsetPostComment) && object_cache_service.IsPostInObjectCache(ctx, input.PostID) {

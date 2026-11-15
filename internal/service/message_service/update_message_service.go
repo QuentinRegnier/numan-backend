@@ -22,6 +22,12 @@ import (
 
 // UpdateMessage gère la modification d'un message texte existant.
 func UpdateMessage(ctx context.Context, callerID int64, input message_models.UpdateMessageInput) (message_models.UpdateMessageOutput, error) {
+	if callerID <= 0 {
+		return message_models.UpdateMessageOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return message_models.UpdateMessageOutput{}, err
+	}
 
 	// ── ÉTAPE 1 : CONTRÔLE D'ACCÈS ZERO-TRUST (CASCADE L1->L2->L3) ──────────
 
@@ -45,6 +51,10 @@ func UpdateMessage(ctx context.Context, callerID int64, input message_models.Upd
 
 	messagePayload.Content = cleanedContent
 	messagePayload.UpdatedAt = domain.NowMillis()
+
+	if err := messagePayload.Validate(); err != nil {
+		return message_models.UpdateMessageOutput{}, err
+	}
 
 	// ── ÉTAPE 4 : MISE À JOUR IMMÉDIATE L1 (OBJECT CACHE) ───────────────────
 

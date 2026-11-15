@@ -33,6 +33,12 @@ import (
 // CreateMessage construit le message, vérifie les droits d'écriture, active les
 // médias orphelins, distribue l'événement en WebSocket et en Push FCM.
 func CreateMessage(ctx context.Context, senderID int64, conversationID int64, input message_models.CreateMessageInput, isInternalCall bool) (message_models.CreateMessageOutput, error) {
+	if senderID <= 0 {
+		return message_models.CreateMessageOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant de l'expéditeur est invalide.", nil)
+	}
+	if conversationID <= 0 {
+		return message_models.CreateMessageOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant de conversation est invalide.", nil)
+	}
 
 	// ── ÉTAPE 1 : SÉCURITÉ SUR LES TYPES DE MESSAGES (ANTI-USURPATION) ──────
 
@@ -47,6 +53,12 @@ func CreateMessage(ctx context.Context, senderID int64, conversationID int64, in
 		default:
 			return message_models.CreateMessageOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Type de message inconnu.", nil)
 		}
+	} else if input.ConversationID == 0 {
+		input.ConversationID = conversationID
+	}
+
+	if err := input.Validate(); err != nil {
+		return message_models.CreateMessageOutput{}, err
 	}
 
 	// ── ÉTAPE 2 : VÉRIFICATION DE LA DISCIPLINE DU MEMBRE ───────────────────
@@ -262,6 +274,10 @@ func CreateMessage(ctx context.Context, senderID int64, conversationID int64, in
 		AllowNewReactions: allowNewReactions,
 		CreatedAt:         domain.TimeToMillis(currentTimestamp),
 		UpdatedAt:         domain.TimeToMillis(currentTimestamp),
+	}
+
+	if err := messagePayload.Validate(); err != nil {
+		return message_models.CreateMessageOutput{}, err
 	}
 
 	_ = object_cache_service.SetMessageInObjectCache(ctx, messagePayload)

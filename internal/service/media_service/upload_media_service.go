@@ -29,6 +29,24 @@ import (
 
 // UploadMediaWithStatusAndIAScore traite l'image, l'uploade sur S3/MinIO et l'enregistre avec son statut et son score IA NSFWJS [0.0, 1.0].
 func UploadMediaWithStatusAndIAScore(fileStream io.ReadSeeker, ownerID int64, mediaID int64, initialVisibility int, iaScore float64) error {
+	if ownerID <= 0 {
+		return numan_error.NewUnauthorized(numan_error.CodeUserIsNotIdentified, "Utilisateur non identifié.", nil)
+	}
+	if mediaID <= 0 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant du média doit être strictement positif.", nil)
+	}
+	if fileStream == nil {
+		return numan_error.NewBadRequest(numan_error.CodeMissingFile, "Le flux du fichier média est manquant.", nil)
+	}
+	switch initialVisibility {
+	case variables.MediaVisibilityRejected,
+		variables.MediaVisibilitySoftDeleted,
+		variables.MediaVisibilityPending,
+		variables.MediaVisibilityPublic,
+		variables.MediaVisibilityQuarantine:
+	default:
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le statut de visibilité initial du média est invalide.", nil)
+	}
 	if iaScore < 0.0 || iaScore > 1.0 || math.IsNaN(iaScore) || math.IsInf(iaScore, 0) {
 		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le score IA doit être compris entre 0.0 et 1.0.", nil)
 	}
@@ -107,11 +125,16 @@ func UploadMediaWithStatusAndIAScore(fileStream io.ReadSeeker, ownerID int64, me
 		OwnerID:     ownerID,
 		StoragePath: storagePath,
 		Visibility:  initialVisibility, // 0=Pending, 1=Public, 2=Quarantaine
+		IAScore:     iaScore,
 		CreatedAt:   domain.TimeToMillis(currentTime),
 		UpdatedAt:   domain.TimeToMillis(currentTime),
 	}
 
 	ctx := context.Background()
+	if err := mediaPayload.Validate(); err != nil {
+		_ = minio.MinioClient.RemoveObject(ctx, bucketName, storagePath, miniogo.RemoveObjectOptions{})
+		return err
+	}
 
 	if errCache := object_cache_service.SetMediaInObjectCache(ctx, mediaPayload); errCache != nil {
 		numan_log.Error(context.Background()).Err(errCache).Int64("media_id", mediaID).Msg("Échec de la mise en cache L1 du Média")

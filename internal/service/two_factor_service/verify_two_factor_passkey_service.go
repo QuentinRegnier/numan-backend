@@ -17,6 +17,9 @@ import (
 
 // VerifyTwoFactorPasskey valide une preuve cryptographique FIDO2/WebAuthn (Assertion au Login, Registration au SignUp).
 func VerifyTwoFactorPasskey(ctx context.Context, input two_factor_models.VerifyTwoFactorPasskeyInput) (two_factor_models.VerifyTwoFactorOutput, error) {
+	if err := input.Validate(); err != nil {
+		return two_factor_models.VerifyTwoFactorOutput{}, err
+	}
 	preAuth, err := cache_service.GetPreAuthSession(ctx, input.PreAuthToken)
 	if err != nil {
 		return two_factor_models.VerifyTwoFactorOutput{}, err
@@ -63,6 +66,9 @@ func VerifyTwoFactorPasskey(ctx context.Context, input two_factor_models.VerifyT
 			CreatedAt:       nowMs,
 			UpdatedAt:       nowMs,
 		}
+		if err := newPasskey.Validate(); err != nil {
+			return two_factor_models.VerifyTwoFactorOutput{}, err
+		}
 
 		_ = cache_service.DeletePreAuthSession(ctx, preAuth.Token)
 		return finalizeSignupAfterTwoFactor(ctx, preAuth, variables.TwoFactorMethodPasskey, &newPasskey)
@@ -103,6 +109,9 @@ func VerifyTwoFactorPasskey(ctx context.Context, input two_factor_models.VerifyT
 	// Mise à jour du SignCount en L1 et Write-Behind L2/L3
 	passkeyPayload.SignCount = newSignCount
 	passkeyPayload.UpdatedAt = domain.NowMillis()
+	if err := passkeyPayload.Validate(); err != nil {
+		return two_factor_models.VerifyTwoFactorOutput{}, err
+	}
 	_ = object_cache_service.SetPasskeyInObjectCache(ctx, passkeyPayload)
 	_ = redis.EnqueueDB(ctx, passkeyPayload.ID, passkeyPayload.UserID, redis.EntityPasskey, redis.ActionUpdate, passkeyPayload, redis.TargetAll)
 

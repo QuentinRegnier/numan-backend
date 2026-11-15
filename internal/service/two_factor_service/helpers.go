@@ -114,6 +114,10 @@ func finalizeLoginSession(
 		return two_factor_models.VerifyTwoFactorOutput{}, numan_error.NewInternal()
 	}
 
+	if err := sessionPayload.Validate(); err != nil {
+		return two_factor_models.VerifyTwoFactorOutput{}, err
+	}
+
 	_ = cache_service.SetSessionInCache(ctx, sessionPayload)
 
 	timelineKey := fmt.Sprintf("profile:posts:zset:%d", userPayload.ID)
@@ -240,6 +244,21 @@ func finalizeSignupAfterTwoFactor(
 		TelemetryTimestamp: 0,
 		CreatedAt:          domain.TimeToMillis(currentTime),
 		UpdatedAt:          domain.TimeToMillis(currentTime),
+	}
+
+	if err := userPayload.Validate(); err != nil {
+		return two_factor_models.VerifyTwoFactorOutput{}, err
+	}
+	if err := sessionPayload.Validate(); err != nil {
+		return two_factor_models.VerifyTwoFactorOutput{}, err
+	}
+	if err := userSettingsPayload.Validate(); err != nil {
+		return two_factor_models.VerifyTwoFactorOutput{}, err
+	}
+	if passkeyToSave != nil {
+		if err := passkeyToSave.Validate(); err != nil {
+			return two_factor_models.VerifyTwoFactorOutput{}, err
+		}
 	}
 
 	_ = cache_service.MarkUserTimelineEmpty(ctx, userPayload.ID)

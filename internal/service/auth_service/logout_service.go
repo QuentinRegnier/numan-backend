@@ -19,6 +19,9 @@ import (
 // Logout déconnecte l'appareil courant en utilisant le firebaseInstallationID du JWT.
 // L'opération est idempotente : si la session n'existe plus, on renvoie une réussite silencieuse.
 func Logout(ctx context.Context, callerID int64, firebaseInstallationID string) error {
+	if callerID <= 0 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
 	if firebaseInstallationID == "" {
 		return nil // Rien à déconnecter, requête ignorée gracieusement.
 	}

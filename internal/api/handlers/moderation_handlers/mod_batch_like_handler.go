@@ -1,15 +1,12 @@
 package moderation_handlers
 
 import (
-	"encoding/json"
 	"net/http"
 
-	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/moderation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
-	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
-	"github.com/QuentinRegnier/numan-backend/internal/variables"
+	"github.com/QuentinRegnier/numan-backend/internal/service/moderation_service"
 	"github.com/gin-gonic/gin"
 )
 
@@ -88,7 +85,7 @@ import (
 // @Failure      500  {object}  numan_error.PublicErrorResponse "Internal Server Error"
 // @Router       /admin/moderation/batch-like [post]
 func ModBatchLikeHandler(c *gin.Context) {
-	_, err := pkg.GetUserIDFromContext(c)
+	callerID, err := pkg.GetUserIDFromContext(c)
 	if err != nil {
 		numan_error.RespondWithError(c, err)
 		return
@@ -100,31 +97,11 @@ func ModBatchLikeHandler(c *gin.Context) {
 		return
 	}
 
-	nowMs := domain.NowMillis()
-	eventID := pkg.GenerateID()
-
-	evt := moderation_models.TrustScoreEventPayload{
-		EventID:      eventID,
-		UserIDs:      input.AuthorUserIDs,
-		EventType:    variables.TrustTriggerModBatchLike,
-		Reason:       input.Reason,
-		OccurredAtMs: nowMs,
-	}
-
-	payloadBytes, errMarshal := json.Marshal(evt)
-	if errMarshal != nil {
-		numan_error.RespondWithError(c, numan_error.NewInternal(errMarshal))
+	out, errSvc := moderation_service.ModBatchLikeService(c.Request.Context(), callerID, input)
+	if errSvc != nil {
+		numan_error.RespondWithError(c, errSvc)
 		return
 	}
 
-	if errQueue := redis.WorkerQueue.LPush(c.Request.Context(), variables.WorkerQueueTrustScore, payloadBytes); errQueue != nil {
-		numan_error.RespondWithError(c, numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeCacheError, "Impossible d'enregistrer l'action groupée dans la file de réputation.", errQueue))
-		return
-	}
-
-	c.JSON(http.StatusOK, moderation_models.ModBatchLikeOutput{
-		EventID:    eventID,
-		UsersCount: len(input.AuthorUserIDs),
-		QueuedAt:   nowMs,
-	})
+	c.JSON(http.StatusOK, out)
 }

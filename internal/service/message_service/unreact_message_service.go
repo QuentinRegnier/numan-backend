@@ -20,6 +20,12 @@ import (
 
 // UnreactToMessage gère le retrait ciblé d'une réaction sur un message via le Hash Cache.
 func UnreactToMessage(ctx context.Context, callerID int64, input message_models.UnreactMessageInput) error {
+	if callerID <= 0 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return err
+	}
 
 	// ── ÉTAPE 1 : CONTRÔLE D'ACCÈS AU MESSAGE (ZERO-TRUST) ──────────────────
 

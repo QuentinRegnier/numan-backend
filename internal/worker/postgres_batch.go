@@ -13,6 +13,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/map_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/message_models"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/models/telemetry_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
@@ -838,14 +839,8 @@ func updateCountersPostgres(ctx context.Context, events []redis.AsyncEvent) {
 			if e.Action != redis.ActionCreate {
 				continue
 			}
-			var t struct {
-				PostID       int64 `json:"post_id"`
-				DwellTimeMs  int   `json:"dwell_time_ms"`
-				IsClicked    bool  `json:"is_clicked"`
-				DeepScroll   bool  `json:"deep_scroll"`
-				ProfileVisit bool  `json:"profile_visit"`
-			}
-			if err := json.Unmarshal(jsonBytes, &t); err == nil && t.PostID != 0 {
+			var t telemetry_models.TelemetryEvent
+			if err := json.Unmarshal(jsonBytes, &t); err == nil && t.Validate() == nil {
 				viewDeltas[t.PostID] += 1 // Une télémétrie correspond toujours à une vue
 
 				dwellVal := float64(t.DwellTimeMs)

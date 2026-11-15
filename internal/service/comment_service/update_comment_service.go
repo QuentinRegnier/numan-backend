@@ -21,6 +21,11 @@ import (
 // UpdateComment gère la modification en récupérant l'objet complet pour le Bulk Update des workers.
 func UpdateComment(ctx context.Context, callerID int64, input comment_models.UpdateCommentInput) error {
 
+	// ── ÉTAPE 0 : VALIDATION DU PAYLOAD D'ENTRÉE ────────────────────────────
+	if err := input.Validate(); err != nil {
+		return err
+	}
+
 	// ── ÉTAPE 1 : VÉRIFICATION DES DROITS (SÉCURITÉ) ────────────────────────
 
 	// LeftComment s'occupe de renvoyer CodeNotFound ou CodeForbidden proprement
@@ -32,17 +37,16 @@ func UpdateComment(ctx context.Context, callerID int64, input comment_models.Upd
 	// ── ÉTAPE 2 : APPLICATION DES MODIFICATIONS ─────────────────────────────
 
 	cleanContent := pkg.CleanStr(input.Content)
-	runeCount := len([]rune(cleanContent))
-
-	if runeCount == 0 {
+	if cleanContent == "" {
 		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le commentaire ne peut pas être vide.", nil)
-	}
-	if runeCount > 2200 {
-		return numan_error.NewBadRequest(numan_error.CodePayloadTooLarge, "Le commentaire dépasse la taille maximale autorisée.", nil)
 	}
 
 	commentPayload.Content = cleanContent
 	commentPayload.UpdatedAt = domain.NowTime().Format(time.RFC3339)
+
+	if err := commentPayload.Validate(); err != nil {
+		return err
+	}
 
 	// ── ÉTAPE 3 : SAUVEGARDE ET DÉLÉGATION AUX WORKERS BATCH ────────────────
 

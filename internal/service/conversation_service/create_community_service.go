@@ -23,6 +23,12 @@ import (
 // CreateCommunity valide les prérequis de réputation, instancie la communauté
 // et initialise ses structures de recherche et de Speed Cache.
 func CreateCommunity(ctx context.Context, callerID int64, input conversation_models.CreateCommunityInput) (conversation_models.CreateCommunityOutput, error) {
+	if callerID <= 0 {
+		return conversation_models.CreateCommunityOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return conversation_models.CreateCommunityOutput{}, err
+	}
 
 	// ── ÉTAPE 1 : CONTRÔLE DE RANG ET DE QUOTA ──────────────────────────────
 	callerLite, errCaller := cache_service.GetUserLite(ctx, callerID)
@@ -115,6 +121,18 @@ func CreateCommunity(ctx context.Context, callerID int64, input conversation_mod
 			LastReadMessageID: 0,
 			CreatedAt:         domain.TimeToMillis(currentTime),
 			UpdatedAt:         domain.TimeToMillis(currentTime),
+		}
+	}
+
+	if err := communityPayload.Validate(); err != nil {
+		return conversation_models.CreateCommunityOutput{}, err
+	}
+	if err := ownerMemberPayload.Validate(); err != nil {
+		return conversation_models.CreateCommunityOutput{}, err
+	}
+	if adminCreatorPayload != nil {
+		if err := adminCreatorPayload.Validate(); err != nil {
+			return conversation_models.CreateCommunityOutput{}, err
 		}
 	}
 

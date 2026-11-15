@@ -26,6 +26,9 @@ func PublishTrustScoreEvent(ctx context.Context, userID int64, eventType string,
 		Reason:       reason,
 		OccurredAtMs: domain.NowMillis(),
 	}
+	if errVal := evt.Validate(); errVal != nil {
+		return errVal
+	}
 	payloadBytes, err := json.Marshal(evt)
 	if err != nil {
 		return numan_error.NewInternal(err)

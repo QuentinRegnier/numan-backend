@@ -15,6 +15,9 @@ import (
 // GetUserSessions récupère les sessions actives de l'utilisateur.
 // Elle les expurge de toute donnée critique (Tokens, Secrets) avant envoi au front-end.
 func GetUserSessions(ctx context.Context, userID int64) ([]auth_models.SessionView, error) {
+	if userID <= 0 {
+		return nil, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
 
 	// ── ÉTAPE 1 : LECTURE DEPUIS LA SOURCE DE VÉRITÉ (PostgreSQL L3) ────────
 	// On interroge directement la vue L3 car on a besoin d'une vue d'ensemble complète et fiable.

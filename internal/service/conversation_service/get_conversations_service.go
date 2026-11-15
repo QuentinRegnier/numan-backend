@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/conversation_models"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
@@ -22,7 +23,10 @@ import (
 
 // GetConversations récupère les métadonnées fraîches d'un lot de conversations spécifiques.
 func GetConversations(ctx context.Context, callerID int64, input conversation_models.GetConversationsInput) (conversation_models.GetInboxOutput, error) {
-	if err := pkg.ListLimitVerifDefault(input.ConversationIDs); err != nil {
+	if callerID <= 0 {
+		return conversation_models.GetInboxOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
 		return conversation_models.GetInboxOutput{}, err
 	}
 

@@ -19,6 +19,9 @@ import (
 
 // ClaimTicketService permet à un modérateur de réclamer un ticket Pending pour traitement exclusif (verrou 48h).
 func ClaimTicketService(ctx context.Context, modID int64, reportID int64) (*moderation_models.ModerationTicketPublicView, error) {
+	if errVal := (&moderation_models.ClaimTicketInput{ReportID: reportID}).Validate(); errVal != nil {
+		return nil, errVal
+	}
 	ticket, err := cache_service.GetModerationTicket(ctx, reportID)
 	if err != nil {
 		return nil, err
@@ -61,6 +64,9 @@ func ClaimTicketService(ctx context.Context, modID int64, reportID int64) (*mode
 
 // ReleaseTicketService permet au modérateur détenteur de libérer volontairement un ticket InProgress et le remettre en Pending.
 func ReleaseTicketService(ctx context.Context, modID int64, modGrade int, reportID int64) (*moderation_models.ModerationTicketPublicView, error) {
+	if errVal := (&moderation_models.ReleaseTicketInput{ReportID: reportID}).Validate(); errVal != nil {
+		return nil, errVal
+	}
 	ticket, err := cache_service.GetModerationTicket(ctx, reportID)
 	if err != nil {
 		return nil, err
@@ -93,6 +99,9 @@ func ReleaseTicketService(ctx context.Context, modID int64, modGrade int, report
 
 // RequestTicketInfoService gèle un ticket InProgress en attente d'un complément d'information du plaignant (minuteur 7j).
 func RequestTicketInfoService(ctx context.Context, modID int64, modGrade int, input moderation_models.RequestTicketInfoInput) (*moderation_models.ModerationTicketPublicView, error) {
+	if errVal := input.Validate(); errVal != nil {
+		return nil, errVal
+	}
 	ticket, err := cache_service.GetModerationTicket(ctx, input.ReportID)
 	if err != nil {
 		return nil, err
@@ -126,6 +135,9 @@ func RequestTicketInfoService(ctx context.Context, modID int64, modGrade int, in
 
 // ReplyTicketInfoService permet au plaignant de répondre, ce qui réactive immédiatement le ticket en InProgress pour le même modérateur.
 func ReplyTicketInfoService(ctx context.Context, callerID int64, callerGrade int, input moderation_models.ReplyTicketInfoInput) (*moderation_models.ModerationTicketPublicView, error) {
+	if errVal := input.Validate(); errVal != nil {
+		return nil, errVal
+	}
 	ticket, err := cache_service.GetModerationTicket(ctx, input.ReportID)
 	if err != nil {
 		return nil, err
@@ -169,6 +181,9 @@ func ReplyTicketInfoService(ctx context.Context, callerID int64, callerGrade int
 
 // ProposeBlameService initie la procédure de blâme Four-Eyes (Modérateur A -> PendingPeerReview avec pseudonyme HMAC).
 func ProposeBlameService(ctx context.Context, modID int64, modGrade int, input moderation_models.ProposeBlameInput) (*moderation_models.ModerationTicketPublicView, error) {
+	if errVal := input.Validate(); errVal != nil {
+		return nil, errVal
+	}
 	ticket, err := cache_service.GetModerationTicket(ctx, input.ReportID)
 	if err != nil {
 		return nil, err
@@ -208,6 +223,9 @@ func ProposeBlameService(ctx context.Context, modID int64, modGrade int, input m
 
 // ReviewBlameProposalService permet au Modérateur B de valider ou contredire la proposition de blâme sans connaître l'identité de Mod A.
 func ReviewBlameProposalService(ctx context.Context, modID int64, modGrade int, input moderation_models.ReviewBlameInput) (*moderation_models.ModerationTicketPublicView, error) {
+	if errVal := input.Validate(); errVal != nil {
+		return nil, errVal
+	}
 	ticket, err := cache_service.GetModerationTicket(ctx, input.ReportID)
 	if err != nil {
 		return nil, err
@@ -299,6 +317,9 @@ func ReviewBlameProposalService(ctx context.Context, modID int64, modGrade int, 
 
 // ResolveFinalVoteService permet à un Super-Modérateur indépendant (T_mod > 0.90) ou à un Admin de trancher une contradiction.
 func ResolveFinalVoteService(ctx context.Context, modID int64, modGrade int, input moderation_models.FinalVoteBlameInput) (*moderation_models.ModerationTicketPublicView, error) {
+	if errVal := input.Validate(); errVal != nil {
+		return nil, errVal
+	}
 	ticket, err := cache_service.GetModerationTicket(ctx, input.ReportID)
 	if err != nil {
 		return nil, err
@@ -366,6 +387,9 @@ func ResolveFinalVoteService(ctx context.Context, modID int64, modGrade int, inp
 
 // EscalateTicketService escalade un ticket InProgress vers la file Administrateur pour hard ban ou clarification CGU.
 func EscalateTicketService(ctx context.Context, modID int64, modGrade int, input moderation_models.EscalateTicketInput) (*moderation_models.ModerationTicketPublicView, error) {
+	if errVal := input.Validate(); errVal != nil {
+		return nil, errVal
+	}
 	ticket, err := cache_service.GetModerationTicket(ctx, input.ReportID)
 	if err != nil {
 		return nil, err
@@ -405,6 +429,14 @@ func EscalateTicketService(ctx context.Context, modID int64, modGrade int, input
 
 // CloseTicketService clôture un ticket, enregistre l'archivage en base froide et envoie le feedback réputationnel aux signaleurs.
 func CloseTicketService(ctx context.Context, _ int64, isDismiss bool, rationale string, reportID int64) (*moderation_models.CloseTicketOutput, error) {
+	closeInput := moderation_models.CloseTicketInput{
+		ReportID:  reportID,
+		IsDismiss: isDismiss,
+		Rationale: rationale,
+	}
+	if errVal := closeInput.Validate(); errVal != nil {
+		return nil, errVal
+	}
 	ticket, err := cache_service.GetModerationTicket(ctx, reportID)
 	if err != nil {
 		return nil, err
@@ -464,10 +496,6 @@ func triggerThreeBlameSystemAudit(ctx context.Context, targetUserID int64, histo
 		CreatedAt:         nowMs,
 		UpdatedAt:         nowMs,
 	}
-
-	_ = cache_service.SaveModerationTicket(ctx, superReport)
-	_ = cache_service.IndexTicketInModerationQueue(ctx, variables.ModerationQueueAdmin, superReportID, superReport.PriorityScore)
-
 	reportPayload := report_models.ReportPayload{
 		ID:                superReportID,
 		ReporterID:        0,
@@ -483,6 +511,17 @@ func triggerThreeBlameSystemAudit(ctx context.Context, targetUserID int64, histo
 		CreatedAt:         nowMs,
 		UpdatedAt:         nowMs,
 	}
+	if errVal := superReport.Validate(); errVal != nil {
+		numan_log.Error(ctx).Err(errVal).Int64("target_user_id", targetUserID).Msg("Super-Report d'audit invalide.")
+		return
+	}
+	if errVal := reportPayload.Validate(); errVal != nil {
+		numan_log.Error(ctx).Err(errVal).Int64("target_user_id", targetUserID).Msg("Payload du Super-Report d'audit invalide.")
+		return
+	}
+
+	_ = cache_service.SaveModerationTicket(ctx, superReport)
+	_ = cache_service.IndexTicketInModerationQueue(ctx, variables.ModerationQueueAdmin, superReportID, superReport.PriorityScore)
 	_ = redis.EnqueueDB(ctx, superReportID, 0, redis.EntityReport, redis.ActionCreate, reportPayload, redis.TargetPostgres)
 
 	numan_log.Warn(ctx).

@@ -22,6 +22,12 @@ import (
 // UnpinConversation gère le retrait d'une épingle sur une conversation.
 // Libère le "slot" (0, 1 ou 2) pour de futures épingles. Action idempotente.
 func UnpinConversation(ctx context.Context, callerID int64, input conversation_models.UnpinConversationInput) (conversation_models.UnpinConversationOutput, error) {
+	if callerID <= 0 {
+		return conversation_models.UnpinConversationOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return conversation_models.UnpinConversationOutput{}, err
+	}
 
 	// ── ÉTAPE 1 : CONTRÔLE D'ACCÈS (CASCADE L1->L2->L3) ─────────────────────
 

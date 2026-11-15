@@ -21,6 +21,18 @@ import (
 // Utilise le cache L1 pour bloquer instantanément les fantômes.
 func ToggleSaved(ctx context.Context, userID int64, postID int64, requestedAction string) error {
 
+	// ── ÉTAPE 0 : VALIDATION DU PAYLOAD ET DES PARAMÈTRES D'ENTRÉE ──────────
+	if userID <= 0 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant de l'utilisateur doit être strictement positif.", nil)
+	}
+	saveInput := saved_models.SaveActionInput{PostID: postID}
+	if err := saveInput.Validate(); err != nil {
+		return err
+	}
+	if requestedAction != variables.SavedActionSave && requestedAction != variables.SavedActionUnsave {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Action de sauvegarde non reconnue.", nil)
+	}
+
 	// ── ÉTAPE 1 : VÉRIFICATION D'INTÉGRITÉ DU POST ──────────────────────────
 
 	// On vérifie que le post existe bien en L1 pour éviter de sauvegarder un post fantôme
@@ -29,6 +41,16 @@ func ToggleSaved(ctx context.Context, userID int64, postID int64, requestedActio
 	}
 
 	currentTime := domain.NowTime()
+	savedRecordPayload := saved_models.SavedPayload{
+		ID:        pkg.GenerateID(),
+		UserID:    userID,
+		PostID:    postID,
+		CreatedAt: domain.TimeToMillis(currentTime),
+	}
+	if err := savedRecordPayload.Validate(); err != nil {
+		return err
+	}
+
 	var redisActionType redis.ActionType
 
 	// ── ÉTAPE 2 : TRAITEMENT L1 (RAM ZSET) ──────────────────────────────────
@@ -37,23 +59,12 @@ func ToggleSaved(ctx context.Context, userID int64, postID int64, requestedActio
 		redisActionType = redis.ActionCreate
 		zsetScore := float64(domain.TimeToMillis(currentTime))
 		_ = object_cache_service.AddSavedToZSET(ctx, userID, postID, zsetScore)
-
-	} else if requestedAction == variables.SavedActionUnsave {
+	} else {
 		redisActionType = redis.ActionDelete
 		_ = object_cache_service.RemoveSavedFromZSET(ctx, userID, postID)
-
-	} else {
-		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Action de sauvegarde non reconnue.", nil)
 	}
 
 	// ── ÉTAPE 3 : PERSISTANCE ASYNCHRONE (WRITE-BEHIND) ─────────────────────
-
-	savedRecordPayload := saved_models.SavedPayload{
-		ID:        pkg.GenerateID(),
-		UserID:    userID,
-		PostID:    postID,
-		CreatedAt: domain.TimeToMillis(currentTime),
-	}
 
 	// PartitionKey = userID pour que le shard gérant cet utilisateur centralise ses favoris
 	errQueue := redis.EnqueueDB(ctx, savedRecordPayload.ID, userID, redis.EntitySaved, redisActionType, savedRecordPayload, redis.TargetAll)

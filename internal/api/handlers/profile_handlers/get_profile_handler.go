@@ -107,11 +107,6 @@ func GetProfileHandler(c *gin.Context) {
 		return
 	}
 
-	// Application de valeurs par défaut raisonnables si non fournies
-	if input.Limit == 0 {
-		input.Limit = 20
-	}
-
 	// 3. Appel du Service Hub
 	output, err := profile_service.GetProfile(c.Request.Context(), callerID, input)
 	if err != nil {

@@ -27,6 +27,12 @@ import (
 // UpdateProfile modifie l'identité, vérifie l'unicité des champs sensibles,
 // gère le remplacement de l'avatar et envoie les mutations au Write-Behind.
 func UpdateProfile(ctx context.Context, userID int64, input user_settings_models.UpdateProfileInput) (user_settings_models.UpdateProfileOutput, error) {
+	if userID <= 0 {
+		return user_settings_models.UpdateProfileOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return user_settings_models.UpdateProfileOutput{}, err
+	}
 
 	// ── ÉTAPE 1 : RÉCUPÉRATION DU PROFIL ACTUEL (CASCADE L2 -> L3) ──────────
 	// Nécessaire pour préserver les champs critiques (Grade, Banni, etc.) non soumis au PUT.
@@ -107,6 +113,10 @@ func UpdateProfile(ctx context.Context, userID int64, input user_settings_models
 	}
 
 	userPayload.UpdatedAt = domain.NowMillis()
+
+	if err := userPayload.Validate(); err != nil {
+		return user_settings_models.UpdateProfileOutput{}, err
+	}
 
 	// ── ÉTAPE 5 : RAFRAÎCHISSEMENT IMMÉDIAT DU CACHE RAM (L1) ───────────────
 

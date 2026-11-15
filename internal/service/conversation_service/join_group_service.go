@@ -30,6 +30,12 @@ import (
 // JoinGroup gère l'intégration d'un utilisateur à une conversation existante.
 // Elle supporte 3 accès : Interne (Communauté), Externe (Lien URL), ou Invitation (MP).
 func JoinGroup(ctx context.Context, callerID int64, input conversation_models.JoinGroupInput) (conversation_models.JoinGroupOutput, error) {
+	if callerID <= 0 {
+		return conversation_models.JoinGroupOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return conversation_models.JoinGroupOutput{}, err
+	}
 
 	// ── ÉTAPE 1 : AUTO-GUÉRISON ET CHARGEMENT DU GROUPE (L1 -> L2 -> L3) ────
 	conversationPayload, errCache := object_cache_service.GetConversationFromObjectCache(ctx, input.ConversationID)
@@ -171,6 +177,10 @@ func JoinGroup(ctx context.Context, callerID int64, input conversation_models.Jo
 		memberPayload.JoinedAt = domain.TimeToMillis(currentTime)
 		memberPayload.UpdatedAt = domain.TimeToMillis(currentTime)
 		memberPayload.FrozenMessageID = 0
+	}
+
+	if err := memberPayload.Validate(); err != nil {
+		return conversation_models.JoinGroupOutput{}, err
 	}
 
 	// ── ÉTAPE 7 : CACHE L1 INSTANTANÉ (UI SPEED CACHE) ──────────────────────

@@ -8,8 +8,8 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/search_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
-	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
 
 // ############################################################################
@@ -17,10 +17,14 @@ import (
 // ############################################################################
 
 func AutocompleteTags(ctx context.Context, input search_models.AutocompleteTagInput) (search_models.AutocompleteTagOutput, error) {
-	var err_offset, errLimit numan_error.Error
-	input.Offset, err_offset, input.Limit, errLimit = pkg.BatchVerif(input.Offset, input.Limit)
-	if err_offset != nil || errLimit != nil {
-		return search_models.AutocompleteTagOutput{}, numan_error.Combine(err_offset, errLimit)
+	if err := input.Validate(); err != nil {
+		return search_models.AutocompleteTagOutput{}, err
+	}
+	if input.Limit == 0 {
+		input.Limit = variables.DefaultAutocompleteLimit
+		if input.Limit <= 0 {
+			input.Limit = 15
+		}
 	}
 
 	sanitizedQuery := strings.ToLower(strings.TrimSpace(input.Query))

@@ -60,6 +60,10 @@ func ActivateMediaBatch(ctx context.Context, mediaIDs []int64, ownerID int64) er
 		}
 		mediaPayload.UpdatedAt = domain.TimeToMillis(currentTime)
 
+		if err := mediaPayload.Validate(); err != nil {
+			return err
+		}
+
 		// ── ÉTAPE 4 : MISE À JOUR SYNCHRONE (L1) ────────────────────────────
 		_ = object_cache_service.SetMediaInObjectCache(ctx, mediaPayload)
 

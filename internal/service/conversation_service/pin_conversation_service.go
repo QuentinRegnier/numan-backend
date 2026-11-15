@@ -25,6 +25,12 @@ import (
 // TogglePinConversation épingle une conversation au sommet de la boîte de réception
 // en attribuant un "slot" d'index (0, 1 ou 2) avec un plafond à 3. L'action est idempotente.
 func TogglePinConversation(ctx context.Context, callerID int64, input conversation_models.PinConversationInput) (conversation_models.PinConversationOutput, error) {
+	if callerID <= 0 {
+		return conversation_models.PinConversationOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return conversation_models.PinConversationOutput{}, err
+	}
 
 	// ── ÉTAPE 1 : CONTRÔLE D'ACCÈS ZERO-TRUST ────────────────────────────────
 	memberPayload, errSecurity := security_service.LeftMember(ctx, input.ConversationID, callerID)

@@ -26,6 +26,12 @@ import (
 // CreateConversation valide les règles d'intégrité, instancie la conversation
 // et initialise ses participants en base et en cache.
 func CreateConversation(ctx context.Context, callerID int64, input conversation_models.CreateConversationInput) (conversation_models.CreateConversationOutput, error) {
+	if callerID <= 0 {
+		return conversation_models.CreateConversationOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return conversation_models.CreateConversationOutput{}, err
+	}
 
 	// ── ÉTAPE 1 : VALIDATIONS MÉTIER PRÉLIMINAIRES ─────────────────────────
 	if input.Type == variables.ConversationTypeCommunityPriv || input.Type == variables.ConversationTypeCommunityPub {
@@ -99,6 +105,10 @@ func CreateConversation(ctx context.Context, callerID int64, input conversation_
 		UpdatedAt:    domain.TimeToMillis(currentTime),
 	}
 
+	if err := conversationPayload.Validate(); err != nil {
+		return conversation_models.CreateConversationOutput{}, err
+	}
+
 	_ = object_cache_service.SetConversationInObjectCache(ctx, conversationPayload)
 
 	errEnqueueConv := redis.EnqueueDB(ctx, conversationID, conversationID, redis.EntityConversation, redis.ActionCreate, conversationPayload, redis.TargetAll)
@@ -127,6 +137,10 @@ func CreateConversation(ctx context.Context, callerID int64, input conversation_
 				UnreadCount:       0,
 				CreatedAt:         domain.TimeToMillis(currentTime),
 				UpdatedAt:         domain.TimeToMillis(currentTime),
+			}
+
+			if err := memberPayload.Validate(); err != nil {
+				return conversation_models.CreateConversationOutput{}, err
 			}
 
 			_ = object_cache_service.SetMemberInObjectCache(ctx, memberPayload)
@@ -159,6 +173,10 @@ func CreateConversation(ctx context.Context, callerID int64, input conversation_
 			UnreadCount:       0,
 			CreatedAt:         domain.TimeToMillis(currentTime),
 			UpdatedAt:         domain.TimeToMillis(currentTime),
+		}
+
+		if err := ownerPayload.Validate(); err != nil {
+			return conversation_models.CreateConversationOutput{}, err
 		}
 
 		_ = object_cache_service.SetMemberInObjectCache(ctx, ownerPayload)

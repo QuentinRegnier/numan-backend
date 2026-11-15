@@ -26,6 +26,20 @@ import (
 // UpdateConversation gère la modification (Titre, Règles, Description, Avatar, Liens)
 // d'un groupe ou d'une communauté. Rejette automatiquement les MP.
 func UpdateConversation(ctx context.Context, callerID int64, conversationID int64, input conversation_models.UpdateConversationInput) (conversation_models.UpdateConversationOutput, error) {
+	if callerID <= 0 {
+		return conversation_models.UpdateConversationOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if conversationID <= 0 {
+		return conversation_models.UpdateConversationOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant de conversation doit être strictement positif.", nil)
+	}
+	if input.ConversationID == 0 {
+		input.ConversationID = conversationID
+	} else if input.ConversationID != conversationID {
+		return conversation_models.UpdateConversationOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant de conversation ne correspond pas à la cible.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return conversation_models.UpdateConversationOutput{}, err
+	}
 
 	// ── ÉTAPE 1 : CONTRÔLE DE SÉCURITÉ ET RÉCUPÉRATION COMPLÈTE ─────────────
 
@@ -85,6 +99,10 @@ func UpdateConversation(ctx context.Context, callerID int64, conversationID int6
 	}
 
 	conversationPayload.UpdatedAt = domain.NowMillis()
+
+	if err := conversationPayload.Validate(); err != nil {
+		return conversation_models.UpdateConversationOutput{}, err
+	}
 
 	// ── ÉTAPE 3 : MISE À JOUR IMMÉDIATE L1 (RAM OBJECT & SPEED CACHE) ───────
 

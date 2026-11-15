@@ -21,6 +21,12 @@ import (
 // MarkNotificationsAsRead met à jour le curseur de lecture de l'utilisateur (Watermark)
 // en O(1) et synchronise l'état lu sur l'ensemble de ses appareils connectés.
 func MarkNotificationsAsRead(ctx context.Context, userID int64, input notification_models.ReadNotificationsInput) (notification_models.ReadNotificationsOutput, error) {
+	if userID <= 0 {
+		return notification_models.ReadNotificationsOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return notification_models.ReadNotificationsOutput{}, err
+	}
 
 	// ── ÉTAPE 1 : ENREGISTREMENT INSTANTANÉ DU CURSEUR (RAM L1) ─────────────
 

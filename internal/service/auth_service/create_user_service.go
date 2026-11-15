@@ -29,6 +29,9 @@ import (
 // CreateUser orchestre l'inscription : règles métier, génération des modèles BDD,
 // écriture asynchrone (Write-Behind) et upload de l'avatar.
 func CreateUser(ctx context.Context, input auth_models.SignUpInput, ipAddress string) (auth_models.SignUpResponse, error) {
+	if err := input.Validate(); err != nil {
+		return auth_models.SignUpResponse{}, err
+	}
 
 	// ── ÉTAPE 1 : RÈGLES MÉTIER ET VÉRIFICATIONS D'UNICITÉ ─────────────────
 
@@ -155,6 +158,16 @@ func CreateUser(ctx context.Context, input auth_models.SignUpInput, ipAddress st
 		TelemetryTimestamp: 0,
 		CreatedAt:          domain.TimeToMillis(currentTime),
 		UpdatedAt:          domain.TimeToMillis(currentTime),
+	}
+
+	if err := userPayload.Validate(); err != nil {
+		return auth_models.SignUpResponse{}, err
+	}
+	if err := sessionPayload.Validate(); err != nil {
+		return auth_models.SignUpResponse{}, err
+	}
+	if err := userSettingsPayload.Validate(); err != nil {
+		return auth_models.SignUpResponse{}, err
 	}
 
 	// ── ÉTAPE 3 : MISE EN CACHE IMMÉDIATE (L1 RAM - Évite les latences) ────

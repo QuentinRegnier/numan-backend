@@ -25,6 +25,12 @@ import (
 
 // PromoteMember promeut un membre standard au rang d'administrateur (Rôle = 1).
 func PromoteMember(ctx context.Context, callerID int64, input member_models.PromoteMemberInput) (member_models.PromoteMemberOutput, error) {
+	if callerID <= 0 {
+		return member_models.PromoteMemberOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return member_models.PromoteMemberOutput{}, err
+	}
 
 	// ── ÉTAPE 1 : CONTRÔLE D'ACCÈS DU DÉCIDEUR (PROPRIÉTAIRE) ───────────────
 
@@ -83,6 +89,10 @@ func PromoteMember(ctx context.Context, callerID int64, input member_models.Prom
 
 	targetMemberPayload.Role = variables.MemberRoleAdmin
 	targetMemberPayload.UpdatedAt = domain.NowMillis()
+
+	if err := targetMemberPayload.Validate(); err != nil {
+		return member_models.PromoteMemberOutput{}, err
+	}
 
 	// ── ÉTAPE 5 : MISE À JOUR SYNCHRONE (OBJECT ET SPEED CACHE L1) ──────────
 

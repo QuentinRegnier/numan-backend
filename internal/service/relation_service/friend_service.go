@@ -20,6 +20,12 @@ import (
 
 // ToggleFriend gère les ajouts et retraits d'amis entre utilisateurs.
 func ToggleFriend(ctx context.Context, callerID int64, input relation_models.RelationActionInput) error {
+	if callerID <= 0 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return err
+	}
 
 	// ── ÉTAPE 1 : RÈGLE MÉTIER (AUTO-AMITIÉ INTERDITE) ──────────────────────
 	if callerID == input.TargetID {
@@ -79,6 +85,9 @@ func ToggleFriend(ctx context.Context, callerID int64, input relation_models.Rel
 		State:       newRelationState,
 		CreatedAt:   domain.TimeToMillis(currentTime),
 		UpdatedAt:   domain.TimeToMillis(currentTime),
+	}
+	if err := relationPayload.Validate(); err != nil {
+		return err
 	}
 
 	// PartitionKey = targetID pour assurer l'ordre chronologique des requêtes.

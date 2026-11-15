@@ -22,6 +22,12 @@ import (
 // MarkConversationAsRead remet à zéro le compteur de messages non-lus,
 // avance le curseur de lecture d'un participant et émet l'événement WebSocket.
 func MarkConversationAsRead(ctx context.Context, callerID int64, conversationID int64) (conversation_models.ReadReceiptOutput, error) {
+	if callerID <= 0 {
+		return conversation_models.ReadReceiptOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := (&conversation_models.ReadReceiptInput{ConversationID: conversationID}).Validate(); err != nil {
+		return conversation_models.ReadReceiptOutput{}, err
+	}
 
 	// ── ÉTAPE 1 : CONTRÔLE D'ACCÈS ZERO-TRUST ────────────────────────────────
 	memberPayload, errSecurity := security_service.LeftMember(ctx, conversationID, callerID)

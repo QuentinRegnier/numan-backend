@@ -20,6 +20,12 @@ import (
 
 // ToggleBlock gère le blocage et le déblocage d'un utilisateur.
 func ToggleBlock(ctx context.Context, callerID int64, input relation_models.RelationActionInput) error {
+	if callerID <= 0 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return err
+	}
 
 	// ── ÉTAPE 1 : RÈGLE MÉTIER (AUTO-BLOCAGE INTERDIT) ──────────────────────
 	if callerID == input.TargetID {
@@ -83,6 +89,10 @@ func ToggleBlock(ctx context.Context, callerID int64, input relation_models.Rela
 		State:       newRelationState,
 		CreatedAt:   domain.TimeToMillis(currentTime),
 		UpdatedAt:   domain.TimeToMillis(currentTime),
+	}
+
+	if err := relationPayload.Validate(); err != nil {
+		return err
 	}
 
 	// PartitionKey = targetID pour assurer l'ordre chronologique des requêtes sur le profil cible

@@ -23,6 +23,12 @@ import (
 // DeleteMessage gère la suppression logique d'un message, retire son indexation L1,
 // et propage l'événement de destruction aux clients connectés.
 func DeleteMessage(ctx context.Context, callerID int64, input message_models.DeleteMessageInput) (message_models.DeleteMessageOutput, error) {
+	if callerID <= 0 {
+		return message_models.DeleteMessageOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return message_models.DeleteMessageOutput{}, err
+	}
 
 	// ── ÉTAPE 1 : CONTRÔLE D'ACCÈS ZERO-TRUST (CASCADE L1->L2->L3) ──────────
 

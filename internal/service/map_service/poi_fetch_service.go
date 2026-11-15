@@ -32,7 +32,7 @@ func GetPOIsInBBoxService(
 	callerID int64,
 	input map_models.GetPoisInBBoxInput,
 ) (map_models.GetPoisInBBoxOutput, error) {
-	if err := map_models.ValidateBBox(input.SWLat, input.SWLng, input.NELat, input.NELng); err != nil {
+	if err := input.Validate(); err != nil {
 		return map_models.GetPoisInBBoxOutput{}, err
 	}
 

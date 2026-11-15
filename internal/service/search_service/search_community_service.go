@@ -8,9 +8,9 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/search_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
-	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/media_service"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
 
 // ############################################################################
@@ -20,10 +20,14 @@ import (
 // searchCommunities orchestre la recherche ultrarapide de communautés publiques
 // via le Speed Cache (O(log(N))) et génère les URL signées pour les avatars.
 func searchCommunities(ctx context.Context, callerID int64, input search_models.CommunitySearchInput) (search_models.CommunitySearchOutput, error) {
-	var err_offset, errLimit numan_error.Error
-	input.Offset, err_offset, input.Limit, errLimit = pkg.BatchVerif(input.Offset, input.Limit)
-	if err_offset != nil || errLimit != nil {
-		return search_models.CommunitySearchOutput{}, numan_error.Combine(err_offset, errLimit)
+	if err := input.Validate(); err != nil {
+		return search_models.CommunitySearchOutput{}, err
+	}
+	if input.Limit == 0 {
+		input.Limit = variables.DefaultGlobalSearchLimit
+		if input.Limit <= 0 {
+			input.Limit = 20
+		}
 	}
 
 	// ── ÉTAPE 1 : RÉSOLUTION DE L'INDEX DANS LE SPEED CACHE (L1) ────────────

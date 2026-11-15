@@ -25,6 +25,12 @@ import (
 
 // BanMember expulse et bannit définitivement un membre d'une conversation.
 func BanMember(ctx context.Context, callerID int64, input member_models.BanMemberInput) (member_models.BanMemberOutput, error) {
+	if callerID <= 0 {
+		return member_models.BanMemberOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return member_models.BanMemberOutput{}, err
+	}
 
 	// ── ÉTAPE 1 : CONTRÔLE D'ACCÈS ET HIERARCHIE ────────────────────────────
 	callerMemberPayload, errSecurity := security_service.LeftMember(ctx, input.ConversationID, callerID)
@@ -89,6 +95,10 @@ func BanMember(ctx context.Context, callerID int64, input member_models.BanMembe
 	targetMemberPayload.Role = variables.MemberRoleBanned
 	targetMemberPayload.FrozenMessageID = frozenMessageID
 	targetMemberPayload.UpdatedAt = domain.NowMillis()
+
+	if err := targetMemberPayload.Validate(); err != nil {
+		return member_models.BanMemberOutput{}, err
+	}
 
 	// ── ÉTAPE 4 : MISE À JOUR SYNCHRONE RAM L1 ──────────────────────────────
 	_ = object_cache_service.SetMemberInObjectCache(ctx, targetMemberPayload)

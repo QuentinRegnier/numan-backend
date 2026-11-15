@@ -18,6 +18,15 @@ import (
 // GetNotifications orchestre la cascade de lecture L1 -> L2 avec auto-guérison de
 // la Boîte aux lettres de l'utilisateur. Note: Les notifications n'ont pas de stockage froid L3.
 func GetNotifications(ctx context.Context, callerID int64, input notification_models.GetNotificationsInput) ([]notification_models.NotificationView, error) {
+	if callerID <= 0 {
+		return nil, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant utilisateur est invalide.", nil)
+	}
+	if err := input.Validate(); err != nil {
+		return nil, err
+	}
+	if input.Limit == 0 {
+		input.Limit = 50
+	}
 
 	// ── ÉTAPE 0 : MODE FORCE (PURGE RAM) ────────────────────────────────────
 

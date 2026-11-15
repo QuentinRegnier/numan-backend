@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/like_models"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
@@ -22,6 +23,14 @@ import (
 
 // TogglePostLike agit comme un routeur asynchrone ultra-rapide (Fire and Forget).
 func TogglePostLike(ctx context.Context, callerID int64, input like_models.LikePostInput) error {
+
+	// ── ÉTAPE 0 : VALIDATION DU PAYLOAD D'ENTRÉE ────────────────────────────
+	if err := input.Validate(); err != nil {
+		return err
+	}
+	if callerID <= 0 {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant de l'utilisateur doit être strictement positif.", nil)
+	}
 
 	// ── ÉTAPE 1 : IDEMPOTENCE EN RAM (O(1)) ─────────────────────────────────
 
@@ -70,6 +79,10 @@ func TogglePostLike(ctx context.Context, callerID int64, input like_models.LikeP
 		TargetID:   input.PostID,
 		UserID:     callerID,
 		CreatedAt:  domain.NowTime().Format(time.RFC3339),
+	}
+
+	if err := likeRecordPayload.Validate(); err != nil {
+		return err
 	}
 
 	errQueue := redis.EnqueueDB(ctx, likeRecordPayload.ID, 0, redis.EntityLike, redisActionType, likeRecordPayload, redis.TargetAll)

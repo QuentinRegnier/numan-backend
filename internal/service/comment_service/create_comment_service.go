@@ -24,6 +24,11 @@ import (
 // initial selon l'autorité de l'auteur, et la mise à jour asynchrone des métriques.
 func CreateComment(ctx context.Context, callerID int64, input comment_models.CreateCommentInput) error {
 
+	// ── ÉTAPE 0 : VALIDATION DU PAYLOAD D'ENTRÉE ────────────────────────────
+	if err := input.Validate(); err != nil {
+		return err
+	}
+
 	// ── ÉTAPE 1 : NETTOYAGE ET VALIDATION DU CONTENU ────────────────────────
 
 	cleanContent := pkg.CleanStr(input.Content)
@@ -56,6 +61,10 @@ func CreateComment(ctx context.Context, callerID int64, input comment_models.Cre
 		Score:      initialScore,
 		CreatedAt:  currentTime,
 		UpdatedAt:  currentTime,
+	}
+
+	if err := commentPayload.Validate(); err != nil {
+		return err
 	}
 
 	// ── ÉTAPE 4 : CACHE HYBRIDE (ZSET + RAM L1) ET MISE À JOUR DU PARENT ────

@@ -20,6 +20,9 @@ import (
 // ############################################################################
 
 func DeletePost(ctx context.Context, callerID int64, input post_models.DeletePostInput) error {
+	if err := input.Validate(); err != nil {
+		return err
+	}
 
 	// ── ÉTAPE 1 : CONTRÔLE D'ACCÈS ZERO-TRUST ET RÉCUPÉRATION DU POST ───────
 	postPayload, errSecurity := security_service.LeftPost(ctx, input.PostID, callerID)
