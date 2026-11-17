@@ -146,6 +146,9 @@ func processBatch(ctx context.Context, events []redis.AsyncEvent) {
 
 	// 3. Mise à jour du Graphe Sémantique (Émergence Collective de Markov)
 	handleGraphUpdate(ctx, validEvents)
+
+	// 4. Moteur de Recommandation d'Utilisateurs (Strictement isolé du contenu)
+	handleUserRecommendationEvents(ctx, validEvents)
 }
 
 // ============================================================================

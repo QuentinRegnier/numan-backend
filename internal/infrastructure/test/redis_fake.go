@@ -565,6 +565,96 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 		}
 		return respInt(0)
 
+	case "SINTER":
+		if len(args) < 2 {
+			return respErr("wrong number of arguments for SINTER")
+		}
+		firstKey := args[1]
+		firstSet := s.sets[firstKey]
+		if len(firstSet) == 0 {
+			return respArray(nil)
+		}
+		var matched []string
+		for member := range firstSet {
+			inAll := true
+			for _, otherKey := range args[2:] {
+				otherSet := s.sets[otherKey]
+				if otherSet == nil {
+					inAll = false
+					break
+				}
+				if _, ok := otherSet[member]; !ok {
+					inAll = false
+					break
+				}
+			}
+			if inAll {
+				matched = append(matched, member)
+			}
+		}
+		sort.Strings(matched)
+		out := make([]string, 0, len(matched))
+		for _, m := range matched {
+			out = append(out, respBulk(m))
+		}
+		return respArray(out)
+
+	case "CF.RESERVE":
+		if len(args) < 3 {
+			return respErr("wrong number of arguments for CF.RESERVE")
+		}
+		key := args[1]
+		if s.sets[key] == nil {
+			s.sets[key] = make(map[string]struct{})
+		}
+		return respSimple("OK")
+
+	case "CF.ADD", "CF.ADDNX":
+		if len(args) < 3 {
+			return respErr("wrong number of arguments for CF.ADD")
+		}
+		key, item := args[1], args[2]
+		if s.sets[key] == nil {
+			s.sets[key] = make(map[string]struct{})
+		}
+		if cmd == "CF.ADDNX" {
+			if _, exists := s.sets[key][item]; exists {
+				return respInt(0)
+			}
+		}
+		s.sets[key][item] = struct{}{}
+		return respInt(1)
+
+	case "CF.EXISTS":
+		if len(args) < 3 {
+			return respErr("wrong number of arguments for CF.EXISTS")
+		}
+		key, item := args[1], args[2]
+		if st := s.sets[key]; st != nil {
+			if _, exists := st[item]; exists {
+				return respInt(1)
+			}
+		}
+		return respInt(0)
+
+	case "CF.MEXISTS":
+		if len(args) < 3 {
+			return respErr("wrong number of arguments for CF.MEXISTS")
+		}
+		key := args[1]
+		st := s.sets[key]
+		out := make([]string, 0, len(args)-2)
+		for _, item := range args[2:] {
+			if st != nil {
+				if _, exists := st[item]; exists {
+					out = append(out, respInt(1))
+					continue
+				}
+			}
+			out = append(out, respInt(0))
+		}
+		return respArray(out)
+
 	case "RPUSH":
 		key := args[1]
 		s.lists[key] = append(s.lists[key], args[2:]...)
@@ -583,6 +673,25 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 		if len(lst) == 0 {
 			return respNil()
 		}
+		if len(args) >= 3 {
+			count, err := strconv.Atoi(args[2])
+			if err == nil && count > 0 {
+				if count > len(lst) {
+					count = len(lst)
+				}
+				popped := lst[:count]
+				if count == len(lst) {
+					delete(s.lists, key)
+				} else {
+					s.lists[key] = lst[count:]
+				}
+				out := make([]string, 0, len(popped))
+				for _, v := range popped {
+					out = append(out, respBulk(v))
+				}
+				return respArray(out)
+			}
+		}
 		val := lst[0]
 		if len(lst) == 1 {
 			delete(s.lists, key)
@@ -590,6 +699,39 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 			s.lists[key] = lst[1:]
 		}
 		return respBulk(val)
+
+	case "BLPOP":
+		if len(args) < 3 {
+			return respErr("wrong number of arguments for BLPOP")
+		}
+		for _, key := range args[1 : len(args)-1] {
+			lst := s.lists[key]
+			if len(lst) > 0 {
+				val := lst[0]
+				if len(lst) == 1 {
+					delete(s.lists, key)
+				} else {
+					s.lists[key] = lst[1:]
+				}
+				return respArray([]string{respBulk(key), respBulk(val)})
+			}
+		}
+		return respNil()
+
+	case "LINDEX":
+		if len(args) < 3 {
+			return respErr("wrong number of arguments for LINDEX")
+		}
+		key := args[1]
+		idx, _ := strconv.Atoi(args[2])
+		lst := s.lists[key]
+		if idx < 0 {
+			idx = len(lst) + idx
+		}
+		if idx < 0 || idx >= len(lst) {
+			return respNil()
+		}
+		return respBulk(lst[idx])
 
 	case "RPOP":
 		key := args[1]

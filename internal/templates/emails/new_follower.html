@@ -1,0 +1,7 @@
+{{ define "content" }}
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;mso-hide:all;font-size:1px;line-height:1px;color:#FAF7F2;">{{ .ActorName }} s'est abonné à ton profil.</div>
+<h1 style="margin:0 0 14px 0;font-family:'Poppins','Helvetica Neue',Helvetica,Arial,sans-serif;font-size:26px;line-height:34px;font-weight:600;letter-spacing:-0.4px;color:#22252A;">Nouvel abonné</h1>
+<p style="margin:0 0 16px 0;font-family:'Poppins','Helvetica Neue',Helvetica,Arial,sans-serif;font-size:15px;line-height:25px;color:#4A4E55;">Bonjour {{ .Username }}, <strong>{{ .ActorName }}</strong>{{ if .ActorUsername }} (@{{ .ActorUsername }}){{ end }} s'est abonné à ton profil.</p>
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:28px auto;"><tr><td align="center" style="background-color:#22252A;border-radius:14px;"><a href="{{ .ProfileURL }}" style="display:inline-block;padding:16px 30px;font-family:'Poppins','Helvetica Neue',Helvetica,Arial,sans-serif;font-size:15px;line-height:20px;font-weight:600;color:#FAF7F2;text-decoration:none;border-radius:14px;">Voir son profil</a></td></tr></table>
+<div style="border-top:1px solid #EFEAE2;margin:24px 0 20px 0;height:1px;line-height:1px;font-size:1px;">&nbsp;</div><p style="margin:0 0 12px 0;font-family:'Poppins','Helvetica Neue',Helvetica,Arial,sans-serif;font-size:13px;line-height:21px;color:#6B6F76;">Tu peux choisir les emails que tu reçois dans <strong>Réglages &gt; Notifications</strong> de l'application.</p>
+{{ end }}

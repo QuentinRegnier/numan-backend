@@ -8,6 +8,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
+	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/realtime_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
@@ -33,6 +34,7 @@ func UpdateDisplay(ctx context.Context, userID int64, input user_settings_models
 	}
 
 	// ── ÉTAPE 2 : APPLICATION DES MODIFICATIONS ─────────────────────────────
+	oldLanguage := userSettingsPayload.DisplayAndContent.Language
 	userSettingsPayload.DisplayAndContent.Language = input.Language
 	userSettingsPayload.DisplayAndContent.Theme = input.Theme
 	userSettingsPayload.DisplayAndContent.SafeForCommute = input.SafeForCommute
@@ -45,6 +47,9 @@ func UpdateDisplay(ctx context.Context, userID int64, input user_settings_models
 	// ── ÉTAPE 3 : SAUVEGARDE L1 EN RAM ──────────────────────────────────────
 	if errSet := object_cache_service.SetUserSettings(ctx, userSettingsPayload); errSet != nil {
 		numan_log.Warn(ctx).Err(errSet).Int64("user_id", userID).Msg("Impossible de mettre à jour les paramètres d'affichage dans le cache L1")
+	}
+	if errLang := cache_service.SwitchUserLanguageIndex(ctx, userID, oldLanguage, input.Language); errLang != nil {
+		numan_log.Warn(ctx).Err(errLang).Int64("user_id", userID).Msg("Impossible de mettre à jour l'index de langue Redis")
 	}
 
 	// ── ÉTAPE 4 : NOTIFICATION TEMPS RÉEL (WEBSOCKET) ───────────────────────

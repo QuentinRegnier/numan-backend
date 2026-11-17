@@ -11,6 +11,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/schemas"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -36,6 +37,7 @@ var (
 	Saved            *Collection
 	Passkeys         *Collection
 	Notifications    *Collection
+	UserRecoSkips    *Collection
 )
 
 // InitCacheDatabase initialise la structure logique de MongoDB pour les caches (Warm Storage L2)
@@ -57,6 +59,7 @@ func InitCacheDatabase() {
 	schemaSaved := schemas.SavedSchema
 	schemaPasskeys := schemas.PasskeysSchema
 	schemaNotifications := schemas.NotificationsSchema
+	schemaUserRecoSkips := schemas.UserRecoSkipsSchema
 
 	// variables globales
 	Users = newMongoCollection("numan_mongo", "auth.users", schemaUsers)
@@ -74,6 +77,7 @@ func InitCacheDatabase() {
 	Saved = newMongoCollection("numan_mongo", "content.saved", schemaSaved)
 	Passkeys = newMongoCollection("numan_mongo", "auth.user_passkeys", schemaPasskeys)
 	Notifications = newMongoCollection("numan_mongo", "activity.notifications", schemaNotifications)
+	UserRecoSkips = newMongoCollection("numan_mongo", variables.MongoCollUserRecoSkips, schemaUserRecoSkips)
 }
 
 // ---------------- Collection et schéma ----------------

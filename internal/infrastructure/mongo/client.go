@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -61,6 +62,7 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 	messages := db.Collection("messaging.messages")
 	saved := db.Collection("content.saved")
 	notifications := db.Collection("activity.notifications")
+	userRecoSkips := db.Collection(variables.MongoCollUserRecoSkips)
 
 	// 2. Index de recherche vitaux (comme avant)
 	_, err1 := users.Indexes().CreateMany(ctx, []mongo.IndexModel{{Keys: bson.D{{Key: "username", Value: 1}, {Key: "email", Value: 1}, {Key: "phone", Value: 1}}}})
@@ -85,6 +87,18 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 	_, err13 := notifications.Indexes().CreateOne(ctx, mongo.IndexModel{
 		Keys:    bson.D{{Key: "created_at", Value: 1}},
 		Options: options.Index().SetExpireAfterSeconds(ttl30Days),
+	})
+
+	// A2. User Recommendation Skips : Index composé unique (user_id, skipped_user_id) + TTL strict (7 jours = 604800s) sur created_at
+	_, err14 := userRecoSkips.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{
+			Keys:    bson.D{{Key: "user_id", Value: 1}, {Key: "skipped_user_id", Value: 1}},
+			Options: options.Index().SetUnique(true),
+		},
+		{
+			Keys:    bson.D{{Key: "created_at", Value: 1}},
+			Options: options.Index().SetExpireAfterSeconds(int32(variables.UserRecoSkipTTLSeconds)),
+		},
 	})
 
 	// B. Tout le reste du L2 : Expiration GLISSANTE basée sur le last_use
@@ -112,5 +126,5 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 		}
 	}
 
-	return errors.Join(err1, err2, err3, err4, err5, err6, err7, err8, err9, err10, err11, err12, err13, errors.Join(ttlErrs...))
+	return errors.Join(err1, err2, err3, err4, err5, err6, err7, err8, err9, err10, err11, err12, err13, err14, errors.Join(ttlErrs...))
 }

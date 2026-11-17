@@ -105,6 +105,12 @@ func AddUserToSpeedCache(ctx context.Context, userPayload auth_models.UserPayloa
 		)
 	}
 
+	if !userPayload.Banned && !userPayload.Desactivated {
+		if errLang := AddUserToLanguageIndex(ctx, userPayload.ID, settingsPayload.DisplayAndContent.Language); errLang != nil {
+			numan_log.Warn(ctx).Err(errLang).Int64("user_id", userPayload.ID).Msg("Échec de l'indexation de la langue utilisateur en L1")
+		}
+	}
+
 	return nil
 }
 

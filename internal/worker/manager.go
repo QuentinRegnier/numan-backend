@@ -40,6 +40,9 @@ func StartBackgroundWorkers(ctx context.Context) {
 	StartModerationAgingCron(ctx)
 	StartModerationExpirationWorker(ctx)
 
+	// Moteur de Recommandation d'Utilisateurs : Rafraîchissement périodique par lots (24-48h)
+	startUserRecommendationCron(ctx)
+
 	// ── ÉTAPE 2 : LANCEMENT DES GARBAGE COLLECTORS (PURGES L3->L2) ──────────
 
 	// Détruit les fichiers physiques et logs des médias orphelins

@@ -9,6 +9,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/relation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/saved_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/telemetry_models"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/models/user_recommendation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
@@ -36,6 +37,30 @@ func flushMongo(ctx context.Context, events []redis.AsyncEvent) {
 
 	// ── ÉTAPE 2 : TRAITEMENT DE CHAQUE COLLECTION BDD ───────────────────────
 	for entity, evts := range grouped {
+		if entity == redis.EntityUserRecoSkip {
+			skips := make([]user_recommendation_models.UserRecoSkipPayload, 0, len(evts))
+			for _, e := range evts {
+				if e.Action != redis.ActionCreate && e.Action != redis.ActionUpdate {
+					continue
+				}
+				var skip user_recommendation_models.UserRecoSkipPayload
+				jsonBytes, err := json.Marshal(e.Payload)
+				if err != nil {
+					continue
+				}
+				if err := json.Unmarshal(jsonBytes, &skip); err != nil {
+					continue
+				}
+				skips = append(skips, skip)
+			}
+			if len(skips) > 0 {
+				if err := mongo.BulkUpsertUserRecoSkips(ctx, skips); err != nil {
+					numan_log.Error(ctx).Err(err).Msg("Worker Mongo : Échec de la persistance groupée des skips de recommandation")
+				}
+			}
+			continue
+		}
+
 		var c *mongo.Collection
 
 		switch entity {

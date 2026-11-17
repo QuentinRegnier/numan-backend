@@ -290,4 +290,16 @@ func init() {
 	registerFloat64("ModTrustValidationBonus", "trust_score", &ModTrustValidationBonus, unitRatioFloat)
 	registerFloat64("ModTrustFalseBlamePenalty", "trust_score", &ModTrustFalseBlamePenalty, unitRatioFloat)
 	registerFloat64("ModTrustRevocationThreshold", "trust_score", &ModTrustRevocationThreshold, unitRatioFloat)
+
+	// 22. user_reco_constants.go
+	registerFloat64("UserRecoMutualFriendWeight", "user_recommendation", &UserRecoMutualFriendWeight, nonNegativeFloat)
+	registerFloat64("UserRecoGeoDecayScaleKm", "user_recommendation", &UserRecoGeoDecayScaleKm, positiveFloat)
+	registerInt("UserRecoMaxCandidates", "user_recommendation", &UserRecoMaxCandidates, positiveInt)
+	registerInt("UserRecoTopK", "user_recommendation", &UserRecoTopK, positiveInt)
+	registerDuration("UserRecoComputeLockTTL", "user_recommendation", &UserRecoComputeLockTTL, positiveDuration, nil)
+	registerDuration("UserRecoListTTL", "user_recommendation", &UserRecoListTTL, positiveDuration, nil)
+	registerDuration("UserRecoSyncWaitTimeout", "user_recommendation", &UserRecoSyncWaitTimeout, positiveDuration, nil)
+	registerDuration("UserRecoCronInterval", "user_recommendation", &UserRecoCronInterval, positiveDuration, nil)
+	registerInt("UserRecoActiveWindowDays", "user_recommendation", &UserRecoActiveWindowDays, positiveInt)
+	registerInt("UserRecoCronBatchSize", "user_recommendation", &UserRecoCronBatchSize, positiveInt)
 }

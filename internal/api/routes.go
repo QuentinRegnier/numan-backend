@@ -28,6 +28,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/sync_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/telemetry_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/two_factor_handlers"
+	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/user_recommendation_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/user_settings_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/websocket"
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
@@ -118,6 +119,11 @@ func SetupRoutes(r *gin.Engine) {
 	secured.POST("/auth/2fa/disable", two_factor_handlers.DisableTwoFactorHandler)
 	secured.GET("/auth/passkeys", two_factor_handlers.GetPasskeysHandler)
 	secured.DELETE("/auth/passkeys", two_factor_handlers.DeletePasskeyHandler)
+
+	// --- Recommandations d'Utilisateurs ---
+	secured.POST("/users/recommendations", user_recommendation_handlers.GetUserRecommendationsHandler)
+	secured.POST("/users/recommendations/force", user_recommendation_handlers.ForceUserRecommendationsHandler)
+	secured.POST("/users/recommendations/skips", user_recommendation_handlers.SkipUserRecommendationHandler)
 
 	// --- Posts ---
 	secured.POST("/feed/get", feed_handlers.GetFeedHandler) //

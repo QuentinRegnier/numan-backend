@@ -260,6 +260,7 @@ func SeedSpeedCache(ctx context.Context) error {
 				numan_log.Warn(ctx).Err(err).Int64("user_id", userPayload.ID).Msg("Échec lors du stockage de l'utilisateur dans le SPEED Cache")
 				continue
 			}
+			_ = AddUserToLanguageIndex(backgroundCtx, userPayload.ID, 0)
 		}
 
 		offsetUsers += len(usersBatchFromPg)

@@ -8,8 +8,13 @@
 /sql/
 /wireguard/
 
-# Documentation générée
-/docs/
+# Documentation générée (Swagger) et locale existante
+/docs/*
+!/docs/architecture/
+!/docs/adr/
+!/docs/conventions/
+!/docs/knowledge/
+!/docs/runbooks/
 
 # Outils de développement et CI
 qodana.yaml
@@ -17,4 +22,3 @@ qodana.yaml
 wiki.html
 docs.html
 arborescence.md
-.agents/

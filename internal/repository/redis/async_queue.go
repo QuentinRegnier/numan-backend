@@ -22,38 +22,41 @@ import (
 type ActionType string
 
 const (
-	ActionCreate ActionType = "ADD" // J'utilise tes termes "ADD"
-	ActionUpdate ActionType = "UPD"
-	ActionDelete ActionType = "DEL"
-	ActionBuild  ActionType = "BUILD"
+	ActionCreate                      ActionType = "ADD" // J'utilise tes termes "ADD"
+	ActionUpdate                      ActionType = "UPD"
+	ActionDelete                      ActionType = "DEL"
+	ActionBuild                       ActionType = "BUILD"
+	ActionGenerateUserRecommendations ActionType = "GENERATE_USER_RECOMMENDATIONS"
 )
 
 // EntityType : Sur quoi on agit
 type EntityType string
 
 const (
-	EntityUser            EntityType = "Users"
-	EntityUserSettings    EntityType = "UserSettings"
-	EntitySession         EntityType = "Sessions"
-	EntityRelation        EntityType = "Relations"
-	EntityPost            EntityType = "Posts"
-	EntityComment         EntityType = "Comments"
-	EntityLike            EntityType = "Likes"
-	EntityMedia           EntityType = "Media"
-	EntityConversation    EntityType = "Conversations"
-	EntityMembers         EntityType = "Members"
-	EntityMessage         EntityType = "Messages"
-	EntityMessageReaction EntityType = "MessageReactions"
-	EntityView            EntityType = "Views"
-	EntityFeed            EntityType = "Feeds"
-	EntityReport          EntityType = "Reports"
-	EntityTelemetry       EntityType = "Telemetry" // NOUVEAU : Pour router les Dwell Times et Clics
-	EntitySaved           EntityType = "Saved"
-	EntityPasskey         EntityType = "Passkeys"
-	EntityNotification    EntityType = "Notifications"
-	EntityPOI             EntityType = "POIs"
-	EntityPOIReview       EntityType = "POIReviews"
-	EntityPOICounter      EntityType = "POICounters"
+	EntityUser               EntityType = "Users"
+	EntityUserSettings       EntityType = "UserSettings"
+	EntitySession            EntityType = "Sessions"
+	EntityRelation           EntityType = "Relations"
+	EntityPost               EntityType = "Posts"
+	EntityComment            EntityType = "Comments"
+	EntityLike               EntityType = "Likes"
+	EntityMedia              EntityType = "Media"
+	EntityConversation       EntityType = "Conversations"
+	EntityMembers            EntityType = "Members"
+	EntityMessage            EntityType = "Messages"
+	EntityMessageReaction    EntityType = "MessageReactions"
+	EntityView               EntityType = "Views"
+	EntityFeed               EntityType = "Feeds"
+	EntityReport             EntityType = "Reports"
+	EntityTelemetry          EntityType = "Telemetry" // NOUVEAU : Pour router les Dwell Times et Clics
+	EntitySaved              EntityType = "Saved"
+	EntityPasskey            EntityType = "Passkeys"
+	EntityNotification       EntityType = "Notifications"
+	EntityPOI                EntityType = "POIs"
+	EntityPOIReview          EntityType = "POIReviews"
+	EntityPOICounter         EntityType = "POICounters"
+	EntityUserRecoSkip       EntityType = "UserRecoSkips"
+	EntityUserRecommendation EntityType = "UserRecommendations"
 )
 
 // DBTarget : Bitmask pour savoir où envoyer (Mongo, Postgres, ou les deux)
@@ -215,6 +218,11 @@ func updateDashboardAfterPop(ctx context.Context, statsKey, queueKey string, pop
 		redisgo.Rdb.HDel(ctx, statsKey, "ts")
 		redisgo.Rdb.HSet(ctx, statsKey, "count", 0)
 	}
+}
+
+// GetShardID calcule de manière déterministe (CRC32) le shard de file d'attente associé à un identifiant.
+func GetShardID(id int64) int {
+	return int(getShardID(id))
 }
 
 // getShardID (Inchangé)

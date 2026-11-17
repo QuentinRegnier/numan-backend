@@ -30,6 +30,7 @@ func ResetCollections() func() {
 	origSaved := mongo.Saved
 	origPasskeys := mongo.Passkeys
 	origNotifications := mongo.Notifications
+	origUserRecoSkips := mongo.UserRecoSkips
 
 	return func() {
 		mongo.Users = origUsers
@@ -47,6 +48,7 @@ func ResetCollections() func() {
 		mongo.Saved = origSaved
 		mongo.Passkeys = origPasskeys
 		mongo.Notifications = origNotifications
+		mongo.UserRecoSkips = origUserRecoSkips
 	}
 }
 

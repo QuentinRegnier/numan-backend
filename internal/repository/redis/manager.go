@@ -136,6 +136,15 @@ var (
 	POIReviews         *Collection // OBJECT (MsgPack) des avis/notes de POI (StandardTTL)
 	POIReviewsByPOI    *Collection // ZSET des avis textuels par POI (StandardTTL)
 	POIReviewUserIndex *Collection // Index (poi_id:user_id -> review_id) pour garantir 1 avis par utilisateur (StandardTTL)
+
+	// --- USER RECOMMENDATION SYSTEM (L1 Speed Cache) ---
+	UserRecoListGeo     *Collection // ZSET user:reco:list:geo:{user_id}
+	UserRecoListAff     *Collection // ZSET user:reco:list:aff:{user_id}
+	UserRecoListTaste   *Collection // ZSET user:reco:list:taste:{user_id}
+	UserRecoListGlobal  *Collection // ZSET user:reco:list:global:{user_id}
+	UsersLang           *Collection // SET users:lang:{lang}
+	CuckooUserRecoSkips *Collection // CUCKOO FILTER cuckoo:user_reco:skips:{user_id}
+	LockUserRecoCompute *Collection // LOCK lock:user_reco:compute:{user_id}
 )
 
 // ============================================================================
@@ -258,6 +267,15 @@ func InitCacheDatabase() {
 	POIReviews = newCollection("object_cache:poi_review", variables.StandardTTL)
 	POIReviewsByPOI = newCollection("object_cache:poi_reviews:zset", variables.StandardTTL)
 	POIReviewUserIndex = newCollection("index:poi_review:user", variables.StandardTTL)
+
+	// --- USER RECOMMENDATION SYSTEM (L1 Speed Cache) ---
+	UserRecoListGeo = newCollection(variables.RedisKeyUserRecoListGeo, variables.UserRecoListTTL)
+	UserRecoListAff = newCollection(variables.RedisKeyUserRecoListAff, variables.UserRecoListTTL)
+	UserRecoListTaste = newCollection(variables.RedisKeyUserRecoListTaste, variables.UserRecoListTTL)
+	UserRecoListGlobal = newCollection(variables.RedisKeyUserRecoListGlobal, variables.UserRecoListTTL)
+	UsersLang = newCollection(variables.RedisKeyUsersLang, 0)
+	CuckooUserRecoSkips = newCollection(variables.RedisKeyCuckooUserRecoSkips, time.Duration(variables.UserRecoSkipTTLSeconds)*time.Second)
+	LockUserRecoCompute = newCollection(variables.RedisKeyLockUserRecoCompute, variables.UserRecoComputeLockTTL)
 }
 
 // ============================================================================
@@ -424,6 +442,18 @@ func (c *Collection) SRemCount(ctx context.Context, id any, members ...any) (int
 	return c.Client.SRem(ctx, c.Key(id), members...).Result()
 }
 
+// SInter effectue l'intersection atomique Redis SINTER sur un ou plusieurs identifiants de la collection.
+func (c *Collection) SInter(ctx context.Context, ids ...any) ([]string, error) {
+	if len(ids) == 0 {
+		return []string{}, nil
+	}
+	keys := make([]string, len(ids))
+	for i, id := range ids {
+		keys[i] = c.Key(id)
+	}
+	return c.Client.SInter(ctx, keys...).Result()
+}
+
 func (c *Collection) LPush(ctx context.Context, id any, values ...any) error {
 	return c.Client.LPush(ctx, c.Key(id), values...).Err()
 }
@@ -537,6 +567,25 @@ func (c *Collection) DeleteMany(ctx context.Context, ids []int64) error {
 	return c.Client.Del(ctx, keys...).Err()
 }
 
+// ZSetReplaceAtomic remplace atomiquement le contenu d'un ZSET (DEL + ZADD + EXPIRE via Pipeline)
+// sans jamais exposer de liste partiellement écrite aux lecteurs concurrents.
+func (c *Collection) ZSetReplaceAtomic(ctx context.Context, id any, members []*redis.Z, ttl time.Duration) error {
+	key := c.Key(id)
+	if ttl <= 0 {
+		ttl = c.DefaultTTL
+	}
+	pipe := c.Client.Pipeline()
+	pipe.Del(ctx, key)
+	if len(members) > 0 {
+		pipe.ZAdd(ctx, key, members...)
+		if ttl > 0 {
+			pipe.Expire(ctx, key, ttl)
+		}
+	}
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
 // ============================================================================
 // 10. CUCKOO FILTER (RedisBloom)
 // ============================================================================
@@ -547,6 +596,75 @@ func (c *Collection) CFExists(ctx context.Context, id any, item any) (bool, erro
 
 func (c *Collection) CFAdd(ctx context.Context, id any, item any) error {
 	return c.Client.Do(ctx, "CF.ADD", c.Key(id), item).Err()
+}
+
+// CFReserve initialise un Cuckoo Filter dans Redis avec la capacité et les paramètres configurés.
+func (c *Collection) CFReserve(ctx context.Context, id any, capacity int) error {
+	if capacity <= 0 {
+		capacity = variables.UserRecoCuckooCapacity
+	}
+	key := c.Key(id)
+	err := c.Client.Do(
+		ctx,
+		"CF.RESERVE",
+		key,
+		capacity,
+		"BUCKETSIZE",
+		variables.UserRecoCuckooBucketSize,
+		"MAXITERATIONS",
+		variables.UserRecoCuckooMaxIterations,
+		"EXPANSION",
+		variables.UserRecoCuckooExpansionFactor,
+	).Err()
+	if err != nil {
+		return err
+	}
+	if c.DefaultTTL > 0 {
+		_ = c.Client.Expire(ctx, key, c.DefaultTTL).Err()
+	}
+	return nil
+}
+
+// CFAddItems insère un lot d'éléments dans un Cuckoo Filter via un Pipeline unique.
+func (c *Collection) CFAddItems(ctx context.Context, id any, items []any) error {
+	if len(items) == 0 {
+		return nil
+	}
+	key := c.Key(id)
+	pipe := c.Client.Pipeline()
+	for _, it := range items {
+		pipe.Do(ctx, "CF.ADD", key, it)
+	}
+	if c.DefaultTTL > 0 {
+		pipe.Expire(ctx, key, c.DefaultTTL)
+	}
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// CFExistsMany vérifie en un seul aller-retour (Pipeline de CF.EXISTS) quels candidats sont présents dans le Cuckoo Filter.
+func (c *Collection) CFExistsMany(ctx context.Context, id any, items []int64) (map[int64]bool, error) {
+	res := make(map[int64]bool, len(items))
+	if len(items) == 0 {
+		return res, nil
+	}
+	key := c.Key(id)
+	pipe := c.Client.Pipeline()
+	cmds := make([]*redis.Cmd, len(items))
+	for i, item := range items {
+		cmds[i] = pipe.Do(ctx, "CF.EXISTS", key, item)
+	}
+	_, err := pipe.Exec(ctx)
+	if err != nil && !errors.Is(err, redis.Nil) {
+		return nil, err
+	}
+	for i, cmd := range cmds {
+		exists, errBool := cmd.Bool()
+		if errBool == nil && exists {
+			res[items[i]] = true
+		}
+	}
+	return res, nil
 }
 
 // ============================================================================
