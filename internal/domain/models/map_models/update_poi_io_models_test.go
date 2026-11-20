@@ -39,3 +39,28 @@ func TestUpdatePOIInput_NormalizeItems(t *testing.T) {
 	empty := map_models.UpdatePOIInput{}
 	assert.Nil(t, empty.NormalizeItems())
 }
+
+func TestUpdatePOIInput_Validate(t *testing.T) {
+	title := "Valid Title"
+	emptyTitle := "   "
+	badLat := 95.0
+	badRating := 6.0
+	badMedia := []int64{0}
+
+	var nilUpdItem *map_models.UpdatePOIItemInput
+	require.Error(t, nilUpdItem.Validate())
+	require.NoError(t, (&map_models.UpdatePOIItemInput{ID: 1, Title: &title}).Validate())
+	require.Error(t, (&map_models.UpdatePOIItemInput{ID: 0, Title: &title}).Validate())
+	require.Error(t, (&map_models.UpdatePOIItemInput{ID: 1, Title: &emptyTitle}).Validate())
+	require.Error(t, (&map_models.UpdatePOIItemInput{ID: 1, Latitude: &badLat}).Validate())
+	require.Error(t, (&map_models.UpdatePOIItemInput{ID: 1, Rating: &badRating}).Validate())
+	require.Error(t, (&map_models.UpdatePOIItemInput{ID: 1, MediaIDs: &badMedia}).Validate())
+
+	var nilUpd *map_models.UpdatePOIInput
+	require.Error(t, nilUpd.Validate())
+	require.Error(t, (&map_models.UpdatePOIInput{}).Validate())
+	require.NoError(t, (&map_models.UpdatePOIInput{ID: 1, Title: &title}).Validate())
+	require.Error(t, (&map_models.UpdatePOIInput{
+		POIs: []map_models.UpdatePOIItemInput{{ID: 1, Title: &title}, {ID: 1, Title: &title}},
+	}).Validate())
+}

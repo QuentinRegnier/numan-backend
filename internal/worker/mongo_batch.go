@@ -3,8 +3,10 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/models/article_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/post_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/relation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/saved_models"
@@ -94,18 +96,31 @@ func flushMongo(ctx context.Context, events []redis.AsyncEvent) {
 			c = mongo.Notifications
 		case redis.EntityPasskey:
 			c = mongo.Passkeys
+		case redis.EntityArticle:
+			c = mongo.Articles
 		default:
 			numan_log.Error(ctx).Interface("entity", entity).Msg("Worker Mongo : Entité non reconnue ou sans collection définie")
 			continue
 		}
 
-		if c == nil {
+		if c == nil || c.DB == nil {
 			numan_log.Error(ctx).Interface("entity", entity).Msg("Worker Mongo : La collection cible est nil")
 			continue
 		}
 
 		coll := c.DB.Collection(c.Name)
 		var models []libMongo.WriteModel
+
+		if entity == redis.EntityArticle {
+			models = buildArticleMongoWriteModels(evts, now)
+			if len(models) > 0 {
+				opts := options.BulkWrite().SetOrdered(variables.MongoBulkWriteOrdered)
+				if _, err := coll.BulkWrite(ctx, models, opts); err != nil {
+					numan_log.Error(ctx).Err(err).Str("collection", c.Name).Msg("Worker Mongo : Échec de l'opération BulkWrite Articles")
+				}
+			}
+			continue
+		}
 
 		// ── ÉTAPE 3 : CONSTRUCTION DES REQUÊTES (WRITE MODELS) ──────────────
 		for _, e := range evts {
@@ -451,4 +466,97 @@ func updateCountersMongo(ctx context.Context, events []redis.AsyncEvent) {
 			numan_log.Error(ctx).Err(err).Msg("Worker Mongo : Échec BulkWrite Counters (Messages)")
 		}
 	}
+}
+
+// shouldReplaceArticleState détermine si le candidat (candidate, candidateDelete) doit supplanter l'état courant
+// (existing, existingDelete) selon l'ordre monotone de updated_at et la règle d'irréversibilité du soft-delete.
+func shouldReplaceArticleState(existing article_models.ArticlePayload, existingDelete bool, candidate article_models.ArticlePayload, candidateDelete bool) bool {
+	// Un soft-delete ne peut jamais être écrasé par une création ou mise à jour active ultérieure/hors-ordre
+	if existingDelete || existing.Visibility < 0 {
+		if !candidateDelete && candidate.Visibility >= 0 {
+			return false
+		}
+	}
+	// Une suppression (soft-delete) l'emporte toujours sur un état actif de timestamp inférieur ou égal, ou même supérieur
+	if candidateDelete || candidate.Visibility < 0 {
+		return true
+	}
+	return candidate.UpdatedAt >= existing.UpdatedAt
+}
+
+// buildArticleMongoWriteModels consolide un lot d'événements d'articles par ID (idempotence + ordre monotone updated_at)
+// et génère les opérations BulkWrite MongoDB L2.
+func buildArticleMongoWriteModels(evts []redis.AsyncEvent, now time.Time) []libMongo.WriteModel {
+	type consolidatedArticle struct {
+		payload  article_models.ArticlePayload
+		isDelete bool
+	}
+
+	dedup := make(map[int64]consolidatedArticle, len(evts))
+	order := make([]int64, 0, len(evts))
+
+	for _, e := range evts {
+		var art article_models.ArticlePayload
+		if e.Payload != nil {
+			if jsonBytes, err := json.Marshal(e.Payload); err == nil {
+				_ = json.Unmarshal(jsonBytes, &art)
+			}
+		}
+		if art.ID <= 0 {
+			art.ID = e.ID
+		}
+		if art.ID <= 0 {
+			continue
+		}
+		isDel := e.Action == redis.ActionDelete || art.Visibility < 0
+		if isDel {
+			art.Visibility = variables.ArticleVisibilitySoftDeleted
+			if art.UpdatedAt <= 0 {
+				art.UpdatedAt = e.Timestamp
+			}
+		}
+		art.Normalize()
+
+		cur, exists := dedup[art.ID]
+		if !exists {
+			order = append(order, art.ID)
+			dedup[art.ID] = consolidatedArticle{payload: art, isDelete: isDel}
+			continue
+		}
+		if shouldReplaceArticleState(cur.payload, cur.isDelete, art, isDel) {
+			dedup[art.ID] = consolidatedArticle{payload: art, isDelete: isDel}
+		}
+	}
+
+	models := make([]libMongo.WriteModel, 0, len(order))
+	for _, id := range order {
+		c := dedup[id]
+		if c.isDelete {
+			models = append(models, libMongo.NewUpdateOneModel().
+				SetFilter(bson.M{"id": id}).
+				SetUpdate(bson.M{"$set": bson.M{
+					"visibility": variables.ArticleVisibilitySoftDeleted,
+					"updated_at": c.payload.UpdatedAt,
+					"last_use":   now,
+				}}).
+				SetUpsert(true))
+			continue
+		}
+
+		var doc bson.M
+		dataBytes, err := bson.Marshal(c.payload)
+		if err != nil {
+			continue
+		}
+		if err := bson.Unmarshal(dataBytes, &doc); err != nil {
+			continue
+		}
+		doc["last_use"] = now
+
+		models = append(models, libMongo.NewUpdateOneModel().
+			SetFilter(bson.M{"id": id}).
+			SetUpdate(bson.M{"$set": doc}).
+			SetUpsert(true))
+	}
+	return models
 }

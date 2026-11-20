@@ -110,7 +110,7 @@ func TestTicketLifecycleService_CompleteWorkflow(t *testing.T) {
 	})
 	require.NoError(t, errPropose)
 	assert.Equal(t, variables.ReportStatePendingPeerReview, viewPeer.State)
-	assert.NotEmpty(t, viewPeer.ProposerPseudonym)
+	assert.Empty(t, viewPeer.ProposerPseudonym)
 	assert.Equal(t, int64(0), viewPeer.ClaimedByModID, "l'identité de Mod A doit être masquée dans la vue publique")
 
 	// 4. ReviewBlameProposal : Mod A tente de s'auto-valider (Interdiction absolue sans fuite d'identité)

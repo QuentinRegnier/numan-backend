@@ -133,6 +133,13 @@ func main() {
 		log.Printf("✅ Cache Redis déjà peuplé (%d éléments). Seeding ignoré, démarrage éclair !", count)
 	}
 
+	// Amorçage dédié de l'index Redis L1 persistant des articles s'il n'est pas encore initialisé
+	if artInit, errInit := redisgo.Exists(context.Background(), variables.RedisKeyArticlesIndexInit); errInit != nil || !artInit {
+		if err := cache_service.SeedArticles(context.Background()); err != nil {
+			log.Printf("⚠️ Avertissement lors du seeding des articles: %v", err)
+		}
+	}
+
 	// On ne lance les workers internes que si le serveur est en mode monolith ou worker
 	serverRole := os.Getenv("SERVER_ROLE")
 	if serverRole == "monolith" || serverRole == "worker_node" {

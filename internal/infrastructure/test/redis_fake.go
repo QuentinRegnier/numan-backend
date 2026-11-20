@@ -383,6 +383,46 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 		s.ttls[key] = time.Duration(ms) * time.Millisecond
 		return respInt(1)
 
+	case "TTL":
+		if len(args) < 2 {
+			return respErr("wrong number of arguments for TTL")
+		}
+		key := args[1]
+		_, ok1 := s.strings[key]
+		_, ok2 := s.hashes[key]
+		_, ok3 := s.sets[key]
+		_, ok4 := s.zsets[key]
+		_, ok5 := s.lists[key]
+		_, ok6 := s.geos[key]
+		if !ok1 && !ok2 && !ok3 && !ok4 && !ok5 && !ok6 {
+			return respInt(-2)
+		}
+		ttl, hasTTL := s.ttls[key]
+		if !hasTTL || ttl <= 0 {
+			return respInt(-1)
+		}
+		return respInt(int64(ttl / time.Second))
+
+	case "PTTL":
+		if len(args) < 2 {
+			return respErr("wrong number of arguments for PTTL")
+		}
+		key := args[1]
+		_, ok1 := s.strings[key]
+		_, ok2 := s.hashes[key]
+		_, ok3 := s.sets[key]
+		_, ok4 := s.zsets[key]
+		_, ok5 := s.lists[key]
+		_, ok6 := s.geos[key]
+		if !ok1 && !ok2 && !ok3 && !ok4 && !ok5 && !ok6 {
+			return respInt(-2)
+		}
+		ttl, hasTTL := s.ttls[key]
+		if !hasTTL || ttl <= 0 {
+			return respInt(-1)
+		}
+		return respInt(int64(ttl / time.Millisecond))
+
 	case "INCR":
 		key := args[1]
 		cur, _ := strconv.ParseInt(s.strings[key], 10, 64)
@@ -467,6 +507,43 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 			}
 		}
 		return respNil()
+
+	case "HMGET":
+		if len(args) < 3 {
+			return respErr("wrong number of arguments for HMGET")
+		}
+		key := args[1]
+		h := s.hashes[key]
+		out := make([]string, 0, len(args)-2)
+		for _, f := range args[2:] {
+			if h != nil {
+				if v, ok := h[f]; ok {
+					out = append(out, respBulk(v))
+					continue
+				}
+			}
+			out = append(out, respNil())
+		}
+		return respArray(out)
+
+	case "HEXISTS":
+		if len(args) < 3 {
+			return respErr("wrong number of arguments for HEXISTS")
+		}
+		key, f := args[1], args[2]
+		if h, ok := s.hashes[key]; ok {
+			if _, ok2 := h[f]; ok2 {
+				return respInt(1)
+			}
+		}
+		return respInt(0)
+
+	case "HLEN":
+		if len(args) < 2 {
+			return respErr("wrong number of arguments for HLEN")
+		}
+		key := args[1]
+		return respInt(int64(len(s.hashes[key])))
 
 	case "HGETALL":
 		key := args[1]

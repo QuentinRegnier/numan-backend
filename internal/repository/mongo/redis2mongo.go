@@ -47,6 +47,8 @@ func redis2Mongo(ctx context.Context, entity redis.EntityType) (*Collection, err
 		coll = Notifications
 	case redis.EntityUserRecoSkip:
 		coll = UserRecoSkips
+	case redis.EntityArticle:
+		coll = Articles
 	default:
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

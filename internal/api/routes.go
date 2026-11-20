@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/admin_handlers"
+	admin_article_handlers "github.com/QuentinRegnier/numan-backend/internal/api/handlers/admin_handlers/article_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/admin_handlers/variables_handlers"
+	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/article_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/auth_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/comment_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/conversation_handlers"
@@ -228,6 +230,10 @@ func SetupRoutes(r *gin.Engine) {
 	secured.POST("/map/poi/review/get", map_handlers.GetPOIReviewsHandler)
 	secured.DELETE("/map/poi/review/delete", map_handlers.DeletePOIReviewHandler)
 
+	// --- Articles Markdown (Public Object Storage) ---
+	secured.POST("/articles/list", article_handlers.ListArticlesHandler)
+	secured.POST("/articles/get", article_handlers.GetArticleHandler)
+
 	// --- Recherche ---
 	secured.POST("/search/autocomplete/text", search_handlers.AutocompleteTextHandler) //
 	secured.POST("/search/autocomplete/tags", search_handlers.AutocompleteTagHandler)  //
@@ -261,6 +267,16 @@ func SetupRoutes(r *gin.Engine) {
 	adminGroup.POST("/map/poi/set", map_handlers.SetPOIHandler)
 	adminGroup.PUT("/map/poi/update", map_handlers.UpdatePOIHandler)
 	adminGroup.DELETE("/map/poi/delete", map_handlers.DeletePOIHandler)
+
+	// --- Admin Articles Markdown & Public Object Storage ---
+	adminGroup.POST("/articles/media/upload", admin_article_handlers.UploadArticleAssetHandler)
+	adminGroup.POST("/articles/upload", admin_article_handlers.UploadArticleAssetHandler)
+	adminGroup.POST("/articles/create", admin_article_handlers.CreateArticleHandler)
+	adminGroup.POST("/articles/set", admin_article_handlers.CreateArticleHandler)
+	adminGroup.PUT("/articles/update", admin_article_handlers.UpdateArticleHandler)
+	adminGroup.DELETE("/articles/delete", admin_article_handlers.DeleteArticleHandler)
+	adminGroup.POST("/articles/list", article_handlers.ListArticlesHandler)
+	adminGroup.POST("/articles/get", article_handlers.GetArticleHandler)
 
 	// =========================================================================
 	// 4. ROUTES MODÉRATION (JWT + HMAC + Rôle Modérateur Grade >= 3 ou Admin)

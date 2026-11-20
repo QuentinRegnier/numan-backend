@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -76,6 +77,7 @@ func (f *FakeMinioServer) handleRequest(w http.ResponseWriter, r *http.Request) 
 	// Simulation du HEAD (BucketExists / ObjectExists)
 	if r.Method == http.MethodHead {
 		w.Header().Set("ETag", "\"d41d8cd98f00b204e9800998ecf8427e\"")
+		w.Header().Set("Last-Modified", "Mon, 02 Jan 2006 15:04:05 GMT")
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -106,6 +108,8 @@ func (f *FakeMinioServer) handleRequest(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 
+		w.Header().Set("ETag", "\"d41d8cd98f00b204e9800998ecf8427e\"")
+		w.Header().Set("Last-Modified", "Mon, 02 Jan 2006 15:04:05 GMT")
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.WriteHeader(http.StatusOK)
@@ -121,6 +125,10 @@ func (f *FakeMinioServer) handleRequest(w http.ResponseWriter, r *http.Request) 
 			f.Buckets[bucket] = make(map[string][]byte)
 		}
 		data, _ := io.ReadAll(r.Body)
+		if strings.HasPrefix(r.Header.Get("X-Amz-Content-Sha256"), "STREAMING-") ||
+			strings.Contains(r.Header.Get("Content-Encoding"), "aws-chunked") {
+			data = decodeAWSChunkedPayload(data)
+		}
 		f.Buckets[bucket][parts[1]] = data
 		f.mu.Unlock()
 		f.mu.RLock() // Restore Read Lock for defer
@@ -130,5 +138,54 @@ func (f *FakeMinioServer) handleRequest(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Simulation du DELETE Object (ex: RemovePhysicalMedia ou Rollback S3)
+	if r.Method == http.MethodDelete && len(parts) == 2 {
+		f.mu.RUnlock() // Switch to Write Lock
+		f.mu.Lock()
+		if f.Buckets[bucket] != nil {
+			delete(f.Buckets[bucket], parts[1])
+		}
+		f.mu.Unlock()
+		f.mu.RLock() // Restore Read Lock for defer
+
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	http.Error(w, "Method Not Allowed in FakeS3", http.StatusMethodNotAllowed)
+}
+
+func decodeAWSChunkedPayload(raw []byte) []byte {
+	var out bytes.Buffer
+	rest := raw
+	for len(rest) > 0 {
+		lineEnd := bytes.Index(rest, []byte("\r\n"))
+		if lineEnd < 0 {
+			return raw
+		}
+		header := string(rest[:lineEnd])
+		semi := strings.IndexByte(header, ';')
+		sizeHex := header
+		if semi >= 0 {
+			sizeHex = header[:semi]
+		}
+		chunkSize, err := strconv.ParseInt(strings.TrimSpace(sizeHex), 16, 64)
+		if err != nil {
+			return raw
+		}
+		rest = rest[lineEnd+2:]
+		if chunkSize == 0 {
+			break
+		}
+		if int64(len(rest)) < chunkSize {
+			out.Write(rest)
+			break
+		}
+		out.Write(rest[:chunkSize])
+		rest = rest[chunkSize:]
+		if bytes.HasPrefix(rest, []byte("\r\n")) {
+			rest = rest[2:]
+		}
+	}
+	return out.Bytes()
 }

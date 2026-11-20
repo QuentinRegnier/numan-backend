@@ -6,6 +6,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/map_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/media_models"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPOIPayload_ToView(t *testing.T) {
@@ -35,4 +36,11 @@ func TestPOIPayload_ToView(t *testing.T) {
 	assert.Equal(t, "https://cdn.numan.app/louvre.avif", view.Media[0].URL)
 	assert.Equal(t, "https://maps.app.goo.gl/louvre", view.GoogleMapsLink)
 	assert.Equal(t, "https://maps.apple.com/?place-id=louvre", view.AppleMapsLink)
+}
+
+func TestGetPoisInBBoxInput_Validate(t *testing.T) {
+	var nilBBox *map_models.GetPoisInBBoxInput
+	require.Error(t, nilBBox.Validate())
+	require.NoError(t, (&map_models.GetPoisInBBoxInput{SWLat: 48.0, SWLng: 2.0, NELat: 49.0, NELng: 3.0}).Validate())
+	require.Error(t, (&map_models.GetPoisInBBoxInput{SWLat: 50.0, SWLng: 2.0, NELat: 49.0, NELng: 3.0}).Validate())
 }

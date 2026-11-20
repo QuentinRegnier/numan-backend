@@ -57,6 +57,7 @@ const (
 	EntityPOICounter         EntityType = "POICounters"
 	EntityUserRecoSkip       EntityType = "UserRecoSkips"
 	EntityUserRecommendation EntityType = "UserRecommendations"
+	EntityArticle            EntityType = "Articles"
 )
 
 // DBTarget : Bitmask pour savoir où envoyer (Mongo, Postgres, ou les deux)

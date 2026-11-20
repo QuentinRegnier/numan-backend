@@ -38,6 +38,7 @@ var (
 	Passkeys         *Collection
 	Notifications    *Collection
 	UserRecoSkips    *Collection
+	Articles         *Collection
 )
 
 // InitCacheDatabase initialise la structure logique de MongoDB pour les caches (Warm Storage L2)
@@ -60,6 +61,7 @@ func InitCacheDatabase() {
 	schemaPasskeys := schemas.PasskeysSchema
 	schemaNotifications := schemas.NotificationsSchema
 	schemaUserRecoSkips := schemas.UserRecoSkipsSchema
+	schemaArticles := schemas.ArticlesSchema
 
 	// variables globales
 	Users = newMongoCollection("numan_mongo", "auth.users", schemaUsers)
@@ -78,6 +80,7 @@ func InitCacheDatabase() {
 	Passkeys = newMongoCollection("numan_mongo", "auth.user_passkeys", schemaPasskeys)
 	Notifications = newMongoCollection("numan_mongo", "activity.notifications", schemaNotifications)
 	UserRecoSkips = newMongoCollection("numan_mongo", variables.MongoCollUserRecoSkips, schemaUserRecoSkips)
+	Articles = newMongoCollection("numan_mongo", variables.MongoCollArticles, schemaArticles)
 }
 
 // ---------------- Collection et schéma ----------------

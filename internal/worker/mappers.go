@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain/models/article_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/auth_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/comment_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/conversation_models"
@@ -78,6 +79,8 @@ func getMapper(entity redis.EntityType) entityMapper {
 		return &poiMapper{}
 	case redis.EntityPOIReview:
 		return &poiReviewMapper{}
+	case redis.EntityArticle:
+		return &articleMapper{}
 	default:
 		return nil
 	}
@@ -940,6 +943,70 @@ func (m *poiReviewMapper) ToRow(data any) ([]any, error) {
 
 func (m *poiReviewMapper) BuildUpdateQuery(tempTable string) string {
 	return buildGenericUpdateQuery(m.TableName(), tempTable, m.Columns())
+}
+
+// ============================================================================
+// MAPPER : ARTICLES MARKDOWN (content.articles)
+// ============================================================================
+type articleMapper struct{}
+
+func (m *articleMapper) TableName() string { return "content.articles" }
+
+func (m *articleMapper) Columns() []string {
+	return []string{
+		"id", "title", "summary", "cover_media_id", "markdown_media_id",
+		"attachment_media_ids", "partner_url", "visibility", "expires_at", "created_at", "updated_at",
+	}
+}
+
+func (m *articleMapper) ToRow(data any) ([]any, error) {
+	jsonBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "ArticleMapper : Échec de la sérialisation", err)
+	}
+
+	var a article_models.ArticlePayload
+	if err := json.Unmarshal(jsonBytes, &a); err != nil {
+		return nil, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "ArticleMapper : Échec de la désérialisation", err)
+	}
+
+	var coverDB any = a.CoverMediaID
+	if a.CoverMediaID <= 0 {
+		coverDB = nil
+	}
+
+	var markdownDB any = a.MarkdownMediaID
+	if a.MarkdownMediaID <= 0 {
+		markdownDB = nil
+	}
+
+	var partnerURLDB any = a.PartnerURL
+	if a.PartnerURL == "" {
+		partnerURLDB = nil
+	}
+
+	var expiresAtDB any
+	if a.ExpiresAt != nil && *a.ExpiresAt > 0 {
+		expiresAtDB = *a.ExpiresAt
+	}
+
+	attachments := a.AttachmentMediaIDs
+	if attachments == nil {
+		attachments = []int64{}
+	}
+
+	return []any{
+		a.ID, a.Title, a.Summary, coverDB, markdownDB,
+		pq.Array(attachments), partnerURLDB, a.Visibility, expiresAtDB, a.CreatedAt, a.UpdatedAt,
+	}, nil
+}
+
+func (m *articleMapper) BuildUpdateQuery(tempTable string) string {
+	baseQuery := buildGenericUpdateQuery(m.TableName(), tempTable, m.Columns())
+	return fmt.Sprintf(
+		"%s AND %s.updated_at <= %s.updated_at AND %s.visibility >= 0",
+		baseQuery, m.TableName(), tempTable, m.TableName(),
+	)
 }
 
 // ============================================================================

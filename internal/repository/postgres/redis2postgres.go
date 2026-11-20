@@ -41,6 +41,8 @@ func redis2Postgres(ctx context.Context, entity redis.EntityType) (postgresTarge
 		return postgresTarget{Schema: "messaging", Table: "messages"}, nil
 	case redis.EntityPasskey:
 		return postgresTarget{Schema: "auth", Table: "user_passkeys"}, nil
+	case redis.EntityArticle:
+		return postgresTarget{Schema: "content", Table: "articles"}, nil
 	default:
 		return postgresTarget{}, numan_error.NewAppError(
 			http.StatusInternalServerError,

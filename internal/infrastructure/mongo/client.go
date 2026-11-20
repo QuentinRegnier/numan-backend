@@ -113,9 +113,15 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 		{Keys: bson.D{{Key: "credential_id", Value: 1}}, Options: options.Index().SetUnique(true)},
 	})
 
+	articles := db.Collection(variables.MongoCollArticles)
+	_, _ = articles.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{Keys: bson.D{{Key: "id", Value: 1}}, Options: options.Index().SetUnique(true)},
+		{Keys: bson.D{{Key: "visibility", Value: 1}, {Key: "created_at", Value: -1}}},
+	})
+
 	slidingCollections := []*mongo.Collection{
 		users, userSettings, sessions, relations, posts, comments,
-		likes, media, conversations, members, messages, saved, userPasskeys,
+		likes, media, conversations, members, messages, saved, userPasskeys, articles,
 	}
 
 	var ttlErrs []error

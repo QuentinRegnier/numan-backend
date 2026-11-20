@@ -33,3 +33,18 @@ func TestSetPOIInput_NormalizeItems(t *testing.T) {
 	empty := map_models.SetPOIInput{}
 	assert.Nil(t, empty.NormalizeItems())
 }
+
+func TestSetPOIInput_Validate(t *testing.T) {
+	item := map_models.CreatePOIItemInput{
+		ID:        10,
+		Title:     "Louvre",
+		Latitude:  48.86,
+		Longitude: 2.33,
+	}
+
+	var nilSet *map_models.SetPOIInput
+	require.Error(t, nilSet.Validate())
+	require.Error(t, (&map_models.SetPOIInput{}).Validate())
+	require.NoError(t, (&map_models.SetPOIInput{Title: "Single", Latitude: 48.85, Longitude: 2.35}).Validate())
+	require.Error(t, (&map_models.SetPOIInput{POIs: []map_models.CreatePOIItemInput{item, item}}).Validate())
+}

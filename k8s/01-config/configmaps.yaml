@@ -40,6 +40,8 @@ data:
   MINIO_ENDPOINT: "minio-hot:9000"
   # Deployment variable: the same value feeds the bootstrap Job, so app and bucket cannot drift apart.
   MINIO_BUCKET_NAME: "${MINIO_HOT_BUCKET}"
+  MINIO_PUBLIC_BUCKET_NAME: "${MINIO_PUBLIC_BUCKET}"
+  PUBLIC_MEDIA_BASE_URL: "https://${NUMAN_DOMAIN}/public"
   WATERMARK_API_URL: "http://watermark:8080"
 
   # --- REDIS SIZING (source: .env; also consumed by the redis StatefulSet) ------
@@ -48,10 +50,10 @@ data:
   # 03-databases/redis.yaml (4608Mi). Keep the two consistent.
   REDIS_CONTAINER_LIMIT: "4.5gb"
 
-  # --- SMTP / EMAIL (source: .env) --------------------------------------------
-  SMTP_HOST: "${SMTP_HOST}"
-  SMTP_PORT: "${SMTP_PORT}"
-  SMTP_FROM_ADDRESS: "${SMTP_FROM_ADDRESS}"
+  # --- SMTP / EMAIL (topologie interne Maddy + expéditeur) ------------------
+  SMTP_HOST: "maddy"
+  SMTP_PORT: "2525"
+  SMTP_FROM_ADDRESS: "${MAIL_FROM_ADDRESS}"
 ---
 # Settings used ONLY by the MinIO bootstrap Jobs (04-storage/bucket-init-jobs.yaml).
 # Not injected into the application.
@@ -66,6 +68,7 @@ metadata:
     app.kubernetes.io/component: config
 data:
   HOT_BUCKET: "${MINIO_HOT_BUCKET}"
+  PUBLIC_BUCKET: "${MINIO_PUBLIC_BUCKET}"
   COLD_BUCKET: "${MINIO_COLD_BUCKET}"
 
   # Anonymous read on the hot bucket. The Go application streams media itself with its own S3 credentials

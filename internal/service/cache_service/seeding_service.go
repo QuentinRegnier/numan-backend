@@ -308,6 +308,41 @@ func SeedSpeedCache(ctx context.Context) error {
 		numan_log.Warn(ctx).Err(errMsg).Msg("Avertissement lors du seeding de la messagerie")
 	}
 
+	// ── 5. ARTICLES MARKDOWN (INDEX L1 NON-ÉVICTABLE) ───────────────────────
+
+	if errArt := seedArticles(backgroundCtx); errArt != nil {
+		numan_log.Warn(ctx).Err(errArt).Msg("Avertissement lors du seeding des articles")
+	}
+
+	return nil
+}
+
+// SeedArticles charge tous les articles actifs depuis PostgreSQL L3 vers l'index Redis L1 persistant (TTL 0) et synchronise MongoDB L2.
+func SeedArticles(ctx context.Context) error {
+	return seedArticles(ctx)
+}
+
+func seedArticles(ctx context.Context) error {
+	numan_log.Info(ctx).Msg("Amorçage Articles: Chargement des articles actifs depuis PostgreSQL L3...")
+
+	activeArticles, errPg := postgres.FuncLoadActiveArticles(ctx)
+	if errPg != nil {
+		return errPg
+	}
+
+	if errCache := object_cache_service.SetArticlesBatchInCache(ctx, activeArticles); errCache != nil {
+		return errCache
+	}
+
+	for _, art := range activeArticles {
+		if mongo.Articles != nil && mongo.Articles.DB != nil {
+			if errMongo := mongo.MongoUpsertArticle(ctx, art); errMongo != nil {
+				numan_log.Warn(ctx).Err(errMongo).Int64("article_id", art.ID).Msg("Échec de la synchronisation de l'article dans MongoDB L2")
+			}
+		}
+	}
+
+	numan_log.Info(ctx).Int("count", len(activeArticles)).Msg("Index Redis L1 des articles initialisé avec succès.")
 	return nil
 }
 

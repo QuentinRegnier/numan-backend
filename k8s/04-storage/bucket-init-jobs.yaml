@@ -70,9 +70,14 @@ spec:
               fi
               if [ "$HOT_VERSIONING" = "true" ]; then mc version enable "$ALIAS/$BUCKET"; fi
 
-              # --- least-privilege application user: read/write on THIS bucket only, no admin actions ---
+              # --- dedicated public read-only bucket for Markdown articles and public article assets ---
+              mc mb --ignore-existing "$ALIAS/$PUBLIC_BUCKET"
+              mc anonymous set download "$ALIAS/$PUBLIC_BUCKET"
+              if [ "$HOT_VERSIONING" = "true" ]; then mc version enable "$ALIAS/$PUBLIC_BUCKET"; fi
+
+              # --- least-privilege application user: read/write on hot private and public buckets only, no admin actions ---
               cat > /tmp/policy-app.json <<POLICY
-              {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:*"],"Resource":["arn:aws:s3:::$BUCKET","arn:aws:s3:::$BUCKET/*"]}]}
+              {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:*"],"Resource":["arn:aws:s3:::$BUCKET","arn:aws:s3:::$BUCKET/*","arn:aws:s3:::$PUBLIC_BUCKET","arn:aws:s3:::$PUBLIC_BUCKET/*"]}]}
               POLICY
               mc admin policy create "$ALIAS" numan-hot-app-rw /tmp/policy-app.json
               # "user add" is idempotent and re-applies the secret from the Kubernetes Secret (rotation).

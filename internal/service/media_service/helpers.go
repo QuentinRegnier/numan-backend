@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/models/article_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/media_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
@@ -24,6 +26,143 @@ import (
 	"github.com/vmihailenco/msgpack/v5"
 	"go.mongodb.org/mongo-driver/bson"
 )
+
+// ############################################################################
+// # UTILITAIRES : BUCKET ROUTING & URLS PUBLIQUES S3 (ARTICLES / MAPS)
+// ############################################################################
+
+// resolveBucketForStoragePath détermine le bucket S3/MinIO cible selon le préfixe du chemin de stockage.
+// Les assets publics d'articles (`articles/`) sont stockés dans `MINIO_PUBLIC_BUCKET_NAME` (défaut: `numan-public`).
+// Tous les autres médias utilisateurs restent dans `MINIO_BUCKET_NAME` (défaut: `numan-bucket`).
+func resolveBucketForStoragePath(storagePath string) string {
+	cleanPath := strings.TrimPrefix(strings.TrimSpace(storagePath), "/")
+	if strings.HasPrefix(cleanPath, variables.ArticleMediaStoragePrefix) {
+		pubBucket := strings.TrimSpace(os.Getenv("MINIO_PUBLIC_BUCKET_NAME"))
+		if pubBucket == "" {
+			return variables.DefaultPublicBucketName
+		}
+		return pubBucket
+	}
+
+	privBucket := strings.TrimSpace(os.Getenv("MINIO_BUCKET_NAME"))
+	if privBucket == "" {
+		return variables.DefaultPrivateBucketName
+	}
+	return privBucket
+}
+
+// GeneratePublicMediaURL génère une URL publique directe (sans signature HMAC ni filigrane)
+// à partir de `PUBLIC_MEDIA_BASE_URL` et d'un `storagePath` relatif sûr.
+func GeneratePublicMediaURL(storagePath string) string {
+	trimmed := strings.TrimSpace(storagePath)
+	if trimmed == "" {
+		return ""
+	}
+	// Rejet strict des URLs externes, schémas injectés, traversées de répertoires ou caractères de contrôle
+	lower := strings.ToLower(trimmed)
+	if strings.Contains(lower, "://") ||
+		strings.HasPrefix(lower, "//") ||
+		strings.Contains(trimmed, "..") ||
+		strings.Contains(trimmed, "\\") ||
+		strings.ContainsAny(trimmed, " \t\r\n\x00?#") {
+		return ""
+	}
+
+	cleanPath := strings.TrimPrefix(trimmed, "/")
+	if cleanPath == "" {
+		return ""
+	}
+
+	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("PUBLIC_MEDIA_BASE_URL")), "/")
+	if baseURL == "" {
+		baseURL = "/public"
+	}
+
+	return fmt.Sprintf("%s/%s", baseURL, cleanPath)
+}
+
+// ResolvePublicMediaMapCascade résout en lot (MGET L1 puis cascade L1 -> L2 -> L3 pour les misses)
+// une liste d'identifiants de médias d'articles publics (`Visibility == MediaVisibilityPublic` et préfixe `articles/`).
+func ResolvePublicMediaMapCascade(ctx context.Context, mediaIDs []int64) map[int64]article_models.ArticleAssetView {
+	result := make(map[int64]article_models.ArticleAssetView)
+	if len(mediaIDs) == 0 {
+		return result
+	}
+
+	// Déduplication des IDs strictement positifs
+	seen := make(map[int64]struct{}, len(mediaIDs))
+	uniqueIDs := make([]int64, 0, len(mediaIDs))
+	for _, id := range mediaIDs {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; !ok {
+			seen[id] = struct{}{}
+			uniqueIDs = append(uniqueIDs, id)
+		}
+	}
+	if len(uniqueIDs) == 0 {
+		return result
+	}
+
+	isEligibleArticleAsset := func(mp media_models.MediaPayload) (article_models.ArticleAssetView, bool) {
+		cleanPath := strings.TrimPrefix(strings.TrimSpace(mp.StoragePath), "/")
+		if mp.ID <= 0 || mp.Visibility != variables.MediaVisibilityPublic {
+			return article_models.ArticleAssetView{}, false
+		}
+		if !strings.HasPrefix(cleanPath, variables.ArticleMediaStoragePrefix) {
+			return article_models.ArticleAssetView{}, false
+		}
+		pubURL := GeneratePublicMediaURL(cleanPath)
+		if pubURL == "" {
+			return article_models.ArticleAssetView{}, false
+		}
+		return article_models.ArticleAssetView{
+			MediaID:     mp.ID,
+			StoragePath: cleanPath,
+			URL:         pubURL,
+		}, true
+	}
+
+	// 1. Batch L1 MGET
+	missedIDs := make([]int64, 0)
+	if len(uniqueIDs) > 1 && redis.IsReady() && redis.Media != nil {
+		if res, errMany := redis.Media.GetMany(ctx, uniqueIDs); errMany == nil && res != nil {
+			for _, id := range uniqueIDs {
+				raw, found := res.Found[id]
+				if !found {
+					missedIDs = append(missedIDs, id)
+					continue
+				}
+				var mp media_models.MediaPayload
+				if errUn := msgpack.Unmarshal(raw, &mp); errUn != nil {
+					missedIDs = append(missedIDs, id)
+					continue
+				}
+				if view, ok := isEligibleArticleAsset(mp); ok {
+					result[id] = view
+				}
+			}
+		} else {
+			missedIDs = uniqueIDs
+		}
+	} else {
+		missedIDs = uniqueIDs
+	}
+
+	// 2. Fallback cascade L1 -> L2 -> L3 pour les misses uniquement
+	for _, id := range missedIDs {
+		mp, errCascade := getMediaCascade(ctx, id)
+		if errCascade != nil {
+			continue
+		}
+		if view, ok := isEligibleArticleAsset(mp); ok {
+			result[id] = view
+		}
+	}
+
+	return result
+}
 
 // ############################################################################
 // # UTILITAIRES : SÉCURITÉ ET FILIGRANAGE DES URLS (WATERMARK)
@@ -168,19 +307,24 @@ func getMediaCascade(ctx context.Context, mediaID int64) (media_models.MediaPayl
 
 // RemovePhysicalMedia détruit physiquement le fichier sur le stockage S3/MinIO.
 // Utilisé par les suppressions unitaires et le Garbage Collector asynchrone.
+// Protège strictement les préfixes statiques opérateur (`maps/` et `static/`).
 func RemovePhysicalMedia(ctx context.Context, storagePath string) error {
-	if storagePath == "" {
+	cleanPath := strings.TrimPrefix(strings.TrimSpace(storagePath), "/")
+	if cleanPath == "" {
 		return nil
 	}
-
-	bucketName := os.Getenv("MINIO_BUCKET_NAME")
-	if bucketName == "" {
-		bucketName = "numan-bucket" // Fallback par défaut de l'infrastructure
+	if strings.HasPrefix(cleanPath, variables.MapsStoragePrefix) || strings.HasPrefix(cleanPath, variables.StaticStoragePrefix) {
+		return nil
+	}
+	if minio.MinioClient == nil {
+		return numan_error.NewInternal()
 	}
 
-	err := minio.MinioClient.RemoveObject(ctx, bucketName, storagePath, miniogo.RemoveObjectOptions{})
+	bucketName := resolveBucketForStoragePath(cleanPath)
+
+	err := minio.MinioClient.RemoveObject(ctx, bucketName, cleanPath, miniogo.RemoveObjectOptions{})
 	if err != nil {
-		numan_log.Error(ctx).Err(err).Str("path", storagePath).Msg("Échec de la suppression physique du fichier sur MinIO")
+		numan_log.Error(ctx).Err(err).Str("bucket", bucketName).Str("path", cleanPath).Msg("Échec de la suppression physique du fichier sur MinIO")
 		return numan_error.NewInternal()
 	}
 

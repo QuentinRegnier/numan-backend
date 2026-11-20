@@ -109,3 +109,69 @@ func TestCalls_ScanPosts(t *testing.T) {
 		test.AssertDatabaseError_Postgres(t, err)
 	})
 }
+
+func TestCalls_ScanArticleRows(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("returns_empty_slice_on_nil_rows", func(t *testing.T) {
+		articles, err := scanArticleRows(nil)
+		require.NoError(t, err)
+		assert.NotNil(t, articles)
+		assert.Empty(t, articles)
+	})
+
+	cols := []string{
+		"id", "title", "summary", "cover_media_id", "markdown_media_id",
+		"attachment_media_ids", "partner_url", "visibility", "expires_at", "created_at", "updated_at",
+	}
+
+	t.Run("scans_valid_article_row_successfully", func(t *testing.T) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{
+				{int64(101), "Guide", "Résumé", int64(201), int64(301), "{401,402}", "https://partner.fr", int64(0), int64(1900000000000), int64(1700000000000), int64(1700000005000)},
+			}), nil
+		}, nil)
+
+		rows, err := infradb.PostgresDB.QueryContext(ctx, "SELECT * FROM content.articles")
+		require.NoError(t, err)
+		defer rows.Close()
+
+		articles, err := scanArticleRows(rows)
+		require.NoError(t, err)
+		require.Len(t, articles, 1)
+		assert.Equal(t, int64(101), articles[0].ID)
+		assert.Equal(t, []int64{401, 402}, articles[0].AttachmentMediaIDs)
+		require.NotNil(t, articles[0].ExpiresAt)
+		assert.Equal(t, int64(1900000000000), *articles[0].ExpiresAt)
+	})
+
+	t.Run("handles_scan_error_and_rows_err", func(t *testing.T) {
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRows(cols, [][]driver.Value{
+				{"bad-id", "Guide", "Résumé", int64(201), int64(301), "{}", "", int64(0), nil, int64(1), int64(1)},
+			}), nil
+		}, nil)
+
+		rows, err := infradb.PostgresDB.QueryContext(ctx, "SELECT * FROM content.articles")
+		require.NoError(t, err)
+		defer rows.Close()
+
+		articles, err := scanArticleRows(rows)
+		assert.Nil(t, articles)
+		test.AssertDatabaseError_Postgres(t, err)
+
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			return test.NewMockRowsWithErr(cols, [][]driver.Value{
+				{int64(101), "Guide", "Résumé", int64(201), int64(301), "{}", "", int64(0), nil, int64(1), int64(1)},
+			}, errors.New("stream truncated")), nil
+		}, nil)
+
+		rows2, err := infradb.PostgresDB.QueryContext(ctx, "SELECT * FROM content.articles")
+		require.NoError(t, err)
+		defer rows2.Close()
+
+		articles2, err := scanArticleRows(rows2)
+		assert.Nil(t, articles2)
+		test.AssertDatabaseError_Postgres(t, err)
+	})
+}

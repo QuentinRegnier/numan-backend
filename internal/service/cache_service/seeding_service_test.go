@@ -166,4 +166,37 @@ func TestSeedingService(t *testing.T) {
 		require.NoError(t, SeedSpeedCache(ctx))
 		require.NoError(t, SeedUserCache(ctx))
 	})
+
+	t.Run("SeedArticles populates non-evictable Redis index and L2 Mongo", func(t *testing.T) {
+		_ = test.SetupTestRedis(t)
+		mt := mtest.New(t, mtest.NewOptions().ClientType(mtest.Mock))
+		restore := test.ResetCollections()
+		defer restore()
+
+		articleCols := []string{
+			"id", "title", "summary", "cover_media_id", "markdown_media_id",
+			"attachment_media_ids", "partner_url", "visibility", "expires_at", "created_at", "updated_at",
+		}
+
+		mt.Run("success and L3 error", func(mt *mtest.T) {
+			repoMongo.Articles = test.NewMockCollection(mt, "content.articles", nil)
+			mt.AddMockResponses(mtest.CreateSuccessResponse())
+
+			test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+				if strings.Contains(query, "func_load_active_articles") {
+					return test.NewMockRows(articleCols, [][]driver.Value{
+						{int64(701), "Seeded Article", "Summary", int64(201), int64(301), "{401}", "https://partner.fr", int64(0), nil, int64(1700000000000), int64(1700000000000)},
+					}), nil
+				}
+				return test.NewMockRows(articleCols, nil), nil
+			}, nil)
+
+			require.NoError(mt, SeedArticles(ctx))
+
+			test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+				return nil, errors.New("pg fail")
+			}, nil)
+			assert.Error(mt, SeedArticles(ctx))
+		})
+	})
 }

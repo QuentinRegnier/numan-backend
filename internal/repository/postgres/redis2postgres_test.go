@@ -30,6 +30,7 @@ func TestRedis2Postgres(t *testing.T) {
 		{redis.EntityMembers, "messaging", "members"},
 		{redis.EntityMessage, "messaging", "messages"},
 		{redis.EntityPasskey, "auth", "user_passkeys"},
+		{redis.EntityArticle, "content", "articles"},
 	}
 
 	for _, tt := range tests {

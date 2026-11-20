@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/models/article_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/map_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/message_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/telemetry_models"
@@ -73,6 +74,7 @@ func flushPostgres(ctx context.Context, events []redis.AsyncEvent) {
 		redis.EntityComment,
 		redis.EntityLike,
 		redis.EntityMedia,
+		redis.EntityArticle,
 		redis.EntityPOI,
 		redis.EntityPOIReview,
 		redis.EntityConversation,
@@ -235,6 +237,10 @@ func bulkInsertPostgres(ctx context.Context, entity redis.EntityType, events []r
 	if entity == redis.EntityPOIReview {
 		return handlePOIReviewUpsert(ctx, events)
 	}
+	// ── CAS PARTICULIER : UPSERT IDEMPOTENT DES ARTICLES MARKDOWN ───────────
+	if entity == redis.EntityArticle {
+		return handleArticleUpsert(ctx, events)
+	}
 
 	mapper := getMapper(entity)
 	if mapper == nil {
@@ -380,6 +386,85 @@ func handlePOIReviewUpsert(ctx context.Context, events []redis.AsyncEvent) error
 	return nil
 }
 
+// handleArticleUpsert gère la création ou mise à jour idempotente d'articles Markdown avec protection d'ordre monotone updated_at.
+func handleArticleUpsert(ctx context.Context, events []redis.AsyncEvent) error {
+	dedup := make(map[int64]article_models.ArticlePayload, len(events))
+	orderedIDs := make([]int64, 0, len(events))
+
+	for _, e := range events {
+		jsonBytes, err := json.Marshal(e.Payload)
+		if err != nil {
+			return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Article Upsert : Échec sérialisation payload", err)
+		}
+		var a article_models.ArticlePayload
+		if err := json.Unmarshal(jsonBytes, &a); err != nil {
+			return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Article Upsert : Échec désérialisation payload", err)
+		}
+		if a.ID <= 0 {
+			a.ID = e.ID
+		}
+		if a.ID <= 0 {
+			return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Article Upsert : ID manquant", nil)
+		}
+		a.Normalize()
+
+		cur, exists := dedup[a.ID]
+		if !exists {
+			orderedIDs = append(orderedIDs, a.ID)
+			dedup[a.ID] = a
+			continue
+		}
+		if shouldReplaceArticleState(cur, cur.Visibility < 0, a, a.Visibility < 0) {
+			dedup[a.ID] = a
+		}
+	}
+
+	tx, errTx := postgres.PostgresDB.BeginTx(ctx, nil)
+	if errTx != nil {
+		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction Article Upsert", errTx)
+	}
+
+	stmt, errStmt := tx.Prepare("SELECT content.func_upsert_article($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)")
+	if errStmt != nil {
+		_ = tx.Rollback()
+		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec préparation statement Article Upsert", errStmt)
+	}
+	defer func(stmt *sql.Stmt) {
+		if errClose := stmt.Close(); errClose != nil {
+			numan_log.Error(ctx).Err(errClose).Msg("Erreur fermeture statement Article Upsert")
+		}
+	}(stmt)
+
+	for _, id := range orderedIDs {
+		a := dedup[id]
+		expiresAtVal := int64(0)
+		if a.ExpiresAt != nil && *a.ExpiresAt > 0 {
+			expiresAtVal = *a.ExpiresAt
+		}
+		if _, errExec := stmt.Exec(
+			a.ID,
+			a.Title,
+			a.Summary,
+			a.CoverMediaID,
+			a.MarkdownMediaID,
+			pq.Array(a.AttachmentMediaIDs),
+			a.PartnerURL,
+			a.Visibility,
+			expiresAtVal,
+			a.CreatedAt,
+			a.UpdatedAt,
+		); errExec != nil {
+			_ = tx.Rollback()
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec exécution ligne Article Upsert", errExec)
+		}
+	}
+
+	if errCommit := tx.Commit(); errCommit != nil {
+		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Commit Article Upsert", errCommit)
+	}
+	return nil
+}
+
 // ============================================================================
 // 2. BULK UPDATE (Table Temporaire + COPY IN + UPDATE FROM)
 // ============================================================================
@@ -387,6 +472,9 @@ func handlePOIReviewUpsert(ctx context.Context, events []redis.AsyncEvent) error
 func bulkUpdatePostgres(ctx context.Context, entity redis.EntityType, events []redis.AsyncEvent) error {
 	if entity == redis.EntityPOIReview {
 		return handlePOIReviewUpsert(ctx, events)
+	}
+	if entity == redis.EntityArticle {
+		return handleArticleUpsert(ctx, events)
 	}
 
 	mapper := getMapper(entity)
@@ -710,6 +798,13 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 		query = "SELECT content.func_bulk_soft_delete_pois($1)"
 		if _, errExec := postgres.PostgresDB.ExecContext(ctx, query, pq.Array(ids)); errExec != nil {
 			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Soft Delete POIs & Cascades", errExec)
+		}
+		return nil
+
+	} else if entity == redis.EntityArticle {
+		query = "SELECT content.func_bulk_soft_delete_articles($1)"
+		if _, errExec := postgres.PostgresDB.ExecContext(ctx, query, pq.Array(ids)); errExec != nil {
+			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Soft Delete Articles", errExec)
 		}
 		return nil
 

@@ -35,6 +35,8 @@ services:
       - ./k8s/01-config/secrets.env
     environment:
       - NODE_ID=1
+      - MINIO_PUBLIC_BUCKET_NAME=${MINIO_PUBLIC_BUCKET:-numan-public}
+      - PUBLIC_MEDIA_BASE_URL=${PUBLIC_MEDIA_BASE_URL:-http://localhost/public}
       # --- INJECTION SMTP LOCAL ---
       - SMTP_HOST=mailpit
       - SMTP_PORT=1025
@@ -83,6 +85,22 @@ services:
     environment:
       - MINIO_ROOT_USER=${MINIO_HOT_ROOT_USER}
       - MINIO_ROOT_PASSWORD=${MINIO_HOT_ROOT_PASSWORD}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.public-media.rule=PathPrefix(`/public/`) && (Method(`GET`) || Method(`HEAD`) || Method(`OPTIONS`))"
+      - "traefik.http.routers.public-media.entrypoints=web"
+      - "traefik.http.routers.public-media.priority=100"
+      - "traefik.http.routers.public-media.service=public-media"
+      - "traefik.http.routers.public-media.middlewares=public-media-rewrite,public-media-headers"
+      - "traefik.http.middlewares.public-media-rewrite.replacepathregex.regex=^/public/(.*)"
+      - "traefik.http.middlewares.public-media-rewrite.replacepathregex.replacement=/${MINIO_PUBLIC_BUCKET:-numan-public}/$$1"
+      - "traefik.http.middlewares.public-media-headers.headers.accesscontrolallowmethods=GET,HEAD,OPTIONS"
+      - "traefik.http.middlewares.public-media-headers.headers.accesscontrolalloworiginlist=*"
+      - "traefik.http.middlewares.public-media-headers.headers.accesscontrolallowheaders=Origin,Accept,Content-Type,Range,If-None-Match,If-Modified-Since"
+      - "traefik.http.middlewares.public-media-headers.headers.accesscontrolexposeheaders=ETag,Accept-Ranges,Content-Range,Content-Length,Content-Type"
+      - "traefik.http.middlewares.public-media-headers.headers.customresponseheaders.Cache-Control=public, max-age=31536000, immutable"
+      - "traefik.http.middlewares.public-media-headers.headers.customresponseheaders.X-Content-Type-Options=nosniff"
+      - "traefik.http.services.public-media.loadbalancer.server.port=9000"
     volumes:
       - minio_hot_data:/data
     restart: always
@@ -111,17 +129,20 @@ services:
       - MINIO_HOT_ROOT_PASSWORD=${MINIO_HOT_ROOT_PASSWORD}
       - MINIO_COLD_ROOT_USER=${MINIO_COLD_ROOT_USER}
       - MINIO_COLD_ROOT_PASSWORD=${MINIO_COLD_ROOT_PASSWORD}
-      - MINIO_HOT_BUCKET=${MINIO_HOT_BUCKET}
-      - MINIO_COLD_BUCKET=${MINIO_COLD_BUCKET}
-      - MINIO_HOT_ANONYMOUS_READ=${MINIO_HOT_ANONYMOUS_READ}
+      - MINIO_HOT_BUCKET=${MINIO_HOT_BUCKET:-numan-bucket}
+      - MINIO_PUBLIC_BUCKET=${MINIO_PUBLIC_BUCKET:-numan-public}
+      - MINIO_COLD_BUCKET=${MINIO_COLD_BUCKET:-numan-cold-bucket}
     entrypoint: >
       /bin/sh -c "
       sleep 5;
-      mc alias set hot http://minio-hot:9000 $MINIO_HOT_ROOT_USER$MINIO_HOT_ROOT_PASSWORD;
+      mc alias set hot http://minio-hot:9000 $MINIO_HOT_ROOT_USER $MINIO_HOT_ROOT_PASSWORD;
       mc mb --ignore-existing hot/$MINIO_HOT_BUCKET;
-      if [ '$MINIO_HOT_ANONYMOUS_READ' = 'true' ]; then mc anonymous set download hot/$MINIO_HOT_BUCKET; fi;
-      mc alias set cold http://minio-cold:9000 $MINIO_COLD_ROOT_USER$MINIO_COLD_ROOT_PASSWORD;
+      mc anonymous set none hot/$MINIO_HOT_BUCKET;
+      mc mb --ignore-existing hot/$MINIO_PUBLIC_BUCKET;
+      mc anonymous set download hot/$MINIO_PUBLIC_BUCKET;
+      mc alias set cold http://minio-cold:9000 $MINIO_COLD_ROOT_USER $MINIO_COLD_ROOT_PASSWORD;
       mc mb --ignore-existing cold/$MINIO_COLD_BUCKET;
+      mc anonymous set none cold/$MINIO_COLD_BUCKET;
       exit 0;
       "
 

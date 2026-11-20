@@ -180,6 +180,12 @@ spec:
             - name: SMTP_PASSWORD
               valueFrom: { secretKeyRef: { name: numan-app-secrets, key: SMTP_PASSWORD } }
             # ---- S3 (hot): least-privilege user created by minio-hot-init (legacy value was the MinIO root user) ----
+            - name: MINIO_BUCKET_NAME
+              valueFrom: {configMapKeyRef: {name: numan-config, key: MINIO_BUCKET_NAME}}
+            - name: MINIO_PUBLIC_BUCKET_NAME
+              valueFrom: {configMapKeyRef: {name: numan-config, key: MINIO_PUBLIC_BUCKET_NAME}}
+            - name: PUBLIC_MEDIA_BASE_URL
+              valueFrom: {configMapKeyRef: {name: numan-config, key: PUBLIC_MEDIA_BASE_URL}}
             - name: S3_ACCESS_KEY
               valueFrom: {secretKeyRef: {name: minio-hot-users, key: S3_ACCESS_KEY}}
             - name: S3_SECRET_KEY

@@ -7,3 +7,11 @@ type UploadMediaOutput struct {
 	RequiresModeration bool    `json:"requires_moderation"` // true si le TrustScore de l'utilisateur est < 0.40
 	Message            string  `json:"message,omitempty"`   // Message informatif pour l'utilisateur en quarantaine
 }
+
+// UploadAdminArticleAssetOutput représente la réponse d'upload d'un asset d'article (image, GIF/WebP animé ou Markdown).
+type UploadAdminArticleAssetOutput struct {
+	MediaID     int64  `json:"media_id"`
+	StoragePath string `json:"storage_path"`
+	URL         string `json:"url"`
+	ContentType string `json:"content_type"`
+}

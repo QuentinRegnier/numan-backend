@@ -52,6 +52,6 @@ func TestProposeBlameHandler(t *testing.T) {
 	var res moderation_models.ModerationTicketPublicView
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
 	assert.Equal(t, variables.ReportStatePendingPeerReview, res.State)
-	assert.NotEmpty(t, res.ProposerPseudonym)
+	assert.Empty(t, res.ProposerPseudonym)
 	assert.Equal(t, int64(0), res.ClaimedByModID)
 }

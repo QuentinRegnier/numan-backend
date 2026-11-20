@@ -34,6 +34,7 @@ func TestRedis2Mongo(t *testing.T) {
 	mongo.Passkeys = nil
 	mongo.Notifications = nil
 	mongo.UserRecoSkips = nil
+	mongo.Articles = nil
 
 	supportedEntities := []redis.EntityType{
 		redis.EntityUser,
@@ -52,6 +53,7 @@ func TestRedis2Mongo(t *testing.T) {
 		redis.EntityPasskey,
 		redis.EntityNotification,
 		redis.EntityUserRecoSkip,
+		redis.EntityArticle,
 	}
 
 	for _, entity := range supportedEntities {
@@ -85,6 +87,7 @@ func TestRedis2Mongo(t *testing.T) {
 		mongo.Passkeys = mockColl
 		mongo.Notifications = mockColl
 		mongo.UserRecoSkips = mockColl
+		mongo.Articles = mockColl
 
 		for _, entity := range supportedEntities {
 			c, err := mongo.Redis2MongoForTest(ctx, entity)

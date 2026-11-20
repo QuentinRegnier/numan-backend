@@ -15,6 +15,9 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/gen2brain/avif"
 	"github.com/minio/minio-go/v7"
@@ -26,8 +29,10 @@ var bucketName string
 var secretKey string
 
 const (
-	delta  = 15.0 // Force du tatouage (plus élevé = plus robuste mais plus visible)
-	margin = 10.0 // Marge de sécurité pour le différentiel DCT
+	delta                    = 15.0 // Force du tatouage (plus élevé = plus robuste mais plus visible)
+	margin                   = 10.0 // Marge de sécurité pour le différentiel DCT
+	defaultWatermarkTTLSec   = int64(3600)
+	maxWatermarkClockSkewSec = int64(300)
 )
 
 func main() {
@@ -66,6 +71,50 @@ func main() {
 	}
 }
 
+func resolveWatermarkTTLSeconds() int64 {
+	raw := strings.TrimSpace(os.Getenv("WATERMARK_URL_TTL_SECONDS"))
+	if raw == "" {
+		return defaultWatermarkTTLSec
+	}
+	parsed, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || parsed <= 0 {
+		return defaultWatermarkTTLSec
+	}
+	return parsed
+}
+
+func validateWatermarkTimestamp(tsRaw string, now time.Time) bool {
+	tsVal, err := strconv.ParseInt(strings.TrimSpace(tsRaw), 10, 64)
+	if err != nil || tsVal <= 0 {
+		return false
+	}
+	// Normalisation défensive si le timestamp a été transmis en millisecondes
+	if tsVal > 1_000_000_000_000 {
+		tsVal /= 1000
+	}
+
+	nowSec := now.Unix()
+	ttlSec := resolveWatermarkTTLSeconds()
+	if nowSec-tsVal > ttlSec {
+		return false
+	}
+	if tsVal-nowSec > maxWatermarkClockSkewSec {
+		return false
+	}
+	return true
+}
+
+func verifyWatermarkHMAC(payload, clientSig, secret string) bool {
+	if secret == "" || clientSig == "" {
+		return false
+	}
+	h := hmac.New(sha256.New, []byte(secret))
+	h.Write([]byte(payload))
+	expectedSig := hex.EncodeToString(h.Sum(nil))
+	normalizedClientSig := strings.ToLower(strings.TrimSpace(clientSig))
+	return hmac.Equal([]byte(normalizedClientSig), []byte(expectedSig))
+}
+
 func processHandler(w http.ResponseWriter, r *http.Request) {
 	// --- A. EXTRACTION DES PARAMÈTRES ---
 	q := r.URL.Query()
@@ -84,16 +133,18 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// --- B. VÉRIFICATION DE LA SIGNATURE (SÉCURITÉ) ---
+	// --- B. VÉRIFICATION DE LA SIGNATURE ET DE L'EXPIRATION (SÉCURITÉ) ---
 	// On reconstruit exactement la même chaîne que dans generateWatermarkedURL (helpers.go)
 	payload := fmt.Sprintf("key=%s&author=%s&post=%s&reader=%s&ts=%s", key, author, post, reader, ts)
-	h := hmac.New(sha256.New, []byte(secretKey))
-	h.Write([]byte(payload))
-	expectedSig := hex.EncodeToString(h.Sum(nil))
-
-	if clientSig != expectedSig {
+	if !verifyWatermarkHMAC(payload, clientSig, secretKey) {
 		log.Printf("⚠️ Signature invalide pour l'image: %s", key)
 		http.Error(w, "Accès refusé", http.StatusForbidden)
+		return
+	}
+
+	if !validateWatermarkTimestamp(ts, time.Now()) {
+		log.Printf("⚠️ Lien expiré ou horodatage invalide pour l'image: %s (ts=%s)", key, ts)
+		http.Error(w, "Lien expiré", http.StatusForbidden)
 		return
 	}
 
@@ -170,9 +221,18 @@ func applyDCTWatermark(src image.Image, payload string) (image.Image, error) {
 	return dst, nil
 }
 
+func clampUint8(v float64) uint8 {
+	if v <= 0 {
+		return 0
+	}
+	if v >= 255 {
+		return 255
+	}
+	return uint8(math.Round(v))
+}
+
 func injectBitInBlock(img *image.RGBA, startX, startY, bit int) {
 	var f [8][8]float64
-	// 1. Extraction de la luminance
 	// 1. Extraction de la luminance
 	for y := 0; y < 8; y++ {
 		for x := 0; x < 8; x++ {
@@ -203,14 +263,23 @@ func injectBitInBlock(img *image.RGBA, startX, startY, bit int) {
 	// 4. Retour dans le domaine spatial (IDCT)
 	fNew := idct2D(F)
 
-	// 5. Mise à jour des pixels dans l'image
+	// 5. Mise à jour des pixels dans l'image en préservant la chrominance RGB d'origine
 	for y := 0; y < 8; y++ {
 		for x := 0; x < 8; x++ {
 			oldColor := img.At(startX+x, startY+y)
-			_, _, _, a := oldColor.RGBA()
+			r, g, b, a := oldColor.RGBA()
 
-			val := uint8(math.Max(0, math.Min(255, fNew[x][y])))
-			img.Set(startX+x, startY+y, color.RGBA{R: val, G: val, B: val, A: uint8(a >> 8)})
+			diff := fNew[x][y] - f[x][y]
+			newR := clampUint8(float64(r>>8) + diff)
+			newG := clampUint8(float64(g>>8) + diff)
+			newB := clampUint8(float64(b>>8) + diff)
+
+			img.Set(startX+x, startY+y, color.RGBA{
+				R: newR,
+				G: newG,
+				B: newB,
+				A: uint8(a >> 8),
+			})
 		}
 	}
 }

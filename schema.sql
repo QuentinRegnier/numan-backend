@@ -1235,11 +1235,16 @@ LANGUAGE sql AS $$
     SELECT DISTINCT d.post_id FROM del d
 $$;
 
-/* Media GC. Shields and lifecycle windows are unchanged from v1:
+/* Media GC. Shields and lifecycle windows:
      shield 1 legal holds (forever) · shield 2 open reports (state < 2)
-     A) pending/orphan, unreferenced, idle > 6 h   B) soft-deleted, idle > 48 h
+     shield 3 active articles (visibility >= 0 referencing cover_media_id, markdown_media_id, or attachment_media_ids)
+     A) pending/orphan (visibility = 0), unreferenced:
+        - articles/% prefix: idle > 24 h (allows admin authoring & draft lifecycle before publish/save)
+        - standard user media: idle > 6 h
+     B) soft-deleted (visibility = -1), unreferenced by active articles, idle > 48 h
    Rewritten so every reference probe is index-assisted: `m.id = ANY(p.media_ids)` -> `p.media_ids @> ARRAY[m.id]` (GIN),
-   `r.target_ids @> ARRAY[m.id]` (GIN), messages.attachments media_id via idx_messages_media_ref.
+   `r.target_ids @> ARRAY[m.id]` (GIN), messages.attachments media_id via idx_messages_media_ref,
+   articles via idx_articles_cover_media, idx_articles_markdown_media, and idx_articles_attachment_media_gin.
    storage_path NULL -> '' (Go scans into string; a NULL used to make the row vanish AFTER it was deleted => S3 leak). */
 CREATE FUNCTION content.func_delete_orphan_media() RETURNS TABLE(id bigint, storage_path text)
 LANGUAGE plpgsql AS $$
@@ -1256,9 +1261,18 @@ RETURN QUERY
                             AND ((r.target_type = 3 AND r.target_ids @> ARRAY[m.id])
                               OR (r.target_type = 1 AND EXISTS (SELECT 1 FROM content.posts p
                                                                 WHERE p.id = ANY(r.target_ids) AND p.media_ids @> ARRAY[m.id]))))
+          AND NOT EXISTS (SELECT 1 FROM content.articles a
+                          WHERE a.visibility >= 0
+                            AND (a.cover_media_id = m.id
+                              OR a.markdown_media_id = m.id
+                              OR a.attachment_media_ids @> ARRAY[m.id]))
           AND (
                 m.visibility = -2
-                OR (m.visibility = 0 AND m.updated_at < v_now - 6 * 3600000
+                OR (m.visibility = 0
+                    AND (
+                        (COALESCE(m.storage_path, '') LIKE 'articles/%' AND m.updated_at < v_now - 24 * 3600000)
+                        OR (COALESCE(m.storage_path, '') NOT LIKE 'articles/%' AND m.updated_at < v_now - 6 * 3600000)
+                    )
                     AND NOT EXISTS (SELECT 1 FROM content.posts p WHERE p.media_ids @> ARRAY[m.id])
                     AND NOT EXISTS (SELECT 1 FROM messaging.messages msg
                                     WHERE msg.attachments ? 'media_id' AND msg.attachments -> 'media_id' = to_jsonb(m.id))
@@ -2315,6 +2329,189 @@ CREATE FUNCTION content.func_bulk_soft_delete_pois(p_ids bigint[]) RETURNS void
 $$;
 
 /* =============================================================================
-   END OF SCHEMA
+   10. ARTICLES MANAGEMENT SYSTEM (L3 PERSISTENCE)
    ============================================================================= */
 
+CREATE TABLE content.articles (
+    id                   bigint       PRIMARY KEY,
+    title                varchar(200) NOT NULL,
+    summary              varchar(500) NOT NULL DEFAULT '',
+    cover_media_id       bigint       REFERENCES content.media(id) ON DELETE SET NULL,
+    markdown_media_id    bigint       REFERENCES content.media(id) ON DELETE SET NULL,
+    attachment_media_ids bigint[]     NOT NULL DEFAULT '{}'::bigint[],
+    partner_url          varchar(512),
+    visibility           smallint     NOT NULL DEFAULT 0, -- 0: published, 1: draft, -1: soft-deleted
+    expires_at           bigint,
+    created_at           bigint       NOT NULL DEFAULT util.now_ms(),
+    updated_at           bigint       NOT NULL DEFAULT util.now_ms(),
+    CONSTRAINT chk_articles_visibility      CHECK (visibility IN (-1, 0, 1)),
+    CONSTRAINT chk_articles_id_pos          CHECK (id > 0),
+    CONSTRAINT chk_articles_cover_id_pos    CHECK (cover_media_id IS NULL OR cover_media_id > 0),
+    CONSTRAINT chk_articles_markdown_id_pos CHECK (markdown_media_id IS NULL OR markdown_media_id > 0),
+    CONSTRAINT chk_articles_attachments_max CHECK (cardinality(attachment_media_ids) <= 50),
+    CONSTRAINT chk_articles_title_nonempty  CHECK (char_length(btrim(title)) BETWEEN 1 AND 200),
+    CONSTRAINT chk_articles_summary_len     CHECK (char_length(summary) <= 500),
+    CONSTRAINT chk_articles_partner_url     CHECK (partner_url IS NULL OR partner_url ~* '^https?://'),
+    CONSTRAINT chk_articles_timestamps      CHECK (created_at > 0 AND updated_at > 0)
+);
+
+-- Index partiel sur les articles actifs ordonnés par date de création décroissante
+CREATE INDEX idx_articles_active_created_at
+    ON content.articles (created_at DESC, id DESC)
+    WHERE visibility >= 0;
+
+-- Index partiel sur les articles publiés ordonnés par date de création décroissante
+CREATE INDEX idx_articles_published_created_at
+    ON content.articles (created_at DESC, id DESC)
+    WHERE visibility = 0;
+
+-- Index GIN sur les pièces jointes pour l'anti-join rapide lors du Garbage Collection des médias
+CREATE INDEX idx_articles_attachment_media_gin
+    ON content.articles USING gin (attachment_media_ids);
+
+-- Index sur les clés étrangères de médias (cover et markdown)
+CREATE INDEX idx_articles_cover_media
+    ON content.articles (cover_media_id)
+    WHERE cover_media_id IS NOT NULL;
+
+CREATE INDEX idx_articles_markdown_media
+    ON content.articles (markdown_media_id)
+    WHERE markdown_media_id IS NOT NULL;
+
+-- Index partiel pour la vérification d'expiration
+CREATE INDEX idx_articles_expires_at
+    ON content.articles (expires_at)
+    WHERE expires_at IS NOT NULL AND visibility >= 0;
+
+-- Vue L3 normalisée avec valeurs par défaut non-nulles pour un scan Go déterministe
+CREATE VIEW content.articles_l3 AS
+SELECT
+    a.id,
+    a.title,
+    COALESCE(a.summary, '')                            AS summary,
+    COALESCE(a.cover_media_id, 0::bigint)              AS cover_media_id,
+    COALESCE(a.markdown_media_id, 0::bigint)           AS markdown_media_id,
+    COALESCE(a.attachment_media_ids, '{}'::bigint[])   AS attachment_media_ids,
+    COALESCE(a.partner_url, '')                        AS partner_url,
+    a.visibility,
+    a.expires_at,
+    a.created_at,
+    a.updated_at
+FROM content.articles a;
+
+-- 1. Upsert atomique et idempotent d'un article (protégé contre l'écrasement par un événement plus ancien)
+CREATE FUNCTION content.func_upsert_article(
+    p_id                   bigint,
+    p_title                varchar,
+    p_summary              varchar,
+    p_cover_media_id       bigint,
+    p_markdown_media_id    bigint,
+    p_attachment_media_ids bigint[],
+    p_partner_url          varchar,
+    p_visibility           smallint,
+    p_expires_at           bigint,
+    p_created_at           bigint,
+    p_updated_at           bigint
+) RETURNS void
+    LANGUAGE sql AS $$
+    INSERT INTO content.articles (
+        id, title, summary, cover_media_id, markdown_media_id,
+        attachment_media_ids, partner_url, visibility, expires_at, created_at, updated_at
+    ) VALUES (
+        p_id,
+        p_title,
+        COALESCE(p_summary, ''),
+        NULLIF(p_cover_media_id, 0),
+        NULLIF(p_markdown_media_id, 0),
+        COALESCE(p_attachment_media_ids, '{}'::bigint[]),
+        NULLIF(btrim(COALESCE(p_partner_url, '')), ''),
+        COALESCE(p_visibility, 0),
+        CASE WHEN p_expires_at IS NOT NULL AND p_expires_at > 0 THEN p_expires_at ELSE NULL END,
+        p_created_at,
+        p_updated_at
+    )
+    ON CONFLICT (id) DO UPDATE SET
+        title                = EXCLUDED.title,
+        summary              = EXCLUDED.summary,
+        cover_media_id       = EXCLUDED.cover_media_id,
+        markdown_media_id    = EXCLUDED.markdown_media_id,
+        attachment_media_ids = EXCLUDED.attachment_media_ids,
+        partner_url          = EXCLUDED.partner_url,
+        visibility           = EXCLUDED.visibility,
+        expires_at           = EXCLUDED.expires_at,
+        updated_at           = EXCLUDED.updated_at
+    WHERE content.articles.updated_at <= EXCLUDED.updated_at
+      AND (content.articles.visibility >= 0 OR EXCLUDED.visibility < 0);
+$$;
+
+-- 2. Récupération d'un article actif par son identifiant (publié ou brouillon ; exclut les soft-deleted)
+CREATE FUNCTION content.func_get_article_by_id(p_id bigint)
+    RETURNS SETOF content.articles_l3
+    LANGUAGE sql STABLE AS $$
+    SELECT
+        id, title, summary, cover_media_id, markdown_media_id,
+        attachment_media_ids, partner_url, visibility, expires_at, created_at, updated_at
+    FROM content.articles_l3
+    WHERE id = p_id
+      AND visibility >= 0
+    LIMIT 1;
+$$;
+
+-- 3. Récupération en lot d'articles actifs par leurs identifiants
+CREATE FUNCTION content.func_get_articles_by_ids(p_ids bigint[])
+    RETURNS SETOF content.articles_l3
+    LANGUAGE sql STABLE AS $$
+    SELECT
+        id, title, summary, cover_media_id, markdown_media_id,
+        attachment_media_ids, partner_url, visibility, expires_at, created_at, updated_at
+    FROM content.articles_l3
+    WHERE id = ANY(p_ids)
+      AND visibility >= 0
+    ORDER BY created_at DESC, id DESC;
+$$;
+
+-- 4. Chargement complet des articles actifs (publiés et brouillons) pour le seeding et la reconstruction L1
+CREATE FUNCTION content.func_load_active_articles()
+    RETURNS SETOF content.articles_l3
+    LANGUAGE sql STABLE AS $$
+    SELECT
+        id, title, summary, cover_media_id, markdown_media_id,
+        attachment_media_ids, partner_url, visibility, expires_at, created_at, updated_at
+    FROM content.articles_l3
+    WHERE visibility >= 0
+    ORDER BY created_at DESC, id DESC;
+$$;
+
+-- 5. Suppression logique (Soft Delete) en masse d'articles
+CREATE FUNCTION content.func_bulk_soft_delete_articles(p_ids bigint[])
+    RETURNS void
+    LANGUAGE sql AS $$
+    UPDATE content.articles
+    SET visibility = -1, updated_at = util.now_ms()
+    WHERE id = ANY(p_ids)
+      AND visibility >= 0;
+$$;
+
+-- 6. Filtre les identifiants de médias candidats qui ne sont référencés par aucun article actif (hors p_exclude_article_id)
+CREATE FUNCTION content.func_filter_unreferenced_article_media(
+    p_media_ids          bigint[],
+    p_exclude_article_id bigint DEFAULT 0
+) RETURNS TABLE(media_id bigint)
+    LANGUAGE sql STABLE AS $$
+    SELECT DISTINCT m_id AS media_id
+    FROM unnest(p_media_ids) AS m_id
+    WHERE m_id > 0
+      AND NOT EXISTS (
+          SELECT 1
+          FROM content.articles a
+          WHERE a.visibility >= 0
+            AND (p_exclude_article_id <= 0 OR a.id <> p_exclude_article_id)
+            AND (a.cover_media_id = m_id
+              OR a.markdown_media_id = m_id
+              OR a.attachment_media_ids @> ARRAY[m_id])
+      );
+$$;
+
+/* =============================================================================
+   END OF SCHEMA
+   ============================================================================= */

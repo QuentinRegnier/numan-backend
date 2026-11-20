@@ -72,6 +72,36 @@ spec:
             backend:
               service: {name: watermark, port: {number: 8080}}
 ---
+# Public read-only object storage for immutable Markdown articles and article assets (/public/ -> minio-hot:9000).
+# Traefik IngressRoute restricts methods at the edge to GET, HEAD and OPTIONS and attaches no buffering middleware
+# so large images/GIFs/WebPs/PMTiles stream directly with full HTTP Range support.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: numan-https-public-media
+  namespace: numan
+  labels:
+    app.kubernetes.io/part-of: numan
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`${NUMAN_DOMAIN}`) && PathPrefix(`/public/`) && (Method(`GET`) || Method(`HEAD`) || Method(`OPTIONS`))
+      kind: Rule
+      priority: 100
+      middlewares:
+        - name: hsts
+          namespace: numan
+        - name: public-media-rewrite
+          namespace: numan
+        - name: public-media-headers
+          namespace: numan
+      services:
+        - name: minio-hot
+          port: 9000
+  tls:
+    secretName: numan-tls
+---
 # Port 80: redirect everything to HTTPS. cert-manager's HTTP-01 solver Ingress has a longer, more specific path
 # (/.well-known/acme-challenge/<token>), so Traefik routes challenges to the solver instead of redirecting them.
 apiVersion: networking.k8s.io/v1

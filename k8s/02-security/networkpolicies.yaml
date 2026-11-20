@@ -234,6 +234,28 @@ spec:
       ports:
         - {protocol: TCP, port: 9000}
 ---
+# Traefik (kube-system) -> minio-hot:9000 for read-only public object storage (/public -> numan-public)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-traefik-to-minio-hot
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: minio-hot
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+      ports:
+        - {protocol: TCP, port: 9000}
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -295,7 +317,7 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-ingress-to-maddy
+  name: allow-ingress-to-smtp
   namespace: numan
 spec:
   podSelector:
@@ -314,7 +336,7 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: allow-egress-to-maddy
+  name: allow-egress-to-smtp
   namespace: numan
 spec:
   podSelector:

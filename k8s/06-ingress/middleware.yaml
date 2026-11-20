@@ -52,3 +52,49 @@ spec:
   buffering:
     maxRequestBodyBytes: 20971520
     memRequestBodyBytes: 1048576
+---
+# Rewrites /public/<object-path> -> /<MINIO_PUBLIC_BUCKET>/<object-path> on minio-hot:9000.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: public-media-rewrite
+  namespace: numan
+  labels:
+    app.kubernetes.io/part-of: numan
+spec:
+  replacePathRegex:
+    regex: "^/public/(.*)"
+    replacement: "/${MINIO_PUBLIC_BUCKET}/$1"
+---
+# Read-only CORS, Range support, and immutable cache headers for public Markdown articles and article media assets.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: public-media-headers
+  namespace: numan
+  labels:
+    app.kubernetes.io/part-of: numan
+spec:
+  headers:
+    accessControlAllowMethods:
+      - GET
+      - HEAD
+      - OPTIONS
+    accessControlAllowOriginList:
+      - "*"
+    accessControlAllowHeaders:
+      - Origin
+      - Accept
+      - Content-Type
+      - Range
+      - If-None-Match
+      - If-Modified-Since
+    accessControlExposeHeaders:
+      - ETag
+      - Accept-Ranges
+      - Content-Range
+      - Content-Length
+      - Content-Type
+    customResponseHeaders:
+      Cache-Control: "public, max-age=31536000, immutable"
+      X-Content-Type-Options: "nosniff"

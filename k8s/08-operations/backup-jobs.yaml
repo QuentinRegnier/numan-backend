@@ -365,6 +365,7 @@ spec:
                   BUCKET="$MINIO_BUCKET"
                   # No --remove on purpose: a deletion on the source must never silently delete the off-site copy.
                   mc mirror --preserve --overwrite "src/$BUCKET" "offsite/$BACKUP_MIRROR_BUCKET/minio-hot/$BUCKET"
+                  mc mirror --preserve --overwrite "src/$PUBLIC_BUCKET" "offsite/$BACKUP_MIRROR_BUCKET/minio-hot/$PUBLIC_BUCKET"
                   echo "minio-hot mirror OK"
               env:
                 - name: BACKUP_ACCESS_KEY
@@ -381,6 +382,8 @@ spec:
                   valueFrom: {secretKeyRef: {name: backup-credentials, key: BACKUP_MIRROR_BUCKET}}
                 - name: MINIO_BUCKET
                   valueFrom: {configMapKeyRef: {name: minio-init-config, key: HOT_BUCKET}}
+                - name: PUBLIC_BUCKET
+                  valueFrom: {configMapKeyRef: {name: minio-init-config, key: PUBLIC_BUCKET}}
               resources:
                 requests: {cpu: 100m, memory: 128Mi}
                 limits: {cpu: "${BACKUP_CPU_LIMIT}", memory: "${BACKUP_MEMORY_LIMIT}"}

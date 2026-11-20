@@ -25,7 +25,7 @@ func TestRateLimiter_Exceeded_PublishesSpamDetectedAuto(t *testing.T) {
 
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
-		c.Set("user_id", callerID)
+		c.Set("userID", callerID)
 		c.Next()
 	})
 	router.Use(middleware.RateLimiter())
