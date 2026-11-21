@@ -41,6 +41,14 @@ func startFeedWarmupCron(ctx context.Context) {
 
 // processScheduledWarmups identifie et régénère les flux des utilisateurs dont le cache L1 a expiré.
 func processScheduledWarmups(ctx context.Context) {
+	lockToken, acquired, errLock := redis.AcquireCronLock(ctx, "cron:feed_warmup", variables.FeedWarmupCronInterval)
+	if errLock != nil || !acquired {
+		return
+	}
+	defer func() {
+		_ = redis.ReleaseCronLock(ctx, "cron:feed_warmup", lockToken)
+	}()
+
 	now := domain.TimeToMillis(domain.NowTime())
 
 	// ── ÉTAPE 1 : EXTRACTION CHIRURGICALE DES UTILISATEURS (L1) ─────────────

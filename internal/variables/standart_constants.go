@@ -10,6 +10,9 @@ const (
 
 	// Borne mathématique 64 bits
 	MaxTimestamp int64 = 1<<63 - 1
+
+	// Base de données MongoDB L2 unifiée
+	MongoDatabaseName = "numan_mongo"
 )
 
 var (

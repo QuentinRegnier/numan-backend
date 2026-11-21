@@ -14,16 +14,19 @@ import (
 
 type timeDecayPost struct {
 	ID               int64
+	UserID           int64
 	LikeCount        int
 	CommentCount     int
 	ViewCount        int
 	HasMedia         bool
+	MediaCount       int
 	CreatedAt        time.Time
 	Hashtags         []string
 	IndirectHashtags []string // ✅ NOUVEAU
 	Visibility       int
 	PriorityLevel    int
 	ReportCount      int
+	Lang             int
 }
 
 func FuncLoadPostsForTimeDecay(ctx context.Context, minAge, maxAge string) ([]timeDecayPost, error) {
@@ -36,7 +39,7 @@ func FuncLoadPostsForTimeDecay(ctx context.Context, minAge, maxAge string) ([]ti
 		)
 	}
 
-	query := `SELECT id, like_count, comment_count, view_count, has_media, created_at, hashtags, indirect_hashtags, visibility, priority_level, report_count FROM content.func_load_posts_for_time_decay($1::interval, $2::interval)`
+	query := `SELECT id, like_count, comment_count, view_count, has_media, created_at, hashtags, indirect_hashtags, visibility, priority_level, report_count, lang, media_count, user_id FROM content.func_load_posts_for_time_decay($1::interval, $2::interval)`
 
 	rows, err := postgres.PostgresDB.QueryContext(ctx, query, minAge, maxAge)
 	if err != nil {
@@ -53,14 +56,29 @@ func FuncLoadPostsForTimeDecay(ctx context.Context, minAge, maxAge string) ([]ti
 		}
 	}()
 
+	cols, _ := rows.Columns()
+	hasExtendedCols := len(cols) >= 14
+
 	posts := make([]timeDecayPost, 0)
 	for rows.Next() {
 		var p timeDecayPost
-		err := rows.Scan(
-			&p.ID, &p.LikeCount, &p.CommentCount, &p.ViewCount, &p.HasMedia, &p.CreatedAt,
-			pq.Array(&p.Hashtags), pq.Array(&p.IndirectHashtags), &p.Visibility, &p.PriorityLevel, &p.ReportCount, // ✅ NOUVEAU (Scan correct)
-		)
+		var err error
+		if hasExtendedCols {
+			err = rows.Scan(
+				&p.ID, &p.LikeCount, &p.CommentCount, &p.ViewCount, &p.HasMedia, &p.CreatedAt,
+				pq.Array(&p.Hashtags), pq.Array(&p.IndirectHashtags), &p.Visibility, &p.PriorityLevel, &p.ReportCount,
+				&p.Lang, &p.MediaCount, &p.UserID,
+			)
+		} else {
+			err = rows.Scan(
+				&p.ID, &p.LikeCount, &p.CommentCount, &p.ViewCount, &p.HasMedia, &p.CreatedAt,
+				pq.Array(&p.Hashtags), pq.Array(&p.IndirectHashtags), &p.Visibility, &p.PriorityLevel, &p.ReportCount,
+			)
+		}
 		if err == nil {
+			if p.MediaCount == 0 && p.HasMedia {
+				p.MediaCount = 1
+			}
 			posts = append(posts, p)
 		}
 	}

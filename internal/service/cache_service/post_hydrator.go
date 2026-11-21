@@ -2,17 +2,15 @@ package cache_service
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"net/http"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/post_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
-	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
+	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
@@ -23,7 +21,7 @@ import (
 // ############################################################################
 
 // fetchAndHydrateFromCollection abstrait la récupération d'IDs depuis un ZSET Redis
-// et lance la cascade d'hydratation L1 -> L2 -> L3.
+// et lance la cascade d'hydratation L1 -> L2 -> L3 en filtrant strictement les publications publiques (visibility == 0).
 func fetchAndHydrateFromCollection(ctx context.Context, redisCollection *redis.Collection, targetKey any, offset int64, limit int64) ([]post_models.PostPayload, error) {
 	idStringsList, errRedis := redisCollection.ZRevRange(ctx, targetKey, offset, offset+limit-1)
 	if errRedis != nil {
@@ -51,13 +49,30 @@ func fetchAndHydrateFromCollection(ctx context.Context, redisCollection *redis.C
 	}
 
 	// Déclenchement de la cascade complète
-	// Error already wrapped by GetPostsView; propagate it without wrapping again.
-	return object_cache_service.GetPostsView(ctx, parsedIDsList)
+	posts, err := object_cache_service.GetPostsView(ctx, parsedIDsList)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filet de sécurité P0 : Ne jamais retourner de post non-public depuis un index de classement public
+	publicPosts := make([]post_models.PostPayload, 0, len(posts))
+	for _, p := range posts {
+		if p.Visibility == variables.PostVisibilityAll {
+			publicPosts = append(publicPosts, p)
+		}
+	}
+	return publicPosts, nil
 }
 
-// getPostsFromMongoPaginated interroge directement le Warm Storage MongoDB.
-func getPostsFromMongoPaginated(fieldName string, expectedValue any, offset int64, limit int64) ([]post_models.PostPayload, error) {
-	mongoFilter := map[string]any{fieldName: expectedValue}
+// getPostsFromMongoPaginated interroge directement le Warm Storage MongoDB (uniquement visibility == 0).
+func getPostsFromMongoPaginated(fieldName string, expectedValue any, offset int64, limit int64, lang ...int) ([]post_models.PostPayload, error) {
+	mongoFilter := map[string]any{
+		fieldName:    expectedValue,
+		"visibility": variables.PostVisibilityAll,
+	}
+	if len(lang) > 0 && variables.IsSupportedLanguage(lang[0]) {
+		mongoFilter["lang"] = lang[0]
+	}
 	mongoSort := map[string]any{"created_at": -1}
 
 	mongoDocuments, errMongo := mongo.Posts.GetPaginated(mongoFilter, mongoSort, offset, limit)
@@ -74,7 +89,9 @@ func getPostsFromMongoPaginated(fieldName string, expectedValue any, offset int6
 	for _, document := range mongoDocuments {
 		var postPayload post_models.PostPayload
 		if errStruct := pkg.ToStruct(document, &postPayload); errStruct == nil {
-			hydratedPosts = append(hydratedPosts, postPayload)
+			if postPayload.Visibility == variables.PostVisibilityAll {
+				hydratedPosts = append(hydratedPosts, postPayload)
+			}
 		} else {
 			numan_log.Warn(context.Background()).Err(errStruct).Msg("Échec de conversion BSON vers PostPayload dans getPostsFromMongoPaginated")
 		}
@@ -83,72 +100,23 @@ func getPostsFromMongoPaginated(fieldName string, expectedValue any, offset int6
 	return hydratedPosts, nil
 }
 
-// getPostsFromPostgresPaginated est le fallback ultime (Cold Storage) pour les classements.
-func getPostsFromPostgresPaginated(ctx context.Context, rankType string, offset int64, limit int64) ([]post_models.PostPayload, error) {
-	var sqlQuery string
-
-	// TODO: Optimiser ces requêtes avec des vues matérialisées si la BDD dépasse 1M de lignes
-	switch rankType {
-	case variables.RedisKeyStrictLikes, "likes:strict":
-		sqlQuery = `
-			SELECT p.id FROM content.posts p 
-			WHERE p.visibility >= 0 AND p.visibility < 2 
-			ORDER BY (SELECT COUNT(*) FROM content.likes l WHERE l.target_id = p.id AND l.target_type = 0) DESC, p.created_at DESC 
-			OFFSET $1 LIMIT $2`
-	case variables.RedisKeyStrictViews, "views:strict":
-		sqlQuery = `
-			SELECT p.id FROM content.posts p 
-			WHERE p.visibility >= 0 AND p.visibility < 2 
-			ORDER BY (SELECT COUNT(*) FROM content.views v WHERE v.target_id = p.id AND v.target_type = 0) DESC, p.created_at DESC 
-			OFFSET $1 LIMIT $2`
+// getPostsFromPostgresPaginated est le fallback ultime (Cold Storage L3) pour les classements stricts.
+// Respecte la règle DDD #15 (@make-perfect-route) en appelant la procédure stockée via repository/postgres.
+func getPostsFromPostgresPaginated(ctx context.Context, rankType string, offset int64, limit int64, lang ...int) ([]post_models.PostPayload, error) {
+	orderMode := variables.OrderModeRecent
+	switch variables.NormalizeStrictRankType(rankType) {
+	case variables.StrictTypeLikes:
+		orderMode = variables.OrderModeLikes
+	case variables.StrictTypeViews:
+		orderMode = variables.OrderModeViews
 	default:
-		sqlQuery = `SELECT id FROM content.posts WHERE visibility >= 0 AND visibility < 2 ORDER BY created_at DESC OFFSET $1 LIMIT $2`
+		orderMode = variables.OrderModeRecent
 	}
 
-	if postgres.PostgresDB == nil {
-		return nil, numan_error.NewAppError(
-			http.StatusInternalServerError,
-			numan_error.CodeDatabaseError,
-			"Le service de base de données est momentanément indisponible.",
-			errors.New("PostgreSQL connection 'PostgresDB' is not initialized"),
-		)
-	}
-
-	sqlRows, errPg := postgres.PostgresDB.QueryContext(ctx, sqlQuery, offset, limit)
+	extractedIDs, errPg := postgres.FuncLoadRankedPostIDsPaginated(ctx, orderMode, offset, limit, lang...)
 	if errPg != nil {
-		return nil, numan_error.NewAppError(
-			http.StatusInternalServerError,
-			numan_error.CodeDatabaseError,
-			"Impossible de récupérer les classements de publications depuis PostgreSQL (L3).",
-			errPg,
-		)
+		return nil, errPg
 	}
 
-	defer func(rowsToClose *sql.Rows) {
-		if errClose := rowsToClose.Close(); errClose != nil {
-			numan_log.Warn(ctx).Err(errClose).Msg("Erreur lors de la fermeture du curseur Rows L3 Postgres")
-		}
-	}(sqlRows)
-
-	var extractedIDs []int64
-	for sqlRows.Next() {
-		var extractedID int64
-		if errScan := sqlRows.Scan(&extractedID); errScan == nil {
-			extractedIDs = append(extractedIDs, extractedID)
-		} else {
-			numan_log.Warn(ctx).Err(errScan).Msg("Erreur de scan d'un ID de publication lors du fallback L3 Postgres")
-		}
-	}
-
-	if errRows := sqlRows.Err(); errRows != nil {
-		return nil, numan_error.NewAppError(
-			http.StatusInternalServerError,
-			numan_error.CodeDatabaseError,
-			"Erreur lors de l'itération des publications depuis PostgreSQL (L3).",
-			errRows,
-		)
-	}
-
-	// Error already wrapped by GetPostsView; propagate it without wrapping again.
 	return object_cache_service.GetPostsView(ctx, extractedIDs)
 }

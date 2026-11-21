@@ -8,6 +8,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
 	"go.mongodb.org/mongo-driver/bson"
 )
 
@@ -21,7 +22,7 @@ func cleanMongo() {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	recentDatabase := mongo.MongoClient.Database("numan_recent")
+	recentDatabase := mongo.MongoClient.Database(variables.MongoDatabaseName)
 
 	// 1. Découverte dynamique de toutes les collections
 	collectionNames, err := recentDatabase.ListCollectionNames(ctx, bson.D{})

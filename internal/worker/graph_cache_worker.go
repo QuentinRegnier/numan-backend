@@ -35,8 +35,8 @@ func handleGraphUpdate(ctx context.Context, events []redis.AsyncEvent) {
 				numan_log.Warn(ctx).Err(errUnmarshal).Msg("Graph Worker : Impossible de désérialiser le payload du post")
 				continue
 			}
-			if post.Visibility < 0 || post.Visibility > 2 {
-				continue // Ignorer les posts en quarantaine (Shadowban) ou supprimés
+			if post.Visibility != variables.PostVisibilityAll {
+				continue // P0 Isolation : Seuls les posts strictement publics (visibility == 0) alimentent le graphe sémantique public
 			}
 
 			// ── ÉTAPE 2 : FUSION DES TAGS DIRECTS ET INDIRECTS ──────────────────
@@ -52,7 +52,7 @@ func handleGraphUpdate(ctx context.Context, events []redis.AsyncEvent) {
 
 				// ── ÉTAPE 4 : MISE À JOUR DU GRAPHE DE CO-OCCURRENCES (L1) ──────
 				if len(semanticTags) > 1 {
-					cache_service.UpdateTagCooccurrences(ctx, semanticTags, post.CreatedAt)
+					cache_service.UpdateTagCooccurrences(ctx, semanticTags, post.CreatedAt, post.Lang)
 				}
 			}
 		}

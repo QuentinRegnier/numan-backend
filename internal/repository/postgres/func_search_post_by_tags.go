@@ -11,7 +11,7 @@ import (
 )
 
 // FuncSearchPostIDsByTag appelle la procédure SQL de recherche par tag avec tri.
-func FuncSearchPostIDsByTag(ctx context.Context, tag string, orderMode int, offset, limit int64) ([]int64, error) {
+func FuncSearchPostIDsByTag(ctx context.Context, tag string, orderMode int, offset, limit int64, lang ...int) ([]int64, error) {
 	if postgres.PostgresDB == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
@@ -21,8 +21,18 @@ func FuncSearchPostIDsByTag(ctx context.Context, tag string, orderMode int, offs
 		)
 	}
 
-	query := `SELECT id FROM content.func_search_post_ids_by_tag($1, $2::smallint, $3::integer, $4::integer)`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, tag, orderMode, offset, limit)
+	var (
+		query string
+		args  []any
+	)
+	if len(lang) > 0 && lang[0] >= 0 {
+		query = `SELECT id FROM content.func_search_post_ids_by_tag($1, $2::smallint, $3::integer, $4::integer, $5::smallint)`
+		args = []any{tag, orderMode, offset, limit, lang[0]}
+	} else {
+		query = `SELECT id FROM content.func_search_post_ids_by_tag($1, $2::smallint, $3::integer, $4::integer)`
+		args = []any{tag, orderMode, offset, limit}
+	}
+	rows, err := postgres.PostgresDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

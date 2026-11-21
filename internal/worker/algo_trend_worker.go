@@ -3,6 +3,8 @@ package worker
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
@@ -11,16 +13,17 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
+	goredis "github.com/go-redis/redis/v8"
 )
 
 // ############################################################################
-// # WORKER : HASHTAG TRENDS (ÉVALUATION DES TENDANCES MONDIALES)
+// # WORKER : HASHTAG TRENDS (ÉVALUATION DES TENDANCES PAR LANGUE)
 // ############################################################################
 
-// startHashtagTrendCron lance l'évaluation des tendances mondiales de hashtags (TDD §3.3).
-// Il tourne à intervalle régulier pour maintenir le Top 100 des tags sans saturer le CPU.
+// startHashtagTrendCron lance l'évaluation des tendances de hashtags par langue (TDD §3.3).
+// Il tourne à intervalle régulier pour maintenir le Top des tags par langue sans saturer le CPU.
 func startHashtagTrendCron(ctx context.Context) {
-	numan_log.Info(ctx).Msg("Démarrage du Moteur de Tendances Hashtags...")
+	numan_log.Info(ctx).Msg("Démarrage du Moteur de Tendances Hashtags (Par Langue)...")
 
 	go func() {
 		ticker := time.NewTicker(variables.TrendCronInterval)
@@ -37,27 +40,59 @@ func startHashtagTrendCron(ctx context.Context) {
 	}()
 }
 
-// processHashtagTrends calcule le score de popularité des tags basés sur la viralité des posts récents.
+// processHashtagTrends calcule le score de popularité des tags basés sur la viralité des posts récents par langue.
+// Ce worker est le propriétaire exclusif de redis.HashtagLeaderboard (et synchronise redis.Tags "trending" pour rétrocompatibilité).
 func processHashtagTrends(ctx context.Context) {
-	// ── ÉTAPE 1 : EXTRACTION DES MEILLEURS POSTS MONDIAUX (L1) ──────────────
-	now := domain.NowTime()
+	token, acquired, errLock := redis.AcquireCronLock(ctx, "hashtag_trends", variables.TrendCronInterval/2)
+	if errLock == nil && !acquired && token == "" && redis.CronLocks != nil && redis.CronLocks.Client != nil {
+		return
+	}
+	if token != "" {
+		defer func() {
+			_ = redis.ReleaseCronLock(ctx, "hashtag_trends", token)
+		}()
+	}
+
+	now := domain.NowTime().UTC()
 	dateStr := now.Format("20060102")
+	yesterdayStr := now.Add(-24 * time.Hour).Format("20060102")
 
-	// Reconstruction de la clé physique du ZSET Global
-	dailyGlobalKey := fmt.Sprintf(variables.RedisKeyTrendGlobalDaily, dateStr)
+	for _, lang := range variables.SupportedLanguageCodes {
+		processHashtagTrendsForLang(ctx, lang, now, dateStr, yesterdayStr)
+	}
+}
 
-	// Récupération du Top 1000 de la journée (O(log(N) + M))
-	topPosts, err := redis.ZRevRangeWithScores(ctx, dailyGlobalKey, 0, variables.TrendTopPostsLimit)
-	if err != nil || len(topPosts) == 0 {
-		return // Pas d'activité suffisante pour dégager une tendance
+func processHashtagTrendsForLang(ctx context.Context, lang int, now time.Time, dateStr, yesterdayStr string) {
+	if redis.TrendGlobalDaily == nil || redis.TrendGlobalDaily.Client == nil {
+		return
+	}
+
+	// 1. Lecture de la partition journalière de la langue (avec complément hier à minuit et fallback legacy)
+	topPosts, err := redis.TrendGlobalDaily.ZRevRangeWithScores(ctx, variables.TrendGlobalDailySubKey(lang, dateStr), 0, variables.TrendTopPostsLimit)
+	if (err != nil || len(topPosts) < 10) && yesterdayStr != "" {
+		if yPosts, errY := redis.TrendGlobalDaily.ZRevRangeWithScores(ctx, variables.TrendGlobalDailySubKey(lang, yesterdayStr), 0, variables.TrendTopPostsLimit); errY == nil && len(yPosts) > 0 {
+			topPosts = append(topPosts, yPosts...)
+		}
+	}
+	if len(topPosts) == 0 && lang == variables.DefaultContentLanguage {
+		// Fallback compatibilité ascendante sur la clé sans préfixe langue ou ancienne clé most_cache:trend:global:daily:%s
+		if legacyPosts, errLeg := redis.TrendGlobalDaily.ZRevRangeWithScores(ctx, dateStr, 0, variables.TrendTopPostsLimit); errLeg == nil && len(legacyPosts) > 0 {
+			topPosts = legacyPosts
+		} else if oldKeyPosts, errOld := redis.ZRevRangeWithScores(ctx, fmt.Sprintf(variables.RedisKeyTrendGlobalDaily, dateStr), 0, variables.TrendTopPostsLimit); errOld == nil && len(oldKeyPosts) > 0 {
+			topPosts = oldKeyPosts
+		}
+	}
+	if len(topPosts) == 0 {
+		return
 	}
 
 	postScoresByTag := make(map[string]map[int64]float64)
 	postAgesByTag := make(map[string]map[int64]float64)
+	seenPosts := make(map[int64]bool, len(topPosts))
 
-	// ── ÉTAPE 2 : HYDRATATION ET GROUPEMENT O(N) ────────────────────────────
+	// 2. Hydratation et groupement O(N) (uniquement visibility == 0 et hors auto-tags user_*)
 	for _, item := range topPosts {
-		var postID int64 // Normalisation robuste du type renvoyé par go-redis
+		var postID int64
 		switch v := item.Member.(type) {
 		case string:
 			postID = pkg.ParseInt64(v)
@@ -66,57 +101,94 @@ func processHashtagTrends(ctx context.Context) {
 		default:
 			postID = pkg.ParseInt64(fmt.Sprintf("%v", v))
 		}
+		if postID <= 0 || seenPosts[postID] {
+			continue
+		}
+		seenPosts[postID] = true
 
-		if postID == 0 {
+		p, errHydration := getPostWithFallback(ctx, postID)
+		if errHydration != nil || p.Visibility != variables.PostVisibilityAll {
 			continue
 		}
 
-		score := item.Score
-
-		// Hydratation via le Fallback global (L1 -> L2 -> L3)
-		p, errHydration := getPostWithFallback(ctx, postID)
-		if errHydration != nil || p.Visibility != variables.PostVisibilityAll {
-			continue // Sécurité : Seuls les posts publics (PostVisibilityAll) alimentent les tendances mondiales
+		ageSeconds := now.Sub(domain.MillisToTime(p.CreatedAt)).Seconds()
+		if ageSeconds < 0 {
+			ageSeconds = 0
 		}
 
-		ageSeconds := now.Sub(domain.MillisToTime(p.CreatedAt)).Seconds()
-
-		// Fusion des Tags Directs et Indirects pour une couverture sémantique totale
-		allTags := append(p.Hashtags, p.IndirectHashtags...)
-		for _, tag := range allTags {
+		// Tags directs (100% du score)
+		for _, rawTag := range p.Hashtags {
+			tag := service.ResolveCanonicalTag(ctx, rawTag, lang)
+			if tag == "" || strings.HasPrefix(tag, variables.AuthorTagPrefix) {
+				continue
+			}
 			if postScoresByTag[tag] == nil {
 				postScoresByTag[tag] = make(map[int64]float64)
 				postAgesByTag[tag] = make(map[int64]float64)
 			}
-			postScoresByTag[tag][postID] = score
+			postScoresByTag[tag][postID] = item.Score
 			postAgesByTag[tag][postID] = ageSeconds
+		}
+
+		// Tags indirects issus des commentaires (pondération 0.65)
+		for _, rawTag := range p.IndirectHashtags {
+			tag := service.ResolveCanonicalTag(ctx, rawTag, lang)
+			if tag == "" || strings.HasPrefix(tag, variables.AuthorTagPrefix) {
+				continue
+			}
+			if postScoresByTag[tag] == nil {
+				postScoresByTag[tag] = make(map[int64]float64)
+				postAgesByTag[tag] = make(map[int64]float64)
+			}
+			if _, alreadyDirect := postScoresByTag[tag][postID]; !alreadyDirect {
+				postScoresByTag[tag][postID] = item.Score * variables.IndirectTagScoreWeight
+				postAgesByTag[tag][postID] = ageSeconds
+			}
 		}
 	}
 
-	// ── ÉTAPE 3 : CALCUL MATHÉMATIQUE ET PERSISTANCE (PIPELINE L1) ──────────
-	if len(postScoresByTag) > 0 {
-		pipe := redis.Tags.Pipeline()
-		trendingKey := redis.Tags.Key("trending")
+	if len(postScoresByTag) == 0 {
+		return
+	}
 
-		for tag, scoresMap := range postScoresByTag {
-			agesMap := postAgesByTag[tag]
-
-			// Appel du moteur mathématique pur (Implémentation du TDD §3.3)
-			trendScore := service.ComputeHashtagTrendScore(scoresMap, agesMap)
-
-			if trendScore > 0 {
-				pipe.Do(ctx, "ZADD", trendingKey, trendScore, tag)
-			}
+	// 3. Calcul mathématique du score de tendance par tag et plafonnement Top N
+	members := make([]*goredis.Z, 0, len(postScoresByTag))
+	for tag, scoresMap := range postScoresByTag {
+		agesMap := postAgesByTag[tag]
+		trendScore := service.ComputeHashtagTrendScore(scoresMap, agesMap)
+		if trendScore > 0 {
+			members = append(members, &goredis.Z{
+				Score:  trendScore,
+				Member: tag,
+			})
 		}
+	}
+	if len(members) == 0 {
+		return
+	}
 
-		// Protection RAM stricte (LFU/Cap) : On ne conserve que le Top 100
-		pipe.Do(ctx, "ZREMRANGEBYRANK", trendingKey, 0, variables.TrendTagsRetention)
+	sort.Slice(members, func(i, j int) bool {
+		return members[i].Score > members[j].Score
+	})
+	maxTags := variables.TDDMaxZSET
+	if maxTags <= 0 {
+		maxTags = 100
+	}
+	if len(members) > maxTags {
+		members = members[:maxTags]
+	}
 
-		_, errPipe := pipe.Exec(ctx)
-		if errPipe != nil {
-			numan_log.Error(ctx).Err(errPipe).Msg("Échec critique lors de l'enregistrement des tendances Hashtags en RAM (L1)")
-		} else {
-			numan_log.Info(ctx).Msg("Moteur de Tendances : Mise à jour du Top 100 mondial réussie.")
+	// 4. Remplacement atomique dans redis.HashtagLeaderboard par langue (+ "global" et Tags "trending" pour la langue par défaut)
+	if redis.HashtagLeaderboard != nil && redis.HashtagLeaderboard.Client != nil {
+		if err := redis.HashtagLeaderboard.ZSetReplaceAtomic(ctx, variables.HashtagLeaderboardSubKey(lang), members, 0); err != nil {
+			numan_log.Error(ctx).Err(err).Int("lang", lang).Msg("Échec critique lors de l'enregistrement du leaderboard de hashtags par langue")
+			return
 		}
+		if lang == variables.DefaultContentLanguage {
+			_ = redis.HashtagLeaderboard.ZSetReplaceAtomic(ctx, "global", members, 0)
+		}
+	}
+	if lang == variables.DefaultContentLanguage && redis.Tags != nil && redis.Tags.Client != nil {
+		_ = redis.Tags.ZSetReplaceAtomic(ctx, "trending", members, 0)
 	}
 }

@@ -127,10 +127,23 @@ func computePersonalizedScore(
 	friendIDs map[int64]bool,
 	priorityLevel int,
 ) float64 {
+	// Multiplicateur de priorité borné [1.0, 2.0].
+	// Si trendScore != 1.0, le score issu du MOST Cache intègre déjà le multiplicateur de priorité :
+	// on ne l'applique donc une seconde fois que si trendScore == 1.0 (ex: post social hors ZSET de tendance).
+	clampedPriority := priorityLevel
+	if clampedPriority < 0 {
+		clampedPriority = 0
+	} else if clampedPriority > 4 {
+		clampedPriority = 4
+	}
+	priorityMultiplier := 1.0
+	if trendScore == 1.0 && clampedPriority > 0 {
+		priorityMultiplier = 1.0 + (float64(clampedPriority) * 0.25)
+	}
 
-	// Si les vecteurs sont invalides, on fallback sur le score global influencé par la priorité
+	// Si les vecteurs sont invalides, on fallback sur le score global
 	if len(userVec) != variables.VectorDimTotal || len(contentVec) != variables.VectorDimTotal {
-		return trendScore * (1.0 + float64(priorityLevel)*0.5)
+		return trendScore * priorityMultiplier
 	}
 
 	// ÉTAPE A : Similarité Cosinus Globale (Produit scalaire complet)
@@ -158,9 +171,6 @@ func computePersonalizedScore(
 		(variables.TDDEtaP * pearsonCorrelation)
 
 	baseScore := trendScore * innerFormula
-
-	// ÉTAPE F : Multiplicateur de Priorité (Admin, Certifié, etc.)
-	priorityMultiplier := 1.0 + (float64(priorityLevel) * 0.5)
 
 	return baseScore * priorityMultiplier
 }
@@ -351,28 +361,54 @@ func runMMR(candidates []postCandidate, similarityMatrix []float32, matrixDimens
 // ############################################################################
 
 // injectSerendipity remplace de manière aléatoire (mais contrôlée) certains posts
-// du feed généré par MMR par des posts de découverte pour casser les chambres d'écho.
+// du feed généré par MMR par des posts de découverte pour casser les chambres d'écho,
+// tout en garantissant l'absence stricte de doublons dans le lot final.
 func injectSerendipity(feed []postCandidate, discoveryPool []int64, rng *rand.Rand, startIndex int) []postCandidate {
 	if len(discoveryPool) == 0 || rng == nil {
 		return feed
 	}
 
+	usedPostIDs := make(map[int64]bool, len(feed))
+	for _, candidate := range feed {
+		usedPostIDs[candidate.PostID] = true
+	}
+
+	unusedPool := make([]int64, 0, len(discoveryPool))
+	for _, id := range discoveryPool {
+		if !usedPostIDs[id] {
+			unusedPool = append(unusedPool, id)
+		}
+	}
+
+	if len(unusedPool) == 0 {
+		return feed
+	}
+
 	for i := range feed {
+		if len(unusedPool) == 0 {
+			break
+		}
+
 		// 1. L'Onde de Dopamine (DopamineWave) dicte combien de contenu "sûr"
 		// l'utilisateur a besoin à cet instant précis (index).
 		affinityRequired := dopamineWave(float64(startIndex + i))
 
 		// 2. La probabilité de surprise (Sérendipité) est l'inverse exact de ce besoin.
-		// Ex: Si le besoin de certitude est de 0.8 (80%), la probabilité de surprise est 20%.
 		probabilityOfSurprise := 1.0 - affinityRequired
 
 		// 3. Jet de dé contre la probabilité calculée
 		if rng.Float64() < probabilityOfSurprise {
-			randomPoolIndex := rng.Intn(len(discoveryPool))
+			randomPoolIndex := rng.Intn(len(unusedPool))
+			chosenID := unusedPool[randomPoolIndex]
 
-			// On écrase le post du MMR par un post de découverte brut
+			// Retrait du post choisi de la réserve disponible et libération de l'ancien ID
+			unusedPool[randomPoolIndex] = unusedPool[len(unusedPool)-1]
+			unusedPool = unusedPool[:len(unusedPool)-1]
+			usedPostIDs[chosenID] = true
+
+			// On écrase le post du MMR par un post de découverte brut unique
 			feed[i] = postCandidate{
-				PostID:        discoveryPool[randomPoolIndex],
+				PostID:        chosenID,
 				IsSerendipity: true,
 				MatrixIdx:     -1, // Sécurité : ce post n'est pas dans la matrice calculée
 			}

@@ -470,6 +470,52 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 		}
 		return respArray(out)
 
+	case "SCAN":
+		pattern := "*"
+		for i := 2; i+1 < len(args); i++ {
+			if strings.ToUpper(args[i]) == "MATCH" {
+				pattern = args[i+1]
+				i++
+			}
+		}
+		prefix := strings.TrimSuffix(pattern, "*")
+		seen := make(map[string]struct{})
+		for k := range s.strings {
+			if strings.HasPrefix(k, prefix) {
+				seen[k] = struct{}{}
+			}
+		}
+		for k := range s.zsets {
+			if strings.HasPrefix(k, prefix) {
+				seen[k] = struct{}{}
+			}
+		}
+		for k := range s.hashes {
+			if strings.HasPrefix(k, prefix) {
+				seen[k] = struct{}{}
+			}
+		}
+		for k := range s.sets {
+			if strings.HasPrefix(k, prefix) {
+				seen[k] = struct{}{}
+			}
+		}
+		for k := range s.lists {
+			if strings.HasPrefix(k, prefix) {
+				seen[k] = struct{}{}
+			}
+		}
+		for k := range s.geos {
+			if strings.HasPrefix(k, prefix) {
+				seen[k] = struct{}{}
+			}
+		}
+		keysOut := make([]string, 0, len(seen))
+		for k := range seen {
+			keysOut = append(keysOut, respBulk(k))
+		}
+		return respArray([]string{respBulk("0"), respArray(keysOut)})
+
 	case "HSET":
 		if len(args) < 4 {
 			return respErr("wrong number of arguments for HSET")
@@ -922,6 +968,90 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 		}
 		return respInt(removed)
 
+	case "ZREMRANGEBYRANK":
+		if len(args) < 4 {
+			return respErr("wrong number of arguments for ZREMRANGEBYRANK")
+		}
+		key := args[1]
+		start, _ := strconv.ParseInt(args[2], 10, 64)
+		stop, _ := strconv.ParseInt(args[3], 10, 64)
+		items := s.sortedZSet(key, false)
+		toRemove := sliceBounds(items, start, stop)
+		var removed int64
+		for _, it := range toRemove {
+			delete(s.zsets[key], it.member)
+			removed++
+		}
+		if len(s.zsets[key]) == 0 {
+			delete(s.zsets, key)
+		}
+		return respInt(removed)
+
+	case "ZREMRANGEBYSCORE":
+		if len(args) < 4 {
+			return respErr("wrong number of arguments for ZREMRANGEBYSCORE")
+		}
+		key := args[1]
+		minStr, maxStr := args[2], args[3]
+		zs := s.zsets[key]
+		var removed int64
+		for m, sc := range zs {
+			if matchScoreBound(sc, minStr, true) && matchScoreBound(sc, maxStr, false) {
+				delete(zs, m)
+				removed++
+			}
+		}
+		if len(zs) == 0 {
+			delete(s.zsets, key)
+		}
+		return respInt(removed)
+
+	case "ZUNIONSTORE":
+		if len(args) < 4 {
+			return respErr("wrong number of arguments for ZUNIONSTORE")
+		}
+		destKey := args[1]
+		numKeys, _ := strconv.Atoi(args[2])
+		if len(args) < 3+numKeys {
+			return respErr("syntax error in ZUNIONSTORE")
+		}
+		srcKeys := args[3 : 3+numKeys]
+		aggregate := "SUM"
+		for i := 3 + numKeys; i+1 < len(args); i++ {
+			if strings.ToUpper(args[i]) == "AGGREGATE" {
+				aggregate = strings.ToUpper(args[i+1])
+				i++
+			}
+		}
+		merged := make(map[string]float64)
+		for _, sk := range srcKeys {
+			for m, sc := range s.zsets[sk] {
+				prev, exists := merged[m]
+				if !exists {
+					merged[m] = sc
+				} else {
+					switch aggregate {
+					case "MAX":
+						if sc > prev {
+							merged[m] = sc
+						}
+					case "MIN":
+						if sc < prev {
+							merged[m] = sc
+						}
+					default:
+						merged[m] = prev + sc
+					}
+				}
+			}
+		}
+		if len(merged) > 0 {
+			s.zsets[destKey] = merged
+		} else {
+			delete(s.zsets, destKey)
+		}
+		return respInt(int64(len(merged)))
+
 	case "GEOADD":
 		if len(args) < 5 {
 			return respErr("wrong number of arguments for GEOADD")
@@ -1217,6 +1347,23 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 		}
 		return respInt(int64(len(subs)))
 
+	case "EVALSHA":
+		if ferr, ok := s.failCmds["EVAL"]; ok && ferr != nil {
+			return respErr(ferr.Error())
+		}
+		if len(args) > 3 {
+			if ferr, exists := s.failKeys[args[3]]; exists && ferr != nil {
+				return respErr(ferr.Error())
+			}
+		}
+		return "-NOSCRIPT No matching script. Please use EVAL.\r\n"
+
+	case "SCRIPT":
+		if len(args) >= 3 && strings.ToUpper(args[1]) == "LOAD" {
+			return respBulk("fakesha")
+		}
+		return respSimple("OK")
+
 	case "EVAL":
 		return s.execEval(args)
 
@@ -1249,6 +1396,11 @@ func (s *FakeRedisServer) execEval(args []string) string {
 			toRemove := len(asc) - maxSize
 			for i := 0; i < toRemove; i++ {
 				delete(s.zsets[key], asc[i].member)
+			}
+		}
+		if len(argv) >= 4 {
+			if ttlSec, err := strconv.ParseInt(argv[3], 10, 64); err == nil && ttlSec > 0 {
+				s.ttls[key] = time.Duration(ttlSec) * time.Second
 			}
 		}
 		if sc, ok := s.zsets[key][member]; ok {
@@ -1293,6 +1445,17 @@ func (s *FakeRedisServer) execEval(args []string) string {
 			rawItems = append(rawItems, respBulk(k), respBulk(v))
 		}
 		return respArray([]string{respInt(ver), respArray(rawItems)})
+	}
+
+	// 4. releaseCronLockScript
+	if strings.Contains(script, "GET") && strings.Contains(script, "DEL") && len(keys) == 1 && len(argv) == 1 {
+		key := keys[0]
+		if s.strings[key] == argv[0] {
+			delete(s.strings, key)
+			delete(s.ttls, key)
+			return respInt(1)
+		}
+		return respInt(0)
 	}
 
 	return respNil()

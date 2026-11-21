@@ -28,7 +28,7 @@ func TestSeedingService(t *testing.T) {
 	}
 	samplePostRow := []driver.Value{
 		int64(101), int64(1), "Hello Seed", `{golang}`, `{redis}`, `{}`, `{}`,
-		1, 0, "Paris", int64(1700000000000), int64(1700000000000),
+		0, 0, "Paris", int64(1700000000000), int64(1700000000000),
 		10, 2, 50, 0, false,
 		`{0.1,0.2}`, 1, int64(0), int64(0), int64(0),
 	}
@@ -94,14 +94,14 @@ func TestSeedingService(t *testing.T) {
 		require.ErrorAs(t, SeedMostCache(ctx), &appErr)
 		assert.Equal(t, numan_error.CodeDatabaseError, appErr.Code)
 
-		// 3. KEYS failure
+		// 3. SCAN failure
 		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			return test.NewMockRows(postColumns, nil), nil
 		}, nil)
-		srv.SetFailCmd("KEYS", errors.New("keys err"))
+		srv.SetFailCmd("SCAN", errors.New("scan err"))
 		require.ErrorAs(t, SeedMostCache(ctx), &appErr)
 		assert.Equal(t, numan_error.CodeCacheError, appErr.Code)
-		srv.SetFailCmd("KEYS", nil)
+		srv.SetFailCmd("SCAN", nil)
 
 		// 4. Maintenance SetPrimitive failure
 		srv.SetFailCmd("SET", errors.New("set err"))

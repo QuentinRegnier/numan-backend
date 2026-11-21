@@ -30,18 +30,34 @@ type tagEdge struct {
 // ############################################################################
 
 // UpdateTagCooccurrences calcule et met à jour les poids markoviens pour toutes les paires de tags.
-func UpdateTagCooccurrences(ctx context.Context, tagsList []string, currentTimestampMs int64) {
+// Paramètre optionnel lang ...int : partitionne le graphe sémantique par langue.
+func UpdateTagCooccurrences(ctx context.Context, tagsList []string, currentTimestampMs int64, lang ...int) {
 	if len(tagsList) < 2 {
 		return // Pas de co-occurrence possible avec moins de 2 tags.
 	}
 
-	// Nettoyage et uniformisation des tags pour éviter la duplication.
+	resolvedLang := variables.DefaultContentLanguage
+	hasLang := len(lang) > 0
+	if hasLang {
+		resolvedLang = variables.NormalizeLangForCache(lang[0])
+	}
+
+	// Nettoyage, dédoublonnage et uniformisation des tags.
+	seen := make(map[string]struct{}, len(tagsList))
 	var cleanedTagsList []string
 	for _, tag := range tagsList {
 		cleanedTag := strings.ToLower(strings.TrimSpace(tag))
-		if cleanedTag != "" {
+		if cleanedTag == "" {
+			continue
+		}
+		if _, exists := seen[cleanedTag]; !exists {
+			seen[cleanedTag] = struct{}{}
 			cleanedTagsList = append(cleanedTagsList, cleanedTag)
 		}
+	}
+
+	if len(cleanedTagsList) < 2 {
+		return
 	}
 
 	// Génération de toutes les paires uniques (Graphe non orienté)
@@ -50,9 +66,12 @@ func UpdateTagCooccurrences(ctx context.Context, tagsList []string, currentTimes
 			sourceTag := cleanedTagsList[i]
 			targetTag := cleanedTagsList[j]
 
-			// Mise à jour de l'arête A -> B
+			// Mise à jour de l'arête A -> B et B -> A dans la partition linguistique
+			updateEdge(ctx, variables.GraphEdgesSubKey(resolvedLang, sourceTag), targetTag, currentTimestampMs)
+			updateEdge(ctx, variables.GraphEdgesSubKey(resolvedLang, targetTag), sourceTag, currentTimestampMs)
+
+			// Maintien de la clé non-préfixée pour rétrocompatibilité des appels sans langue
 			updateEdge(ctx, sourceTag, targetTag, currentTimestampMs)
-			// Mise à jour de l'arête B -> A (Symétrie pour lecture O(1) depuis n'importe quel sommet)
 			updateEdge(ctx, targetTag, sourceTag, currentTimestampMs)
 		}
 	}
@@ -60,11 +79,11 @@ func UpdateTagCooccurrences(ctx context.Context, tagsList []string, currentTimes
 
 // updateEdge exécute l'équation d'état markovienne :
 // W_nouveau = (W_ancien * e^(-λ * Δt)) * (1 - α) + α
-func updateEdge(ctx context.Context, sourceTag, targetTag string, currentTimestampMs int64) {
+func updateEdge(ctx context.Context, sourceKey, targetTag string, currentTimestampMs int64) {
 	var currentEdge tagEdge
 
 	// 1. Lecture de l'état actuel via la Collection abstraite Redis
-	binaryData, errRedis := redis.GraphEdges.HGet(ctx, sourceTag, targetTag).Bytes()
+	binaryData, errRedis := redis.GraphEdges.HGet(ctx, sourceKey, targetTag).Bytes()
 	if errRedis == nil {
 		err := msgpack.Unmarshal(binaryData, &currentEdge)
 		if err != nil {
@@ -72,7 +91,7 @@ func updateEdge(ctx context.Context, sourceTag, targetTag string, currentTimesta
 			return
 		}
 	} else if !errors.Is(errRedis, goredis.Nil) {
-		numan_log.Warn(ctx).Err(errRedis).Str("source_tag", sourceTag).Str("target_tag", targetTag).Msg("Échec de la lecture Redis pour une arête du graphe de Markov")
+		numan_log.Warn(ctx).Err(errRedis).Str("source_key", sourceKey).Str("target_tag", targetTag).Msg("Échec de la lecture Redis pour une arête du graphe de Markov")
 		return
 	}
 
@@ -99,25 +118,43 @@ func updateEdge(ctx context.Context, sourceTag, targetTag string, currentTimesta
 		return
 	}
 
-	errSet := redis.GraphEdges.HSet(ctx, sourceTag, targetTag, newBinaryData)
+	errSet := redis.GraphEdges.HSet(ctx, sourceKey, targetTag, newBinaryData)
 	if errSet != nil {
 		numan_log.Error(ctx).Err(errSet).Msg("Échec de l'écriture Redis pour le graphe de Markov")
 	}
 }
 
 // GetRelatedTagsLazy retourne les tags cousins et déclenche l'élagage paresseux (Lazy Pruning).
-func GetRelatedTagsLazy(ctx context.Context, sourceTag string) map[string]float64 {
+// Paramètre optionnel lang ...int : interroge la partition linguistique du graphe sémantique.
+func GetRelatedTagsLazy(ctx context.Context, sourceTag string, lang ...int) map[string]float64 {
 	sanitizedSourceTag := strings.ToLower(strings.TrimSpace(sourceTag))
+	if sanitizedSourceTag == "" {
+		return nil
+	}
 
-	edgesMapJSON, errRedis := redis.GraphEdges.HGetAll(ctx, sanitizedSourceTag).Result()
+	lookupKey := sanitizedSourceTag
+	if len(lang) > 0 {
+		resolvedLang := variables.NormalizeLangForCache(lang[0])
+		langKey := variables.GraphEdgesSubKey(resolvedLang, sanitizedSourceTag)
+		edgesMapJSON, errRedis := redis.GraphEdges.HGetAll(ctx, langKey).Result()
+		if errRedis == nil && len(edgesMapJSON) > 0 {
+			return evaluateAndPruneEdges(ctx, langKey, edgesMapJSON)
+		}
+	}
+
+	edgesMapJSON, errRedis := redis.GraphEdges.HGetAll(ctx, lookupKey).Result()
 	if errRedis != nil {
-		numan_log.Warn(ctx).Err(errRedis).Str("tag", sanitizedSourceTag).Msg("Échec de la lecture HGetAll du Graph Cache")
+		numan_log.Warn(ctx).Err(errRedis).Str("tag", lookupKey).Msg("Échec de la lecture HGetAll du Graph Cache")
 		return nil
 	}
 	if len(edgesMapJSON) == 0 {
 		return nil
 	}
 
+	return evaluateAndPruneEdges(ctx, lookupKey, edgesMapJSON)
+}
+
+func evaluateAndPruneEdges(ctx context.Context, lookupKey string, edgesMapJSON map[string]string) map[string]float64 {
 	survivingEdgesMap := make(map[string]float64)
 	var edgesToDeleteList []string
 	currentTimestampMs := domain.NowMillis()
@@ -131,6 +168,9 @@ func GetRelatedTagsLazy(ctx context.Context, sourceTag string) map[string]float6
 		}
 
 		deltaDays := float64(currentTimestampMs-currentEdge.Timestamp) / (1000 * 60 * 60 * 24)
+		if deltaDays < 0 {
+			deltaDays = 0
+		}
 		currentWeight := currentEdge.Weight * math.Exp(-variables.GraphDecayLambda*deltaDays)
 
 		if currentWeight < variables.GraphSurvivalEps {
@@ -144,13 +184,13 @@ func GetRelatedTagsLazy(ctx context.Context, sourceTag string) map[string]float6
 
 	// Élagage Asynchrone (HDel) : Auto-nettoyage de la RAM sans ralentir la requête utilisateur
 	if len(edgesToDeleteList) > 0 {
-		go func(targetsToPrune []string) {
+		go func(key string, targetsToPrune []string) {
 			backgroundCtx := context.Background()
-			errPrune := redis.GraphEdges.HDel(backgroundCtx, sanitizedSourceTag, targetsToPrune...)
+			errPrune := redis.GraphEdges.HDel(backgroundCtx, key, targetsToPrune...)
 			if errPrune != nil {
 				numan_log.Warn(backgroundCtx).Err(errPrune).Msg("Échec de l'élagage paresseux (Lazy Pruning) dans le Graph Cache")
 			}
-		}(edgesToDeleteList)
+		}(lookupKey, edgesToDeleteList)
 	}
 
 	return survivingEdgesMap
@@ -161,18 +201,17 @@ func GetRelatedTagsLazy(ctx context.Context, sourceTag string) map[string]float6
 func SeedGraphCache(ctx context.Context) error {
 	numan_log.Info(ctx).Msg("Début de l'initialisation du graphe sémantique (Graph Cache)...")
 
-	// 1. Récupération de l'historique complet (Filtré : > 1 tag, trié par date croissante)
+	// 1. Récupération de l'historique complet (Filtré : visibility = 0, > 1 tag, trié par date croissante)
 	historicalPosts, errPg := postgres.FuncLoadPostsForGraphSeeding(ctx)
 	if errPg != nil {
-		// Error already wrapped by FuncLoadPostsForGraphSeeding; propagate it without wrapping again.
 		return errPg
 	}
 
 	numan_log.Info(ctx).Int("count", len(historicalPosts)).Msg("Publications trouvées pour le rejeu temporel sémantique.")
 
-	// 2. Rejeu Temporel pour reconstruire fidèlement l'état d'apprentissage
+	// 2. Rejeu Temporel par langue pour reconstruire fidèlement l'état d'apprentissage
 	for _, postRecord := range historicalPosts {
-		UpdateTagCooccurrences(ctx, postRecord.Hashtags, domain.TimeToMillis(postRecord.CreatedAt))
+		UpdateTagCooccurrences(ctx, postRecord.Hashtags, domain.TimeToMillis(postRecord.CreatedAt), postRecord.Lang)
 	}
 
 	numan_log.Info(ctx).Msg("Graphe sémantique initialisé avec succès !")

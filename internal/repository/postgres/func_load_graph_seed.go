@@ -18,6 +18,7 @@ type graphSeedPayload struct {
 	Hashtags         []string
 	IndirectHashtags []string // ✅ NOUVEAU
 	CreatedAt        time.Time
+	Lang             int
 }
 
 // FuncLoadPostsForGraphSeeding ramène l'historique sémantique complet trié du plus vieux au plus récent
@@ -31,7 +32,7 @@ func FuncLoadPostsForGraphSeeding(ctx context.Context) ([]graphSeedPayload, erro
 		)
 	}
 
-	query := `SELECT id, hashtags, indirect_hashtags, created_at FROM content.func_load_posts_for_graph_seeding()`
+	query := `SELECT id, hashtags, indirect_hashtags, created_at, lang FROM content.func_load_posts_for_graph_seeding()`
 
 	rows, err := postgres.PostgresDB.QueryContext(ctx, query)
 	if err != nil {
@@ -48,10 +49,19 @@ func FuncLoadPostsForGraphSeeding(ctx context.Context) ([]graphSeedPayload, erro
 		}
 	}()
 
+	cols, _ := rows.Columns()
+	hasLangCol := len(cols) >= 5
+
 	seeds := make([]graphSeedPayload, 0)
 	for rows.Next() {
 		var p graphSeedPayload
-		if err := rows.Scan(&p.ID, pq.Array(&p.Hashtags), pq.Array(&p.IndirectHashtags), &p.CreatedAt); err == nil { // ✅ NOUVEAU (Scan correct)
+		var scanErr error
+		if hasLangCol {
+			scanErr = rows.Scan(&p.ID, pq.Array(&p.Hashtags), pq.Array(&p.IndirectHashtags), &p.CreatedAt, &p.Lang)
+		} else {
+			scanErr = rows.Scan(&p.ID, pq.Array(&p.Hashtags), pq.Array(&p.IndirectHashtags), &p.CreatedAt)
+		}
+		if scanErr == nil {
 			seeds = append(seeds, p)
 		}
 	}

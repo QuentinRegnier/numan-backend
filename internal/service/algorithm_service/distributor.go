@@ -47,29 +47,29 @@ func HandlePullToRefresh(ctx context.Context, opts RefreshOptions) ([]int64, err
 	// ─────────────────────────────────────────────────────────────────────────────
 	if opts.IsForce {
 
-		// 1. Sauvegarde systématique dans l'historique des posts réellement consommés avant le reset
+		// 1. Capture des posts réellement consommés avant le reset
 		activeFeedData := feedState.Feeds[feedState.ActiveFeed]
+		var consumedPostIDs []int64
 		if opts.LastSeenIndex > 0 && len(activeFeedData.PostIDs) > 0 {
-
 			endIndexForSeen := opts.LastSeenIndex
 			if endIndexForSeen > len(activeFeedData.PostIDs) {
 				endIndexForSeen = len(activeFeedData.PostIDs)
 			}
-
-			consumedPostIDs := activeFeedData.PostIDs[0:endIndexForSeen]
-			for _, postID := range consumedPostIDs {
-				service.MarkAsSeen(ctx, opts.UserID, postID)
-			}
+			consumedPostIDs = append(consumedPostIDs, activeFeedData.PostIDs[0:endIndexForSeen]...)
 		}
 
 		// 2. Réinitialisation complète du Cuckoo Filter (Amnésie algorithmique RAM)
+		// puis ré-injection immédiate des posts consommés juste avant le Pull-To-Refresh
 		service.ResetCuckooFilter(ctx, opts.UserID)
+		for _, postID := range consumedPostIDs {
+			service.MarkAsSeen(ctx, opts.UserID, postID)
+		}
 		opts.LastSeenIndex = 0
 
 		// 3. Application des délais anti-spam algorithmiques
 		if time.Since(feedState.GeneratedAt) >= variables.FeedReloadDelay {
 
-			// Le délai est écoulé : Reset intégral et régénération complète
+			// Le délai est écoulé : Reset intégral et régénération complète des 3 tampons A, B, C
 			feedState.GeneratedAt = domain.NowTime()
 			feedState.ActiveFeed = "A"
 			feedState.Feeds["A"] = feedData{Seed: rand.Int63(), PostIDs: nil, Fused: false}
@@ -77,31 +77,45 @@ func HandlePullToRefresh(ctx context.Context, opts RefreshOptions) ([]int64, err
 			feedState.Feeds["C"] = feedData{Seed: rand.Int63(), PostIDs: nil, Fused: false}
 
 			seedsArray := [3]int64{feedState.Feeds["A"].Seed, feedState.Feeds["B"].Seed, feedState.Feeds["C"].Seed}
-			magasinierBaskets, err := collectCandidates(ctx, opts.UserID, seedsArray, opts.Quotas)
+			magasinierBaskets, err := collectCandidates(ctx, opts.UserID, seedsArray, opts.Quotas, opts.PersonalOpts.Lang)
 			if err != nil {
 				numan_log.Error(ctx).Err(err).Msg("distributor: Échec de la collecte des candidats")
 				return nil, err
 			}
 
-			// Extraction du panier A
-			var initialCandidateIDs []int64
-			for _, item := range magasinierBaskets.FeedA.Items {
-				initialCandidateIDs = append(initialCandidateIDs, item.PostID)
+			basketMap := map[string]*candidateBasket{
+				"A": magasinierBaskets.FeedA,
+				"B": magasinierBaskets.FeedB,
+				"C": magasinierBaskets.FeedC,
 			}
 
-			opts.PersonalOpts.CandidateIDs = initialCandidateIDs
-			opts.PersonalOpts.Seed = feedState.Feeds["A"].Seed
-			opts.PersonalOpts.StartIndex = 0
+			for _, feedKey := range []string{"A", "B", "C"} {
+				b := basketMap[feedKey]
+				var candidateIDs []int64
+				if b != nil {
+					for _, item := range b.Items {
+						candidateIDs = append(candidateIDs, item.PostID)
+					}
+				}
 
-			freshFeedIDs, err := buildPersonalizedFeed(ctx, opts.PersonalOpts)
-			if err != nil {
-				return nil, err
+				personalOpts := opts.PersonalOpts
+				personalOpts.CandidateIDs = candidateIDs
+				personalOpts.Seed = feedState.Feeds[feedKey].Seed
+				personalOpts.StartIndex = 0
+				personalOpts.BypassCache = true
+
+				scoredIDs, errScore := buildPersonalizedFeed(ctx, personalOpts)
+				if errScore != nil {
+					if feedKey == "A" {
+						return nil, errScore
+					}
+					continue
+				}
+
+				updatedFeedData := feedState.Feeds[feedKey]
+				updatedFeedData.PostIDs = scoredIDs
+				feedState.Feeds[feedKey] = updatedFeedData
 			}
-
-			// Injection dans l'état
-			updatedFeedData := feedState.Feeds["A"]
-			updatedFeedData.PostIDs = freshFeedIDs
-			feedState.Feeds["A"] = updatedFeedData
 
 		} else {
 			// Protection Anti-Spam : On effectue une Rotation Circulaire des paniers existants
@@ -123,14 +137,14 @@ func HandlePullToRefresh(ctx context.Context, opts RefreshOptions) ([]int64, err
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────────
-	// CAS B : CONSOMMATION DU SCROLL (last_seen_index > 0)
+	// CAS B : CONSOMMATION DU SCROLL (last_seen_index >= 0)
 	// ─────────────────────────────────────────────────────────────────────────────
 	activeFeedData := feedState.Feeds[feedState.ActiveFeed]
 	totalPostsInActiveFeed := len(activeFeedData.PostIDs)
 	remainingPosts := totalPostsInActiveFeed - opts.LastSeenIndex
 
 	// SCENARIO 1 : Le buffer actuel contient assez de posts pour satisfaire la demande client
-	if remainingPosts >= opts.FetchCount {
+	if remainingPosts >= opts.FetchCount && opts.FetchCount > 0 {
 		endIndex := opts.LastSeenIndex + opts.FetchCount
 		return activeFeedData.PostIDs[opts.LastSeenIndex:endIndex], nil
 	}
@@ -146,9 +160,9 @@ func HandlePullToRefresh(ctx context.Context, opts RefreshOptions) ([]int64, err
 
 	if !activeFeedData.Fused {
 		// SCENARIO 2 (FUSION) : On recycle le travail en attente des paniers voisins (B et C)
-		for feedName, feedData := range feedState.Feeds {
+		for feedName, fData := range feedState.Feeds {
 			if feedName != feedState.ActiveFeed {
-				for _, candidateID := range feedData.PostIDs {
+				for _, candidateID := range fData.PostIDs {
 					if _, alreadyExists := alreadyInActiveFeedMap[candidateID]; !alreadyExists {
 						extendedCandidateIDs = append(extendedCandidateIDs, candidateID)
 						alreadyInActiveFeedMap[candidateID] = struct{}{}
@@ -157,10 +171,11 @@ func HandlePullToRefresh(ctx context.Context, opts RefreshOptions) ([]int64, err
 			}
 		}
 		activeFeedData.Fused = true
+	}
 
-	} else {
-		// SCENARIO 3 (EXTENSION INFINIE) : Les paniers voisins sont vides, on doit ré-interroger Redis
-		extendedBasket, err := collectSingleBasket(ctx, opts.UserID, activeFeedData.Seed, opts.Quotas)
+	// SCENARIO 3 (EXTENSION INFINIE) : Si la fusion n'a rien apporté ou était déjà consommée, on ré-interroge Redis
+	if len(extendedCandidateIDs) == 0 {
+		extendedBasket, err := collectSingleBasket(ctx, opts.UserID, activeFeedData.Seed, opts.Quotas, opts.PersonalOpts.Lang)
 		if err != nil {
 			return nil, err
 		}
@@ -173,10 +188,11 @@ func HandlePullToRefresh(ctx context.Context, opts RefreshOptions) ([]int64, err
 		}
 	}
 
-	// Passage à la Caissière pour filtrer et scrorer cette nouvelle extension
+	// Passage à la Caissière pour filtrer et scorer cette nouvelle extension
 	opts.PersonalOpts.CandidateIDs = extendedCandidateIDs
 	opts.PersonalOpts.Seed = activeFeedData.Seed
 	opts.PersonalOpts.StartIndex = totalPostsInActiveFeed // Maintient la continuité de la Vague de Sérendipité
+	opts.PersonalOpts.BypassCache = true
 
 	freshlyScoredFeedIDs, err := buildPersonalizedFeed(ctx, opts.PersonalOpts)
 	if err != nil {
@@ -212,6 +228,27 @@ func HandlePullToRefresh(ctx context.Context, opts RefreshOptions) ([]int64, err
 		case "C":
 			feedState.ActiveFeed = "A"
 		}
+
+		rotatedData := feedState.Feeds[feedState.ActiveFeed]
+		if len(rotatedData.PostIDs) == 0 {
+			rotatedBasket, errRot := collectSingleBasket(ctx, opts.UserID, rotatedData.Seed, opts.Quotas, opts.PersonalOpts.Lang)
+			if errRot == nil && rotatedBasket != nil {
+				var rotCandidates []int64
+				for _, item := range rotatedBasket.Items {
+					rotCandidates = append(rotCandidates, item.PostID)
+				}
+				rotOpts := opts.PersonalOpts
+				rotOpts.CandidateIDs = rotCandidates
+				rotOpts.Seed = rotatedData.Seed
+				rotOpts.StartIndex = 0
+				rotOpts.BypassCache = true
+				if rotScored, errScore := buildPersonalizedFeed(ctx, rotOpts); errScore == nil {
+					rotatedData.PostIDs = rotScored
+					feedState.Feeds[feedState.ActiveFeed] = rotatedData
+				}
+			}
+		}
+
 		err = saveUserFeedState(ctx, opts.UserID, feedState)
 		if err != nil {
 			return nil, err

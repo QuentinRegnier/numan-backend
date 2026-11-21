@@ -11,6 +11,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
+	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/post_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
@@ -50,11 +51,20 @@ func SearchPosts(ctx context.Context, callerID int64, input search_models.Search
 	}
 	input.Query = strings.TrimSpace(input.Query)
 
+	callerLang := variables.DefaultContentLanguage
+	if callerID > 0 {
+		if settings, errSettings := object_cache_service.GetUserSettingsCascade(ctx, callerID); errSettings == nil {
+			if variables.IsSupportedLanguage(settings.DisplayAndContent.Language) {
+				callerLang = settings.DisplayAndContent.Language
+			}
+		}
+	}
+
 	var resolvedPostIDs []int64
 	hasQueryBeenIntercepted := false
 	targetOrderMode := mapFilterToOrderMode(input.Filter)
 
-	// ── ÉTAPE 1 : DÉCOUVERTE GLOBALE (MOST CACHE L1) ────────────────────────
+	// ── ÉTAPE 1 : DÉCOUVERTE GLOBALE (MOST CACHE L1 PAR LANGUE) ─────────────
 
 	// Si l'utilisateur clique sur un filtre sans faire de recherche textuelle.
 	if input.Query == "" && input.Filter != "" && input.Filter != variables.SearchFilterTrend {
@@ -70,7 +80,7 @@ func SearchPosts(ctx context.Context, callerID int64, input search_models.Search
 		}
 
 		if targetRankType != "" {
-			rankedPayloadsFromCache, errRedis := cache_service.GetRankedPosts(ctx, targetRankType, input.Offset, input.Limit)
+			rankedPayloadsFromCache, errRedis := cache_service.GetRankedPosts(ctx, targetRankType, input.Offset, input.Limit, callerLang)
 			if errRedis != nil {
 				numan_log.Error(ctx).Err(errRedis).Str("rank_type", targetRankType).Msg("Erreur L1 lors de la récupération des tops posts")
 				return search_models.SearchPostOutput{}, numan_error.NewInternal()
@@ -87,11 +97,12 @@ func SearchPosts(ctx context.Context, callerID int64, input search_models.Search
 
 	if !hasQueryBeenIntercepted && strings.HasPrefix(input.Query, "#") {
 		cleanHashtagSlug := service.NormalizeHashtag(ctx, input.Query)
+		cleanHashtagSlug = service.ResolveCanonicalTag(ctx, cleanHashtagSlug, callerLang)
 
 		if cleanHashtagSlug != "" {
-			// Si on demande les plus récents, on tape le ZSET ultra-rapide L1
+			// Si on demande les plus récents, on tape le ZSET ultra-rapide L1 de la langue
 			if targetOrderMode == variables.OrderModeRecent {
-				tagPayloadsFromCache, errCache := cache_service.GetTagPosts(ctx, cleanHashtagSlug, input.Offset, input.Limit)
+				tagPayloadsFromCache, errCache := cache_service.GetTagPosts(ctx, cleanHashtagSlug, input.Offset, input.Limit, callerLang)
 				if errCache == nil {
 					for _, payload := range tagPayloadsFromCache {
 						resolvedPostIDs = append(resolvedPostIDs, payload.ID)
@@ -100,7 +111,7 @@ func SearchPosts(ctx context.Context, callerID int64, input search_models.Search
 				}
 			} else {
 				// Si on veut trier ("Le tag #nature le plus liké"), on DOIT déléguer au L3
-				pgIDs, errPg := postgres.FuncSearchPostIDsByTag(ctx, cleanHashtagSlug, targetOrderMode, input.Offset, input.Limit)
+				pgIDs, errPg := postgres.FuncSearchPostIDsByTag(ctx, cleanHashtagSlug, targetOrderMode, input.Offset, input.Limit, callerLang)
 				if errPg == nil {
 					resolvedPostIDs = append(resolvedPostIDs, pgIDs...)
 					hasQueryBeenIntercepted = true

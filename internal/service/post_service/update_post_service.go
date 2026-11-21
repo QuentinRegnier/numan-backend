@@ -2,6 +2,8 @@ package post_service
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
@@ -11,8 +13,10 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/algorithm_service"
+	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/security_service"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
 
 // ############################################################################
@@ -33,13 +37,41 @@ func UpdatePost(ctx context.Context, callerID int64, input post_models.UpdatePos
 		return numan_error.NewInternal()
 	}
 
+	oldPostSnapshot := postPayload
+
 	// ── ÉTAPE 2 : APPLICATION DES MODIFICATIONS MÉTIER ──────────────────────
 	postPayload.Content = pkg.CleanStr(input.Content)
-	postPayload.Hashtags = pkg.SliceUniqueStr(input.Hashtags)
+
+	// Préservation obligatoire de l'auto-tag auteur (user_{authorID}) lors de la mise à jour des hashtags
+	updatedHashtags := pkg.SliceUniqueStr(input.Hashtags)
+	authorHashtag := fmt.Sprintf("%s%d", variables.AuthorTagPrefix, postPayload.UserID)
+	hasAuthorTag := false
+	for _, h := range updatedHashtags {
+		if h == authorHashtag {
+			hasAuthorTag = true
+			break
+		}
+	}
+	if !hasAuthorTag && postPayload.UserID > 0 {
+		updatedHashtags = append(updatedHashtags, authorHashtag)
+	}
+	postPayload.Hashtags = updatedHashtags
+
 	postPayload.Identifiers = pkg.SliceUniqueInt64(input.Identifiers)
 	postPayload.Location = pkg.CleanStr(input.Location)
 	postPayload.Visibility = input.Visibility
 	postPayload.UpdatedAt = domain.NowMillis()
+
+	// Gestion de la langue lors d'une mise à jour :
+	// - Si input.Lang ou input.LangISO est fourni, on valide et on applique la nouvelle langue.
+	// - Sinon, on préserve la langue existante du post (ne jamais écraser silencieusement).
+	if input.Lang != nil || strings.TrimSpace(input.LangISO) != "" {
+		resolvedLang, errLang := variables.ResolveContentLanguage(input.Lang, input.LangISO, postPayload.Lang)
+		if errLang != nil {
+			return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "La langue de publication spécifiée n'est pas supportée.", errLang)
+		}
+		postPayload.Lang = resolvedLang
+	}
 
 	// L'IA locale (Edge Computing) saura qu'il faut recalculer ses affinités grâce à l'incrémentation.
 	postPayload.VectorVersion += 1
@@ -52,7 +84,16 @@ func UpdatePost(ctx context.Context, callerID int64, input post_models.UpdatePos
 		return err
 	}
 
-	// ── ÉTAPE 4 : SAUVEGARDE ET DÉLÉGATION AUX WORKERS BATCH ────────────────
+	// ── ÉTAPE 4 : INVALIDATION SYNCHRONE DES TENDANCES PUBLIQUES ────────────
+	// Si le post était public (0) et devient restreint (1, 2, 3, <0), change de langue ou change de tags,
+	// on l'évince immédiatement des anciens ZSETs publics de tendances/classements.
+	if oldPostSnapshot.Visibility == variables.PostVisibilityAll {
+		if postPayload.Visibility != variables.PostVisibilityAll || oldPostSnapshot.Lang != postPayload.Lang || !equalStringSlices(oldPostSnapshot.Hashtags, postPayload.Hashtags) {
+			cache_service.EvictPostFromPublicTrends(ctx, oldPostSnapshot)
+		}
+	}
+
+	// ── ÉTAPE 5 : SAUVEGARDE ET DÉLÉGATION AUX WORKERS BATCH ────────────────
 
 	// 1. Écrasement LFU immédiat en RAM
 	errCache := object_cache_service.SetPostInObjectCache(ctx, postPayload)
@@ -68,4 +109,16 @@ func UpdatePost(ctx context.Context, callerID int64, input post_models.UpdatePos
 	}
 
 	return nil
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

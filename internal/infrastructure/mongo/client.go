@@ -69,7 +69,10 @@ func EnsureIndexes(ctx context.Context, db *mongo.Database) error {
 	_, err2 := userSettings.Indexes().CreateMany(ctx, []mongo.IndexModel{{Keys: bson.D{{Key: "user_id", Value: 1}}}})
 	_, err3 := sessions.Indexes().CreateMany(ctx, []mongo.IndexModel{{Keys: bson.D{{Key: "user_id", Value: 1}, {Key: "firebase_installation_id", Value: 1}}}})
 	_, err4 := relations.Indexes().CreateMany(ctx, []mongo.IndexModel{{Keys: bson.D{{Key: "primary_id", Value: 1}, {Key: "secondary_id", Value: 1}}}})
-	_, err5 := posts.Indexes().CreateMany(ctx, []mongo.IndexModel{{Keys: bson.D{{Key: "hashtags", Value: 1}, {Key: "identifiers", Value: 1}, {Key: "user_id", Value: 1}, {Key: "created_at", Value: -1}}}})
+	_, err5 := posts.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{Keys: bson.D{{Key: "hashtags", Value: 1}, {Key: "identifiers", Value: 1}, {Key: "user_id", Value: 1}, {Key: "created_at", Value: -1}}},
+		{Keys: bson.D{{Key: "lang", Value: 1}, {Key: "visibility", Value: 1}, {Key: "created_at", Value: -1}}},
+	})
 	_, err6 := comments.Indexes().CreateMany(ctx, []mongo.IndexModel{{Keys: bson.D{{Key: "post_id", Value: 1}, {Key: "created_at", Value: -1}}}})
 	_, err7 := likes.Indexes().CreateMany(ctx, []mongo.IndexModel{{Keys: bson.D{{Key: "target_type", Value: 1}, {Key: "target_id", Value: 1}, {Key: "user_id", Value: 1}}}})
 	_, err8 := media.Indexes().CreateMany(ctx, []mongo.IndexModel{{Keys: bson.D{{Key: "owner_id", Value: 1}, {Key: "created_at", Value: -1}}}})

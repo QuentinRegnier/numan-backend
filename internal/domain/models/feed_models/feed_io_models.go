@@ -7,8 +7,8 @@ import (
 
 // GetFeedInput valide la requête de scroll ou de refresh
 type GetFeedInput struct {
-	Force         bool `json:"force"` // Détecté via le suffixe /force
-	LastSeenIndex int  `form:"last_seen_index,default=0"`
+	Force         bool `json:"force" form:"force"` // Détecté via le suffixe /force, query param ?force=true, ou champ JSON
+	LastSeenIndex int  `json:"last_seen_index" form:"last_seen_index,default=0"`
 }
 
 // Validate vérifie la validité de l'index de pagination du fil d'actualité.

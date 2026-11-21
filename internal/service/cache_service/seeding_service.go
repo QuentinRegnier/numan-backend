@@ -46,6 +46,7 @@ func SeedMostCache(ctx context.Context) error {
 			numan_log.Error(ctx).Err(appErr).Msg("Échec L1 lors de l'ajout des tags actifs dans Redis")
 			return appErr
 		}
+		_ = redis.Tags.SAdd(backgroundCtx, variables.ActiveTagsSubKey(variables.DefaultContentLanguage), argsForRedis...)
 	}
 
 	// ── PHASE 2 : HYDRATATION DES POSTS ET CLASSEMENTS (PAR BLOCS) ──────────
@@ -59,7 +60,6 @@ func SeedMostCache(ctx context.Context) error {
 	for {
 		postsBatchFromPg, errPgPosts := postgres.FuncLoadPostsPaginated(ctx, paginationLimit, paginationOffset)
 		if errPgPosts != nil {
-			// Error already wrapped by FuncLoadPostsPaginated; propagate it without wrapping again.
 			return errPgPosts
 		}
 
@@ -68,10 +68,15 @@ func SeedMostCache(ctx context.Context) error {
 		}
 
 		for _, postPayload := range postsBatchFromPg {
+			// P0 Isolation : Seuls les posts strictement publics (visibility == 0) intègrent le Magasin public
+			if postPayload.Visibility != variables.PostVisibilityAll {
+				continue
+			}
+
 			UpdatePostRecommendationScore(backgroundCtx, postPayload)
 
-			err := redis.ZAddWithCap(backgroundCtx, variables.RedisKeyStrictLikes, float64(postPayload.LikeCount), postPayload.ID, variables.MaxStrictElements)
-			if err != nil {
+			normLang := variables.NormalizeLangForCache(postPayload.Lang)
+			if err := redis.RankedPosts.ZAddWithCap(backgroundCtx, variables.StrictRankSubKey(variables.StrictTypeLikes, normLang), float64(postPayload.LikeCount), postPayload.ID, variables.MaxStrictElements); err != nil {
 				appErr := numan_error.NewAppError(
 					http.StatusInternalServerError,
 					numan_error.CodeCacheError,
@@ -81,8 +86,9 @@ func SeedMostCache(ctx context.Context) error {
 				numan_log.Error(ctx).Err(appErr).Msg("Échec L1 lors de l'ajout du post au ZSET des likes stricts")
 				return appErr
 			}
-			err = redis.ZAddWithCap(backgroundCtx, variables.RedisKeyStrictViews, float64(postPayload.ViewCount), postPayload.ID, variables.MaxStrictElements)
-			if err != nil {
+			_ = redis.RankedPosts.ZAddWithCap(backgroundCtx, "strict:likes", float64(postPayload.LikeCount), postPayload.ID, variables.MaxStrictElements)
+
+			if err := redis.RankedPosts.ZAddWithCap(backgroundCtx, variables.StrictRankSubKey(variables.StrictTypeViews, normLang), float64(postPayload.ViewCount), postPayload.ID, variables.MaxStrictElements); err != nil {
 				appErr := numan_error.NewAppError(
 					http.StatusInternalServerError,
 					numan_error.CodeCacheError,
@@ -92,6 +98,7 @@ func SeedMostCache(ctx context.Context) error {
 				numan_log.Error(ctx).Err(appErr).Msg("Échec L1 lors de l'ajout du post au ZSET des vues strictes")
 				return appErr
 			}
+			_ = redis.RankedPosts.ZAddWithCap(backgroundCtx, "strict:views", float64(postPayload.ViewCount), postPayload.ID, variables.MaxStrictElements)
 		}
 
 		totalPostsProcessed += len(postsBatchFromPg)
@@ -99,12 +106,12 @@ func SeedMostCache(ctx context.Context) error {
 		paginationOffset += paginationLimit
 	}
 
-	// ── PHASE 3 : HYDRATATION INVERSÉE (PRE-WARMING FINAL) ──────────────────
+	// ── PHASE 3 : HYDRATATION INVERSÉE (PRE-WARMING FINAL SANS KEYS BLOQUANT) ─
 
 	numan_log.Info(ctx).Msg("Lancement de l'hydratation inversée (Pre-warming L1/L2 pour l'élite)...")
 
 	winningPostIDsMap := make(map[int64]bool)
-	trendKeysList, err := redis.Keys(backgroundCtx, "most_cache:trend:*")
+	trendKeysList, err := redis.ScanKeys(backgroundCtx, "trend:*", 500)
 	if err != nil {
 		appErr := numan_error.NewAppError(
 			http.StatusInternalServerError,
@@ -149,7 +156,6 @@ func SeedMostCache(ctx context.Context) error {
 				err := object_cache_service.SetPostInObjectCache(backgroundCtx, elitePost)
 				if err != nil {
 					numan_log.Error(ctx).Err(err).Msg("Échec L1 lors de la sanctuarisation du post d'élite")
-					// Error already wrapped by SetPostInObjectCache; propagate it without wrapping again.
 					return err
 				}
 
@@ -220,7 +226,6 @@ func seedCommunitySpeedCache(ctx context.Context) error {
 
 	activeCommunitiesFromPg, errPg := postgres.FuncLoadActiveCommunities(ctx)
 	if errPg != nil {
-		// Error already wrapped by FuncLoadActiveCommunities; propagate it without wrapping again.
 		return errPg
 	}
 
@@ -260,7 +265,13 @@ func SeedSpeedCache(ctx context.Context) error {
 				numan_log.Warn(ctx).Err(err).Int64("user_id", userPayload.ID).Msg("Échec lors du stockage de l'utilisateur dans le SPEED Cache")
 				continue
 			}
-			_ = AddUserToLanguageIndex(backgroundCtx, userPayload.ID, 0)
+			userLang := variables.DefaultContentLanguage
+			if settings, errSet := object_cache_service.GetUserSettingsCascade(backgroundCtx, userPayload.ID); errSet == nil {
+				if variables.IsSupportedLanguage(settings.DisplayAndContent.Language) {
+					userLang = settings.DisplayAndContent.Language
+				}
+			}
+			_ = AddUserToLanguageIndex(backgroundCtx, userPayload.ID, userLang)
 		}
 
 		offsetUsers += len(usersBatchFromPg)

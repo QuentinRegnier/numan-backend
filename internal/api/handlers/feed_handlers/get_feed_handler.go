@@ -90,7 +90,7 @@ func GetFeedHandler(c *gin.Context) {
 		return
 	}
 
-	if strings.HasSuffix(c.Request.URL.Path, "/force") {
+	if strings.HasSuffix(c.Request.URL.Path, "/force") || strings.EqualFold(c.Query("force"), "true") {
 		input.Force = true
 	}
 

@@ -106,7 +106,7 @@ func main() {
 	service.WarmUpCuckooFilter(context.Background())
 
 	// --- SMART SEEDING DU MOST CACHE ---
-	count, err := redisgo.ZCard(context.Background(), variables.RedisKeyStrictRecent)
+	count, err := redisgo.RankedPosts.ZCard(context.Background(), variables.StrictRankSubKey(variables.StrictTypeRecent, variables.DefaultContentLanguage))
 	if err != nil {
 		log.Printf("Erreur: ZCard: %v", err)
 	}
@@ -171,7 +171,7 @@ func main() {
 	docs.InitDocsRoutes(r)
 
 	// Initialiser les Index Mongo
-	err = mongo.EnsureIndexes(context.Background(), mongo.MongoClient.Database("numan"))
+	err = mongo.EnsureIndexes(context.Background(), mongo.MongoClient.Database(variables.MongoDatabaseName))
 	if err != nil {
 		log.Fatalf("Erreur lors de la création des index MongoDB: %v", err)
 	}

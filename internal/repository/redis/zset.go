@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	redisgo "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/go-redis/redis/v8"
@@ -14,13 +15,14 @@ import (
 // 1. LUA SCRIPTS
 // ============================================================================
 
-// zaddCapScript garantit l'atomicité de l'insertion et du nettoyage d'éléments.
-// TDD §3.3 : Utilise un script Lua pour éviter toute race condition.
+// zaddCapScript garantit l'atomicité de l'insertion, du plafonnement et de l'application du TTL.
+// TDD §3.3 : Utilise un script Lua précompilé (EVALSHA) pour éviter toute race condition et fuite mémoire.
 const zaddCapScript = `
 local key = KEYS[1]
 local score = tonumber(ARGV[1])
 local member = ARGV[2]
 local max_size = tonumber(ARGV[3])
+local ttl_seconds = tonumber(ARGV[4])
 
 redis.call('ZADD', key, score, member)
 local current_size = redis.call('ZCARD', key)
@@ -29,8 +31,14 @@ if current_size > max_size then
    redis.call('ZREMRANGEBYRANK', key, 0, current_size - max_size - 1)
 end
 
+if ttl_seconds and ttl_seconds > 0 then
+   redis.call('EXPIRE', key, ttl_seconds)
+end
+
 return redis.call('ZSCORE', key, member)
 `
+
+var zaddCapCompiled = redis.NewScript(zaddCapScript)
 
 // ============================================================================
 // 2. MÉTHODES DDD DE LA STRUCTURE "Collection" (Nouvelle Architecture)
@@ -44,9 +52,16 @@ func (c *Collection) ZAdd(ctx context.Context, id any, score float64, member any
 	}).Err()
 }
 
-// ZAddWithCap insère un élément et plafonne le ZSET en une seule passe atomique via Lua.
+// ZAddWithCap insère un élément, plafonne le ZSET et applique le DefaultTTL de la collection en une seule passe atomique via Lua (EVALSHA).
 func (c *Collection) ZAddWithCap(ctx context.Context, id any, score float64, member any, maxSize int) error {
-	return c.Client.Eval(ctx, zaddCapScript, []string{c.Key(id)}, score, member, maxSize).Err()
+	ttlSeconds := int64(c.DefaultTTL.Seconds())
+	return zaddCapCompiled.Run(ctx, c.Client, []string{c.Key(id)}, score, member, maxSize, ttlSeconds).Err()
+}
+
+// ZAddWithCapAndTTL insère un élément, plafonne le ZSET et applique un TTL explicite en une seule passe atomique via Lua (EVALSHA).
+func (c *Collection) ZAddWithCapAndTTL(ctx context.Context, id any, score float64, member any, maxSize int, ttl time.Duration) error {
+	ttlSeconds := int64(ttl.Seconds())
+	return zaddCapCompiled.Run(ctx, c.Client, []string{c.Key(id)}, score, member, maxSize, ttlSeconds).Err()
 }
 
 // ZIncrBy incrémente le score d'un membre existant.
@@ -63,6 +78,36 @@ func (c *Collection) ZRem(ctx context.Context, id any, members ...any) error {
 // ZRemRangeByRank supprime les éléments selon leur position (rang) dans le tri.
 func (c *Collection) ZRemRangeByRank(ctx context.Context, id any, start, stop int64) error {
 	return c.Client.ZRemRangeByRank(ctx, c.Key(id), start, stop).Err()
+}
+
+// ZRemRangeByScore supprime les éléments dont le score est compris entre min et max.
+func (c *Collection) ZRemRangeByScore(ctx context.Context, id any, min, max string) error {
+	return c.Client.ZRemRangeByScore(ctx, c.Key(id), min, max).Err()
+}
+
+// ZUnionStore fusionne plusieurs ZSETs de la collection vers un identifiant destination.
+func (c *Collection) ZUnionStore(ctx context.Context, destID any, sourceIDs []any, aggregate string) error {
+	if len(sourceIDs) == 0 {
+		return nil
+	}
+	keys := make([]string, len(sourceIDs))
+	for i, src := range sourceIDs {
+		keys[i] = c.Key(src)
+	}
+	if aggregate == "" {
+		aggregate = "MAX"
+	}
+	destKey := c.Key(destID)
+	if err := c.Client.ZUnionStore(ctx, destKey, &redis.ZStore{
+		Keys:      keys,
+		Aggregate: aggregate,
+	}).Err(); err != nil {
+		return err
+	}
+	if c.DefaultTTL > 0 {
+		_ = c.Client.Expire(ctx, destKey, c.DefaultTTL).Err()
+	}
+	return nil
 }
 
 // ZRevRange récupère une liste d'éléments triés du plus grand score au plus petit.
@@ -133,6 +178,7 @@ func (c *Collection) ZScore(ctx context.Context, id any, member any) (float64, e
 }
 
 // ZScores abstrait la récupération de plusieurs scores en un seul aller-retour TCP (Pipeline).
+// Si un membre n'est pas présent dans le ZSET (redis.Nil), son score vaut 0 sans interrompre le lot.
 func (c *Collection) ZScores(ctx context.Context, id any, members []string) ([]float64, error) {
 	if len(members) == 0 {
 		return nil, nil
@@ -151,9 +197,13 @@ func (c *Collection) ZScores(ctx context.Context, id any, members []string) ([]f
 	scores := make([]float64, len(members))
 	for i, cmd := range cmds {
 		if fCmd, ok := cmd.(*redis.FloatCmd); ok {
-			val, err := fCmd.Result()
-			if err != nil {
-				return nil, err
+			val, errCmd := fCmd.Result()
+			if errCmd != nil {
+				if errors.Is(errCmd, redis.Nil) {
+					scores[i] = 0
+					continue
+				}
+				return nil, errCmd
 			}
 			scores[i] = val
 		}
@@ -273,7 +323,7 @@ func ZRevRangeByRanks(ctx context.Context, key string, ranks []int64) ([]string,
 }
 
 func ZAddWithCap(ctx context.Context, key string, score float64, member any, maxSize int) error {
-	return redisgo.Rdb.Eval(ctx, zaddCapScript, []string{key}, score, member, maxSize).Err()
+	return zaddCapCompiled.Run(ctx, redisgo.Rdb, []string{key}, score, member, maxSize, 0).Err()
 }
 
 func ZRevRangeWithScores(ctx context.Context, key string, start, stop int64) ([]redis.Z, error) {
@@ -293,15 +343,19 @@ func ZScores(ctx context.Context, key string, members []string) ([]float64, erro
 		pipe.ZScore(ctx, key, member)
 	}
 	cmds, err := pipe.Exec(ctx)
-	if err != nil && err != redis.Nil {
+	if err != nil && !errors.Is(err, redis.Nil) {
 		return nil, err
 	}
 	scores := make([]float64, len(members))
 	for i, cmd := range cmds {
 		if fCmd, ok := cmd.(*redis.FloatCmd); ok {
-			val, err := fCmd.Result()
-			if err != nil {
-				return nil, err
+			val, errCmd := fCmd.Result()
+			if errCmd != nil {
+				if errors.Is(errCmd, redis.Nil) {
+					scores[i] = 0
+					continue
+				}
+				return nil, errCmd
 			}
 			scores[i] = val
 		}

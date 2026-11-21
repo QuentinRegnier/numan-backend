@@ -17,12 +17,15 @@ func scanPosts(ctx context.Context, rows *sql.Rows) ([]post_models.PostPayload, 
 		return []post_models.PostPayload{}, nil
 	}
 
+	cols, _ := rows.Columns()
+	hasLangCol := len(cols) >= 23
+
 	posts := make([]post_models.PostPayload, 0)
 	for rows.Next() {
 		var p post_models.PostPayload
 		var location sql.NullString
 
-		err := rows.Scan(
+		scanDest := []any{
 			&p.ID,
 			&p.UserID,
 			&p.Content,
@@ -45,7 +48,12 @@ func scanPosts(ctx context.Context, rows *sql.Rows) ([]post_models.PostPayload, 
 			&p.TelemetryDwellSum,
 			&p.TelemetryDwellSq,
 			&p.TelemetryClicks,
-		)
+		}
+		if hasLangCol {
+			scanDest = append(scanDest, &p.Lang)
+		}
+
+		err := rows.Scan(scanDest...)
 
 		if err != nil {
 			continue // On ignore la ligne corrompue et on passe à la suivante

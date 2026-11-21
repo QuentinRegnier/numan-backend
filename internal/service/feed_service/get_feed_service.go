@@ -2,14 +2,17 @@ package feed_service
 
 import (
 	"context"
+	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/feed_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/post_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
+	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/algorithm_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
+	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/post_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
@@ -24,11 +27,22 @@ func GetFeed(ctx context.Context, callerID int64, input feed_models.GetFeedInput
 	}
 	isManualRefresh := input.Force
 
-	// ── ÉTAPE 1 : Rapatriement du Graphe Social (O(1) L1) ─────────────────
+	// Enregistrement dans la file de Warm-up L1 (prochaine vérification dans 20 min)
+	nextWarmupMs := domain.TimeToMillis(domain.NowTime().Add(20 * time.Minute))
+	_ = redis.FeedSchedule.ZAdd(ctx, "global", float64(nextWarmupMs), callerID)
+
+	// ── ÉTAPE 1 : Rapatriement du Graphe Social & Langue (O(1) L1) ────────
 	friendIDsList, _ := cache_service.GetSpeedFriends(ctx, callerID)
 	friendIDsMap := make(map[int64]bool, len(friendIDsList))
 	for _, friendID := range friendIDsList {
 		friendIDsMap[friendID] = true
+	}
+
+	userLang := variables.DefaultContentLanguage
+	if settings, errSettings := object_cache_service.GetUserSettingsCascade(ctx, callerID); errSettings == nil {
+		if variables.IsSupportedLanguage(settings.DisplayAndContent.Language) {
+			userLang = settings.DisplayAndContent.Language
+		}
 	}
 
 	// ── ÉTAPE 2 : Lecture de l'ADN Algorithmique (Télémétrie L1) ──────────
@@ -57,10 +71,11 @@ func GetFeed(ctx context.Context, callerID int64, input feed_models.GetFeedInput
 		PersonalOpts: algorithm_service.PersonalizedFeedOptions{
 			UserID:         callerID,
 			UserVec:        userVector,
-			UserConfidence: confidenceScore, // ✅ REMPLACEMENT DU PLACEHOLDER
+			UserConfidence: confidenceScore,
 			FriendIDs:      friendIDsMap,
 			Date:           domain.NowTime(),
 			Limit:          variables.TDDFeedSize,
+			Lang:           userLang,
 		},
 		IsForce: isManualRefresh,
 	}
@@ -76,6 +91,11 @@ func GetFeed(ctx context.Context, callerID int64, input feed_models.GetFeedInput
 
 		// Extraction via les Tampons Tournants A/B/C
 		fetchedIDs, err := algorithm_service.HandlePullToRefresh(ctx, refreshOptions)
+		// Empêche le déclenchement répété du mode Force lors des itérations suivantes de la boucle d'hydratation
+		if refreshOptions.IsForce {
+			refreshOptions.IsForce = false
+			currentScrollIndex = 0
+		}
 		if err != nil || len(fetchedIDs) == 0 {
 			break // ZSET épuisé, on arrête l'hydratation
 		}

@@ -27,6 +27,8 @@ type PersonalizedFeedOptions struct {
 	CandidateIDs   []int64        // Les IDs de posts apportés par le Magasinier (Le panier brut)
 	Seed           int64          // La Graine du panier pour le déterminisme
 	StartIndex     int            // Index absolu de la Vague de Dopamine (Maintient la courbe au fil du scroll)
+	Lang           int            // Langue du Magasin (fr=0, en=1, etc.)
+	BypassCache    bool           // True lors d'un Pull-To-Refresh ou d'une extension de tampon
 }
 
 // buildPersonalizedFeed filtre, score et ordonne le panier brut pour créer le feed final.
@@ -36,13 +38,20 @@ func buildPersonalizedFeed(ctx context.Context, options PersonalizedFeedOptions)
 		feedSize = variables.TDDFeedSize // K_feed = 50
 	}
 
+	lang := options.Lang
+	if !variables.IsValidContentLanguage(lang) {
+		lang = variables.DefaultContentLanguage
+	}
+
 	// ############################################################################
 	// # ÉTAPE A : VÉRIFICATION DU CACHE PRÉ-CALCULÉ
 	// ############################################################################
 
-	var cachedFeedIDs []int64
-	if err := redis.FeedsPersonalized.GetObject(ctx, options.UserID, &cachedFeedIDs); err == nil && len(cachedFeedIDs) > 0 {
-		return cachedFeedIDs, nil
+	if !options.BypassCache && options.StartIndex == 0 {
+		var cachedFeedIDs []int64
+		if err := redis.FeedsPersonalized.GetObject(ctx, options.UserID, &cachedFeedIDs); err == nil && len(cachedFeedIDs) > 0 {
+			return cachedFeedIDs, nil
+		}
 	}
 
 	postIDs := options.CandidateIDs
@@ -51,22 +60,36 @@ func buildPersonalizedFeed(ctx context.Context, options PersonalizedFeedOptions)
 	}
 
 	// ############################################################################
-	// # ÉTAPE B : RÉCUPÉRATION DES SCORES DE TENDANCE MONDIAUX
+	// # ÉTAPE B : RÉCUPÉRATION DES SCORES DE TENDANCE MONDIAUX (PAR LANGUE)
 	// ############################################################################
 
 	dateKey := options.Date.UTC().Format("20060102")
-	dailyTrendRedisKey := fmt.Sprintf(variables.RedisKeyTrendGlobalDaily, dateKey)
+	dailyTrendSubKey := variables.TrendGlobalDailySubKey(lang, dateKey)
 
 	memberStrings := make([]string, len(postIDs))
 	for i, id := range postIDs {
 		memberStrings[i] = strconv.FormatInt(id, 10)
 	}
 
-	// Récupération en masse des scores ZSET
-	rawScores, err := redis.ZScores(ctx, dailyTrendRedisKey, memberStrings)
+	// Récupération en masse des scores ZSET depuis le magasin de la langue cible
+	rawScores, err := redis.TrendGlobalDaily.ZScores(ctx, dailyTrendSubKey, memberStrings)
 	if err != nil {
-		numan_log.Error(ctx).Err(err).Str("dailyTrendRedisKey", dailyTrendRedisKey).Msg("buildPersonalizedFeed: Échec de la récupération des scores de tendance")
+		numan_log.Error(ctx).Err(err).Str("dailyTrendSubKey", dailyTrendSubKey).Msg("buildPersonalizedFeed: Échec de la récupération des scores de tendance")
 		return nil, err
+	}
+
+	allZero := true
+	for _, s := range rawScores {
+		if s != 0 {
+			allZero = false
+			break
+		}
+	}
+	if allZero && lang == variables.DefaultContentLanguage {
+		legacyDailyKey := fmt.Sprintf(variables.RedisKeyTrendGlobalDaily, dateKey)
+		if legacyScores, errLegacy := redis.ZScores(ctx, legacyDailyKey, memberStrings); errLegacy == nil {
+			rawScores = legacyScores
+		}
 	}
 
 	trendScoresMap := make(map[int64]float64, len(postIDs))
@@ -271,11 +294,13 @@ func buildPersonalizedFeed(ctx context.Context, options PersonalizedFeedOptions)
 	// # ÉTAPE H : SAUVEGARDE ET GARANTIE D'IDEMPOTENCE
 	// ############################################################################
 
-	// On fige le calcul en RAM pour intercepter les futures requêtes identiques
-	err = redis.FeedsPersonalized.SetObject(ctx, options.UserID, finalFeedIDs)
-	if err != nil {
-		numan_log.Error(ctx).Err(err).Msg("buildPersonalizedFeed: Échec de la sauvegarde du feed personnalisé")
-		return nil, err
+	// On fige le calcul initial en RAM pour intercepter les futures requêtes identiques
+	if options.StartIndex == 0 {
+		err = redis.FeedsPersonalized.SetObject(ctx, options.UserID, finalFeedIDs)
+		if err != nil {
+			numan_log.Error(ctx).Err(err).Msg("buildPersonalizedFeed: Échec de la sauvegarde du feed personnalisé")
+			return nil, err
+		}
 	}
 
 	return finalFeedIDs, nil

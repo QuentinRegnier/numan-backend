@@ -18,6 +18,8 @@ type CreatePostInput struct {
 	IAScores    []float64 `json:"ia_scores,omitempty" binding:"omitempty,max=4,dive,min=0,max=1"` // Scores NSFWJS Porn [0.0, 1.0] des images
 	Location    string    `json:"location" binding:"max=100"`
 	Visibility  int       `json:"visibility" binding:"oneof=0 1 2"` // 0: Public, 1: Abonnés, 2: Amis (Mode 3 Privé supprimé)
+	Lang        *int      `json:"lang,omitempty"`
+	LangISO     string    `json:"lang_iso,omitempty"`
 }
 
 // Validate vérifie les règles métier de création d'une publication.
@@ -86,6 +88,15 @@ func (p *CreatePostInput) Validate() error {
 
 	if p.Visibility < variables.PostVisibilityAll || p.Visibility > variables.PostVisibilityFriend {
 		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Niveau de visibilité non supporté.", nil)
+	}
+	if p.Lang != nil && !variables.IsSupportedLanguage(*p.Lang) {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "La langue spécifiée pour la publication n'est pas supportée.", nil)
+	}
+	if strings.TrimSpace(p.LangISO) != "" {
+		code, err := variables.ParseLanguageISO(p.LangISO)
+		if err != nil || !variables.IsSupportedLanguage(code) {
+			return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le code ISO de langue spécifié pour la publication n'est pas supporté.", err)
+		}
 	}
 	return nil
 }

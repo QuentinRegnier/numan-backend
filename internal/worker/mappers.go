@@ -404,7 +404,7 @@ func (m *postMapper) Columns() []string {
 		"id", "user_id", "content", "hashtags", "indirect_hashtags", "identifiers", "media_ids",
 		"visibility", "priority_level", "location", "like_count",
 		"comment_count", "view_count", "report_count", "has_media",
-		"vector", "vector_version", "telemetry_dwell_sum", "telemetry_dwell_sq",
+		"vector", "vector_version", "lang", "telemetry_dwell_sum", "telemetry_dwell_sq",
 		"telemetry_clicks", "created_at", "updated_at",
 	}
 }
@@ -441,7 +441,7 @@ func (m *postMapper) ToRow(data any) ([]any, error) {
 	return []any{
 		p.ID, p.UserID, contentDB, pq.Array(p.Hashtags), pq.Array(p.IndirectHashtags), pq.Array(p.Identifiers), pq.Array(p.MediaIDs),
 		p.Visibility, p.PriorityLevel, locationDB, p.LikeCount, p.CommentCount,
-		p.ViewCount, p.ReportCount, p.HasMedia, vectorDB, p.VectorVersion, p.TelemetryDwellSum,
+		p.ViewCount, p.ReportCount, p.HasMedia, vectorDB, p.VectorVersion, p.Lang, p.TelemetryDwellSum,
 		p.TelemetryDwellSq, p.TelemetryClicks, p.CreatedAt, p.UpdatedAt,
 	}, nil
 }

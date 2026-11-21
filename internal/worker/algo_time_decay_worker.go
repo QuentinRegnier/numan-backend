@@ -2,11 +2,13 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
+	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
@@ -16,16 +18,19 @@ import (
 // des objets complets uniquement pour mettre à jour un score mathématique.
 type scoreJob struct {
 	PostID           int64
+	UserID           int64
 	LikeCount        int
 	CommentCount     int
 	ViewCount        int
 	HasMedia         bool
+	MediaCount       int
 	CreatedAt        time.Time
 	Hashtags         []string
 	IndirectHashtags []string
 	Visibility       int
 	PriorityLevel    int
 	ReportCount      int
+	Lang             int
 }
 
 // ############################################################################
@@ -50,13 +55,12 @@ func startScoreUpdaterCron(ctx context.Context) {
 				case <-ctx.Done():
 					return // Arrêt gracieux du serveur
 				case job := <-jobs:
-					// Conversion du booléen en multiplicateur entier
-					mediaCount := 0
-					if job.HasMedia {
+					mediaCount := job.MediaCount
+					if mediaCount == 0 && job.HasMedia {
 						mediaCount = 1
 					}
 
-					// Mise à jour du score dans le Cache L1 (ZSETs algorithmiques)
+					// Mise à jour du score dans le Cache L1 (ZSETs algorithmiques partitionnés par langue)
 					cache_service.UpdateScoreWithMetrics(
 						ctx,
 						job.PostID,
@@ -70,6 +74,8 @@ func startScoreUpdaterCron(ctx context.Context) {
 						job.Visibility,
 						job.ReportCount,
 						job.PriorityLevel,
+						job.Lang,
+						int(job.UserID),
 					)
 				}
 			}
@@ -90,18 +96,23 @@ func runTierCron(ctx context.Context, jobs chan<- scoreJob, interval time.Durati
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	lockName := fmt.Sprintf("time_decay:%s:%s", minAge, maxAge)
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			token, acquired, errLock := redis.AcquireCronLock(ctx, lockName, interval/2)
+			if errLock == nil && !acquired && token == "" && redis.CronLocks != nil && redis.CronLocks.Client != nil {
+				continue // Une autre instance worker_node exécute déjà ce tier
+			}
+
 			// ── FALLBACK L3 STRICT : CONTINUITÉ DE LA DONNÉE ────────────────
-			// /!\ EXCEPTION ARCHITECTURALE /!\
-			// On tape directement dans PostgreSQL (L3) en contournant MongoDB (L2).
-			// Pourquoi ? Le Time-Decay requiert une continuité et une exhaustivité absolues
-			// sur l'historique. MongoDb utilisant une éviction TTL (Warm Storage), il est
-			// structurellement incapable de garantir qu'aucun post ne manque à l'appel.
 			posts, err := postgres.FuncLoadPostsForTimeDecay(ctx, minAge, maxAge)
+			if token != "" {
+				_ = redis.ReleaseCronLock(ctx, lockName, token)
+			}
 			if err != nil {
 				numan_log.Error(ctx).
 					Err(err).
@@ -115,16 +126,19 @@ func runTierCron(ctx context.Context, jobs chan<- scoreJob, interval time.Durati
 			for _, p := range posts {
 				jobs <- scoreJob{
 					PostID:           p.ID,
+					UserID:           p.UserID,
 					LikeCount:        p.LikeCount,
 					CommentCount:     p.CommentCount,
 					ViewCount:        p.ViewCount,
 					HasMedia:         p.HasMedia,
+					MediaCount:       p.MediaCount,
 					CreatedAt:        p.CreatedAt,
 					Hashtags:         p.Hashtags,
 					IndirectHashtags: p.IndirectHashtags,
 					Visibility:       p.Visibility,
 					PriorityLevel:    p.PriorityLevel,
 					ReportCount:      p.ReportCount,
+					Lang:             p.Lang,
 				}
 			}
 		}

@@ -36,6 +36,9 @@ func ProcessSyncTelemetry(ctx context.Context, callerID int64, input telemetry_m
 		authoritativeTrustScore = callerLite.TrustScore
 	}
 
+	// Enregistrement dans la file de Warm-up L1 (prochaine vérification dans 20 min)
+	_ = redis.FeedSchedule.ZAdd(ctx, "global", float64(domain.NowMillis()+1200000), callerID)
+
 	syncOutput := telemetry_models.SyncTelemetryOutput{
 		NeedUpdate:       false,
 		Status:           "accepted",

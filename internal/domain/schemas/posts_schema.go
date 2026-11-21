@@ -22,6 +22,7 @@ var PostsSchema = map[string]reflect.Kind{
 	"ia_score_max":        reflect.Float64,
 	"vector":              reflect.Slice,   // REAL[] -> []float32
 	"vector_version":      reflect.Int,     // Integer
+	"lang":                reflect.Int,     // SMALLINT -> int (Code langue de la publication)
 	"telemetry_dwell_sum": reflect.Float64, // Somme des temps de lecture
 	"telemetry_dwell_sq":  reflect.Float64, // Somme des carrés (pour la variance)
 	"telemetry_clicks":    reflect.Int,     // Compteur d'interactions directes

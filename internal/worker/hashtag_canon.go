@@ -2,8 +2,12 @@ package worker
 
 import (
 	"context"
+	"fmt"
+	"sort"
+	"strings"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
@@ -22,7 +26,6 @@ func startHashtagCanonCron(ctx context.Context) {
 	numan_log.Info(ctx).Msg("Démarrage du Canoniseur de Hashtags (Cron 24h)...")
 
 	go func() {
-		// En production, utiliser un vrai cron pour viser les heures creuses (ex: 03:00 AM)
 		ticker := time.NewTicker(variables.HashtagCanonCronInterval)
 		defer ticker.Stop()
 
@@ -37,67 +40,202 @@ func startHashtagCanonCron(ctx context.Context) {
 	}()
 }
 
-// processHashtagCanonicalization est le cœur de l'algorithme de nettoyage.
+// processHashtagCanonicalization est le cœur de l'algorithme de nettoyage et de fusion sémantique par langue.
 func processHashtagCanonicalization(ctx context.Context) {
-	// ── ÉTAPE 1 : RÉCUPÉRATION DU RÉSERVOIR DE TAGS COMMUNAUTAIRES (L1) ─────
-	tags, err := redis.Tags.SMembers(ctx, "active")
-	if err != nil || len(tags) == 0 {
-		return // Aucun nouveau tag à analyser
+	token, acquired, errLock := redis.AcquireCronLock(ctx, "hashtag_canon", 10*time.Minute)
+	if errLock == nil && !acquired && token == "" && redis.CronLocks != nil && redis.CronLocks.Client != nil {
+		return
+	}
+	if token != "" {
+		defer func() {
+			_ = redis.ReleaseCronLock(ctx, "hashtag_canon", token)
+		}()
 	}
 
-	// ── ÉTAPE 2 : PERSISTANCE SQL DÉFINITIVE (L3) ───────────────────────────
-	// Immortalisation des tags dans la base de données relationnelle
-	persistCommunityTags(ctx, tags)
+	allTagsSet := make(map[string]struct{})
+	for _, lang := range variables.SupportedLanguageCodes {
+		tags := processHashtagCanonForLang(ctx, lang)
+		for _, t := range tags {
+			allTagsSet[t] = struct{}{}
+		}
+	}
 
-	// S'il n'y a pas assez de tags pour faire des paires de comparaison, on s'arrête
+	// Traitement également du réservoir legacy "active" sur la langue par défaut
+	if redis.Tags != nil && redis.Tags.Client != nil {
+		if legacyTags, err := redis.Tags.SMembers(ctx, "active"); err == nil && len(legacyTags) > 0 {
+			for _, t := range legacyTags {
+				allTagsSet[t] = struct{}{}
+			}
+			processTagListForCanon(ctx, legacyTags, variables.DefaultContentLanguage)
+		}
+	}
+
+	if len(allTagsSet) > 0 {
+		allTags := make([]string, 0, len(allTagsSet))
+		for t := range allTagsSet {
+			allTags = append(allTags, t)
+		}
+		persistCommunityTags(ctx, allTags)
+	}
+}
+
+func processHashtagCanonForLang(ctx context.Context, lang int) []string {
+	if redis.Tags == nil || redis.Tags.Client == nil {
+		return nil
+	}
+	tags, err := redis.Tags.SMembers(ctx, variables.ActiveTagsSubKey(lang))
+	if err != nil || len(tags) < 2 {
+		return tags
+	}
+	processTagListForCanon(ctx, tags, lang)
+	return tags
+}
+
+// selectCanonicalAndTypo choisit le tag canonique entre t1 et t2 :
+// 1. Le tag ayant la plus forte popularité (cardinalité dans TagPosts).
+// 2. À popularité égale, le mot le plus LONG (complet, non tronqué) l'emporte.
+// 3. À longueur égale, ordre lexicographique déterministe.
+func selectCanonicalAndTypo(ctx context.Context, t1, t2 string, lang int) (canon string, typo string) {
+	var pop1, pop2 int64
+	if redis.TagPosts != nil && redis.TagPosts.Client != nil {
+		pop1, _ = redis.TagPosts.ZCard(ctx, variables.TagIndexSubKey(lang, t1))
+		pop2, _ = redis.TagPosts.ZCard(ctx, variables.TagIndexSubKey(lang, t2))
+	}
+	if pop1 != pop2 {
+		if pop2 > pop1 {
+			return t2, t1
+		}
+		return t1, t2
+	}
+	if len(t1) != len(t2) {
+		if len(t2) > len(t1) {
+			return t2, t1
+		}
+		return t1, t2
+	}
+	if t2 < t1 {
+		return t2, t1
+	}
+	return t1, t2
+}
+
+func processTagListForCanon(ctx context.Context, tags []string, lang int) {
 	if len(tags) < 2 {
 		return
 	}
 
-	numan_log.Info(ctx).Int("count", len(tags)).Msg("Canonicalisation de tags communautaires en cours...")
+	// ── ÉTAPE 1 : BLOCKING PAR RACINE MORPHOLOGIQUE (STEMMING PAR LANGUE) ────
+	// Évite l'explosion quadratique O(N²) globale en regroupant d'abord les tags
+	// qui partagent exactement la même racine Snowball dans la langue cible.
+	blocks := make(map[string][]string)
+	for _, t := range tags {
+		if len(t) < variables.HashtagCanonMinLength || strings.HasPrefix(t, variables.AuthorTagPrefix) {
+			continue
+		}
+		stem := service.StemHashtagWithLang(t, lang)
+		if stem == "" {
+			continue
+		}
+		blocks[stem] = append(blocks[stem], t)
+	}
+
 	aliasMap := make(map[string]string)
 
-	// ── ÉTAPE 3 : ALGORITHME D'APPARIEMENT O(N²) ────────────────────────────
-	// Comparaison par paires. (Gérable jusqu'à ~100k tags car exécuté 1 seule fois par nuit).
-	for i := 0; i < len(tags); i++ {
-		for j := i + 1; j < len(tags); j++ {
-			t1 := tags[i]
-			t2 := tags[j]
-
-			// Protection contre les faux positifs sur des mots trop courts
-			if len(t1) < variables.HashtagCanonMinLength || len(t2) < variables.HashtagCanonMinLength {
-				continue
-			}
-
-			// Calcul de la distance d'édition (Levenshtein) normalisée
-			distNorm := normalizedLevenshtein(t1, t2)
-
-			// Critère strict : Distance <= 15% ET même racine morphologique (Stemming)
-			if distNorm <= variables.HashtagCanonMaxDistance && service.StemHashtag(t1) == service.StemHashtag(t2) {
-				canon, typo := t1, t2
-
-				// Règle empirique : Le mot le plus long est souvent le plus correct
-				if len(t2) < len(t1) {
-					canon, typo = t2, t1
+	// ── ÉTAPE 2 : COMPARAISON LEVENSHTEIN INTRA-BLOC ────────────────────────
+	for _, group := range blocks {
+		if len(group) < 2 {
+			continue
+		}
+		sort.Strings(group)
+		for i := 0; i < len(group); i++ {
+			for j := i + 1; j < len(group); j++ {
+				t1 := group[i]
+				t2 := group[j]
+				if t1 == t2 {
+					continue
 				}
-				aliasMap[typo] = canon
+				distNorm := normalizedLevenshtein(t1, t2)
+				if distNorm <= variables.HashtagCanonMaxDistance {
+					canon, typo := selectCanonicalAndTypo(ctx, t1, t2, lang)
+					aliasMap[typo] = canon
+				}
 			}
 		}
 	}
 
-	// ── ÉTAPE 4 : MISE À JOUR DU DICTIONNAIRE D'ALIAS (PIPELINE L1) ─────────
-	if len(aliasMap) > 0 {
-		pipe := redis.HashtagCanon.Pipeline()
-		for typo, canon := range aliasMap {
-			pipe.HSet(ctx, redis.HashtagCanon.Key("map"), typo, canon)
-		}
+	if len(aliasMap) == 0 {
+		return
+	}
 
-		_, errExec := pipe.Exec(ctx)
-		if errExec == nil {
-			numan_log.Info(ctx).Int("alias_count", len(aliasMap)).Msg("Canonicalisation terminée : Dictionnaire de fautes de frappes mis à jour.")
-		} else {
-			numan_log.Error(ctx).Err(errExec).Msg("Échec critique lors de l'enregistrement des alias dans Redis (L1)")
+	// Résolution transitive des chaînes d'alias (A -> B -> C => A -> C)
+	for typo, canon := range aliasMap {
+		visited := map[string]bool{typo: true}
+		curr := canon
+		for {
+			next, hasNext := aliasMap[curr]
+			if !hasNext || visited[next] {
+				break
+			}
+			visited[next] = true
+			curr = next
 		}
+		aliasMap[typo] = curr
+	}
+
+	// ── ÉTAPE 3 : MISE À JOUR DU DICTIONNAIRE D'ALIAS & FUSION DES ZSETS ────
+	if redis.HashtagCanon != nil && redis.HashtagCanon.Client != nil {
+		pipe := redis.HashtagCanon.Pipeline()
+		canonSubKey := variables.HashtagCanonSubKey(lang)
+		for typo, canon := range aliasMap {
+			if typo == canon {
+				continue
+			}
+			pipe.HSet(ctx, redis.HashtagCanon.Key(canonSubKey), typo, canon)
+			if lang == variables.DefaultContentLanguage {
+				pipe.HSet(ctx, redis.HashtagCanon.Key("map"), typo, canon)
+			}
+		}
+		if _, errExec := pipe.Exec(ctx); errExec != nil {
+			numan_log.Error(ctx).Err(errExec).Int("lang", lang).Msg("Échec critique lors de l'enregistrement des alias dans Redis (L1)")
+			return
+		}
+	}
+
+	// Fusion des ZSETs (TagPosts, TrendTagDaily, TrendTagWeekly) de la faute de frappe vers le tag canonique
+	now := domain.NowTime().UTC()
+	dateStr := now.Format("20060102")
+	year, isoWeek := now.ISOWeek()
+	weekStr := fmt.Sprintf("%d-W%02d", year, isoWeek)
+
+	for typo, canon := range aliasMap {
+		if typo == canon {
+			continue
+		}
+		mergeAliasTagZSETs(ctx, lang, typo, canon, dateStr, weekStr)
+	}
+}
+
+func mergeAliasTagZSETs(ctx context.Context, lang int, typo, canon, dateStr, weekStr string) {
+	if redis.TagPosts != nil && redis.TagPosts.Client != nil {
+		canonIdx := variables.TagIndexSubKey(lang, canon)
+		typoIdx := variables.TagIndexSubKey(lang, typo)
+		_ = redis.TagPosts.ZUnionStore(ctx, canonIdx, []any{canonIdx, typoIdx}, "MAX")
+		_ = redis.TagPosts.DeleteObject(ctx, typoIdx)
+	}
+	if redis.TrendTagDaily != nil && redis.TrendTagDaily.Client != nil {
+		canonDaily := variables.TrendTagDailySubKey(lang, canon, dateStr)
+		typoDaily := variables.TrendTagDailySubKey(lang, typo, dateStr)
+		_ = redis.TrendTagDaily.ZUnionStore(ctx, canonDaily, []any{canonDaily, typoDaily}, "MAX")
+		_ = redis.TrendTagDaily.DeleteObject(ctx, typoDaily)
+	}
+	if redis.TrendTagWeekly != nil && redis.TrendTagWeekly.Client != nil {
+		canonWeekly := variables.TrendTagWeeklySubKey(lang, canon, weekStr)
+		typoWeekly := variables.TrendTagWeeklySubKey(lang, typo, weekStr)
+		_ = redis.TrendTagWeekly.ZUnionStore(ctx, canonWeekly, []any{canonWeekly, typoWeekly}, "MAX")
+		_ = redis.TrendTagWeekly.DeleteObject(ctx, typoWeekly)
+	}
+	if redis.Tags != nil && redis.Tags.Client != nil {
+		_ = redis.Tags.SRem(ctx, variables.ActiveTagsSubKey(lang), typo)
 	}
 }
 
@@ -176,7 +314,7 @@ func min3Int(a, b, c int) int {
 // persistCommunityTags sauvegarde les tags communautaires dans PostgreSQL.
 // Utilise la fonction SQL content.func_upsert_community_tags pour l'insertion de masse idempotente.
 func persistCommunityTags(ctx context.Context, tags []string) {
-	if len(tags) == 0 {
+	if len(tags) == 0 || postgres.PostgresDB == nil {
 		return
 	}
 

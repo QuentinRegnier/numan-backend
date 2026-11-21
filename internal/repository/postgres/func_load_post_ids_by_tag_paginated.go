@@ -10,7 +10,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
 )
 
-func FuncLoadPostIDsByTagPaginated(ctx context.Context, tag string, offset, limit int64) ([]int64, error) {
+func FuncLoadPostIDsByTagPaginated(ctx context.Context, tag string, offset, limit int64, lang ...int) ([]int64, error) {
 	if postgres.PostgresDB == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
@@ -20,8 +20,18 @@ func FuncLoadPostIDsByTagPaginated(ctx context.Context, tag string, offset, limi
 		)
 	}
 
-	query := `SELECT id FROM content.func_load_post_ids_by_tag_paginated($1, $2::integer, $3::integer)`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, tag, offset, limit)
+	var (
+		query string
+		args  []any
+	)
+	if len(lang) > 0 && lang[0] >= 0 {
+		query = `SELECT id FROM content.func_load_post_ids_by_tag_paginated($1, $2::integer, $3::integer, $4::smallint)`
+		args = []any{tag, offset, limit, lang[0]}
+	} else {
+		query = `SELECT id FROM content.func_load_post_ids_by_tag_paginated($1, $2::integer, $3::integer)`
+		args = []any{tag, offset, limit}
+	}
+	rows, err := postgres.PostgresDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

@@ -128,7 +128,8 @@ func SetupRoutes(r *gin.Engine) {
 	secured.POST("/users/recommendations/skips", user_recommendation_handlers.SkipUserRecommendationHandler)
 
 	// --- Posts ---
-	secured.POST("/feed/get", feed_handlers.GetFeedHandler) //
+	secured.POST("/feed/get", feed_handlers.GetFeedHandler)       //
+	secured.POST("/feed/get/force", feed_handlers.GetFeedHandler) // Pull-To-Refresh explicite
 	secured.POST("/posts/get", post_handlers.GetPostHandler)
 	secured.POST("/posts/user/get", post_handlers.GetUserPostsHandler)                             // Profil d'un utilisateur (non)
 	secured.POST("/posts/set", middleware.TrustScoreMiddleware(), post_handlers.CreatePostHandler) // Vérifie le TrustScore (<0.40 -> Quarantaine)

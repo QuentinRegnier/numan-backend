@@ -56,14 +56,17 @@ var (
 	FeedsPersonalized *Collection
 
 	// --- ALGORITHM & MOST Cache ---
-	ContentVectors     *Collection
-	RankedPosts        *Collection // Les ZSETs stricts (likes, views, recent)
-	TagPosts           *Collection // Les ZSETs par tags pour l'UI
-	TrendGlobalHourly  *Collection
-	TrendGlobalDaily   *Collection
-	TrendTagDaily      *Collection
-	TrendTagWeekly     *Collection
-	HashtagLeaderboard *Collection
+	ContentVectors       *Collection
+	RankedPosts          *Collection // Les ZSETs stricts (likes, views, recent)
+	TagPosts             *Collection // Les ZSETs par tags pour l'UI
+	TrendGlobalHourly    *Collection
+	TrendGlobalDaily     *Collection
+	TrendTagDaily        *Collection
+	TrendTagWeekly       *Collection
+	HashtagLeaderboard   *Collection
+	TagQuarantine        *Collection // SET de quarantaine Cold-Start des nouveaux tags (24h)
+	IndirectTagConsensus *Collection // SET de consensus multi-auteurs des tags indirects (7j)
+	AuthorPostWindows    *Collection // ZSET glissant 24h des publications par auteur (anti-flood)
 
 	// --- SYSTEM Cache ---
 	RateLimits   *Collection
@@ -71,6 +74,7 @@ var (
 	GraphEdges   *Collection
 	Tags         *Collection
 	HashtagCanon *Collection
+	CronLocks    *Collection // Verrous distribués atomiques pour les Cron Workers
 
 	// --- INDEX & IDEMPOTENCE ---
 	SessionIndexes   *Collection
@@ -190,11 +194,14 @@ func InitCacheDatabase() {
 	ContentVectors = newCollection("most_cache:vec", variables.StandardTTL)
 	RankedPosts = newCollection("most_cache", variables.StandardTTL)
 	TagPosts = newCollection("most_cache:idx:tag", variables.StandardTTL)
-	TrendGlobalHourly = newCollection("trend:global:hourly", 0)
-	TrendGlobalDaily = newCollection("trend:global:daily", 0)
-	TrendTagDaily = newCollection("trend:tag:daily", 0)
-	TrendTagWeekly = newCollection("trend:tag:weekly", 0)
+	TrendGlobalHourly = newCollection("trend:global:hourly", variables.TrendGlobalHourlyTTL)
+	TrendGlobalDaily = newCollection("trend:global:daily", variables.TrendGlobalDailyTTL)
+	TrendTagDaily = newCollection("trend:tag:daily", variables.TrendTagDailyTTL)
+	TrendTagWeekly = newCollection("trend:tag:weekly", variables.TrendTagWeeklyTTL)
 	HashtagLeaderboard = newCollection("hashtag:leaderboard", 0)
+	TagQuarantine = newCollection("tags:quarantine", variables.TagQuarantineTTL)
+	IndirectTagConsensus = newCollection("post:itags:consensus", variables.IndirectTagSetTTL)
+	AuthorPostWindows = newCollection("author:posts:window", variables.AuthorPostWindowTTL)
 
 	// --- SYSTEM Cache ---
 	RateLimits = newCollection("rate_limit:ip", 10*time.Second)
@@ -202,6 +209,7 @@ func InitCacheDatabase() {
 	GraphEdges = newCollection("graph_cache:tag_edges", 0)
 	Tags = newCollection("tags", 0)
 	HashtagCanon = newCollection("hashtag:canon", 0)
+	CronLocks = newCollection("lock:cron", 5*time.Minute)
 
 	// --- INDEX & IDEMPOTENCE ---
 	SessionIndexes = newCollection("session_cache", variables.StandardTTL)
@@ -869,4 +877,72 @@ func RefreshStandardTTL(newTTL time.Duration) {
 			col.DefaultTTL = newTTL
 		}
 	}
+}
+
+// Expire applique un TTL explicite sur une clé de la collection.
+func (c *Collection) Expire(ctx context.Context, id any, ttl time.Duration) error {
+	if ttl <= 0 {
+		ttl = c.DefaultTTL
+	}
+	if ttl <= 0 {
+		return nil
+	}
+	return c.Client.Expire(ctx, c.Key(id), ttl).Err()
+}
+
+const releaseLockScript = `
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("DEL", KEYS[1])
+else
+    return 0
+end
+`
+
+var releaseLockCompiled = redis.NewScript(releaseLockScript)
+
+// AcquireCronLock acquiert un verrou distribué atomique (SETNX) pour un worker Cron et retourne un jeton unique.
+func AcquireCronLock(ctx context.Context, jobName string, ttl time.Duration) (string, bool, error) {
+	if CronLocks == nil || CronLocks.Client == nil {
+		return "", false, nil
+	}
+	token := fmt.Sprintf("%d", domain.NowTime().UnixNano())
+	acquired, err := CronLocks.SetNX(ctx, jobName, token, ttl)
+	if err != nil || !acquired {
+		return "", false, err
+	}
+	return token, true, nil
+}
+
+// ReleaseCronLock libère un verrou distribué Cron uniquement si le jeton correspond à l'instance détentrice.
+func ReleaseCronLock(ctx context.Context, jobName, token string) error {
+	if CronLocks == nil || CronLocks.Client == nil || token == "" {
+		return nil
+	}
+	return releaseLockCompiled.Run(ctx, CronLocks.Client, []string{CronLocks.Key(jobName)}, token).Err()
+}
+
+// ScanKeys itère de manière non-bloquante via SCAN sur un motif de clés Redis (remplace KEYS O(N) bloquant).
+func ScanKeys(ctx context.Context, pattern string, count int64) ([]string, error) {
+	if redisgo.Rdb == nil {
+		return nil, nil
+	}
+	if count <= 0 {
+		count = 200
+	}
+	var (
+		cursor uint64
+		all    []string
+	)
+	for {
+		keys, nextCursor, err := redisgo.Rdb.Scan(ctx, cursor, pattern, count).Result()
+		if err != nil {
+			return all, err
+		}
+		all = append(all, keys...)
+		cursor = nextCursor
+		if cursor == 0 {
+			break
+		}
+	}
+	return all, nil
 }

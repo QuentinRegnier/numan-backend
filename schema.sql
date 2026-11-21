@@ -199,6 +199,7 @@ CREATE TABLE content.posts (
     has_media           boolean  NOT NULL DEFAULT false,
     vector              real[],
     vector_version      integer  NOT NULL DEFAULT 1,
+    lang                smallint NOT NULL DEFAULT 0,
     telemetry_dwell_sum double precision NOT NULL DEFAULT 0.0,
     telemetry_dwell_sq  double precision NOT NULL DEFAULT 0.0,
     telemetry_clicks    integer  NOT NULL DEFAULT 0,
@@ -448,6 +449,7 @@ CREATE INDEX idx_user_passkeys_user_id ON auth.user_passkeys USING btree (user_i
 CREATE INDEX idx_posts_user_live    ON content.posts (user_id, created_at DESC, id DESC) WHERE visibility >= 0;
 -- time-decay windows, recent-posts, global keyset; live rows only.
 CREATE INDEX idx_posts_live_created ON content.posts (created_at DESC, id DESC)          WHERE visibility >= 0;
+CREATE INDEX idx_posts_lang_vis_created ON content.posts (lang, visibility, created_at DESC, id DESC) WHERE visibility >= 0;
 -- hashtag lookups use `col @> ARRAY[tag]` (indexable); `tag = ANY(col)` was not.
 CREATE INDEX idx_posts_hashtags          ON content.posts USING gin (hashtags)          WHERE visibility >= 0;
 CREATE INDEX idx_posts_indirect_hashtags ON content.posts USING gin (indirect_hashtags) WHERE visibility >= 0;
@@ -503,7 +505,7 @@ CREATE INDEX idx_reports_pending_priority ON moderation.reports (importance DESC
    the Go `Scan` calls depend on, so each shape is defined once)
    ============================================================================= */
 
-/* content.posts_l3 — the 22-column shape of calls.go:scanPosts (ORDER IS THE CONTRACT).
+/* content.posts_l3 — the 23-column shape of calls.go:scanPosts (ORDER IS THE CONTRACT).
    created_at/updated_at are epoch-ms int64 (PostPayload), content is never NULL (Go scans into string). */
 CREATE VIEW content.posts_l3 AS
 SELECT p.id, p.user_id, COALESCE(p.content, '')::text AS content,
@@ -512,7 +514,8 @@ SELECT p.id, p.user_id, COALESCE(p.content, '')::text AS content,
        p.created_at, p.updated_at,
        p.like_count, p.comment_count, p.view_count, p.report_count, p.has_media,
        p.vector, p.vector_version,
-       p.telemetry_dwell_sum, p.telemetry_dwell_sq, p.telemetry_clicks
+       p.telemetry_dwell_sum, p.telemetry_dwell_sq, p.telemetry_clicks,
+       p.lang
 FROM content.posts p;
 
 /* auth.users_l3 — the 24-column shape scanned by func_load_user.go.
@@ -879,12 +882,13 @@ $$;
 CREATE FUNCTION content.func_load_posts_for_time_decay(p_min_age interval, p_max_age interval)
 RETURNS TABLE(id bigint, like_count integer, comment_count integer, view_count integer, has_media boolean,
               created_at timestamptz, hashtags text[], indirect_hashtags text[], visibility smallint,
-              priority_level smallint, report_count integer)
+              priority_level smallint, report_count integer, lang smallint, media_count integer, user_id bigint)
 LANGUAGE sql STABLE AS $$
     SELECT p.id, p.like_count, p.comment_count, p.view_count, p.has_media, util.ms_to_ts(p.created_at),
-           p.hashtags, p.indirect_hashtags, p.visibility, p.priority_level, p.report_count
+           p.hashtags, p.indirect_hashtags, p.visibility, p.priority_level, p.report_count,
+           p.lang, COALESCE(cardinality(p.media_ids), 0)::integer AS media_count, p.user_id
     FROM content.posts p
-    WHERE p.visibility >= 0
+    WHERE p.visibility = 0
       AND p.created_at <= util.ts_to_ms(pg_catalog.now() - p_min_age)
       AND p.created_at >  util.ts_to_ms(pg_catalog.now() - p_max_age)
 $$;
@@ -893,11 +897,11 @@ $$;
    direct + indirect tags >= 2. v1 required `direct > 1 OR indirect > 0` and, as written twice with different
    return types, failed to load at all. Unbounded by design (one pass at start-up). */
 CREATE FUNCTION content.func_load_posts_for_graph_seeding()
-RETURNS TABLE(id bigint, hashtags text[], indirect_hashtags text[], created_at timestamptz)
+RETURNS TABLE(id bigint, hashtags text[], indirect_hashtags text[], created_at timestamptz, lang smallint)
 LANGUAGE sql STABLE AS $$
-    SELECT p.id, p.hashtags, p.indirect_hashtags, util.ms_to_ts(p.created_at)
+    SELECT p.id, p.hashtags, p.indirect_hashtags, util.ms_to_ts(p.created_at), p.lang
     FROM content.posts p
-    WHERE p.visibility >= 0
+    WHERE p.visibility = 0
       AND COALESCE(cardinality(p.hashtags), 0) + COALESCE(cardinality(p.indirect_hashtags), 0) > 1
     ORDER BY p.created_at ASC, p.id ASC
 $$;
@@ -920,17 +924,34 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 /* ---------------------------------------------------------------------------
-   7.2b CONTENT — tag / user / text search
+   7.2b CONTENT — tag / user / text / ranked search
    `col @> ARRAY[tag]` is GIN-indexable; v1's `tag = ANY(col)` forced a scan (measured in review §11).
    Sorted-by-counter searches stay OFFSET-based: their sort keys mutate between requests, so a keyset
    cursor would not be stable either (review §8).
    --------------------------------------------------------------------------- */
-CREATE FUNCTION content.func_load_post_ids_by_tag_paginated(p_tag text, p_offset integer, p_limit integer)
+CREATE FUNCTION content.func_load_post_ids_by_tag_paginated(p_tag text, p_offset integer, p_limit integer, p_lang smallint DEFAULT NULL)
 RETURNS TABLE(id bigint)
 LANGUAGE sql STABLE AS $$
     SELECT p.id FROM content.posts p
-    WHERE (p.hashtags @> ARRAY[p_tag] OR p.indirect_hashtags @> ARRAY[p_tag]) AND p.visibility >= 0
+    WHERE (p.hashtags @> ARRAY[p_tag] OR p.indirect_hashtags @> ARRAY[p_tag])
+      AND p.visibility = 0
+      AND (p_lang IS NULL OR p.lang = p_lang)
     ORDER BY p.created_at DESC, p.id DESC OFFSET GREATEST(p_offset, 0) LIMIT LEAST(GREATEST(p_limit, 1), 200)
+$$;
+
+CREATE FUNCTION content.func_load_ranked_post_ids_paginated(p_order_mode smallint, p_offset integer, p_limit integer, p_lang smallint DEFAULT NULL)
+RETURNS TABLE(id bigint)
+LANGUAGE sql STABLE AS $$
+    SELECT p.id FROM content.posts p
+    WHERE p.visibility = 0
+      AND (p_lang IS NULL OR p.lang = p_lang)
+    ORDER BY CASE WHEN p_order_mode = 0 THEN p.view_count    END DESC NULLS LAST,
+             CASE WHEN p_order_mode = 1 THEN p.like_count    END DESC NULLS LAST,
+             CASE WHEN p_order_mode = 2 THEN p.comment_count END DESC NULLS LAST,
+             CASE WHEN p_order_mode = 3 THEN p.created_at    END DESC NULLS LAST,
+             CASE WHEN p_order_mode = 4 THEN p.created_at    END ASC  NULLS LAST,
+             p.id DESC
+    OFFSET GREATEST(p_offset, 0) LIMIT LEAST(GREATEST(p_limit, 1), 200)
 $$;
 
 CREATE FUNCTION content.func_load_post_ids_by_tag_keyset(
@@ -938,17 +959,19 @@ CREATE FUNCTION content.func_load_post_ids_by_tag_keyset(
 RETURNS TABLE(id bigint, created_at bigint)
 LANGUAGE sql STABLE AS $$
     SELECT p.id, p.created_at FROM content.posts p
-    WHERE (p.hashtags @> ARRAY[p_tag] OR p.indirect_hashtags @> ARRAY[p_tag]) AND p.visibility >= 0
+    WHERE (p.hashtags @> ARRAY[p_tag] OR p.indirect_hashtags @> ARRAY[p_tag]) AND p.visibility = 0
       AND (p.created_at, p.id) < (COALESCE(p_before_created_at, 9223372036854775807), COALESCE(p_before_id, 9223372036854775807))
     ORDER BY p.created_at DESC, p.id DESC LIMIT LEAST(GREATEST(p_limit, 1), 100)
 $$;
 
 -- order modes: 0 views, 1 likes, 2 comments, 3 recent, 4 oldest
-CREATE FUNCTION content.func_search_post_ids_by_tag(p_tag text, p_order_mode smallint, p_offset integer, p_limit integer)
+CREATE FUNCTION content.func_search_post_ids_by_tag(p_tag text, p_order_mode smallint, p_offset integer, p_limit integer, p_lang smallint DEFAULT NULL)
 RETURNS TABLE(id bigint)
 LANGUAGE sql STABLE AS $$
     SELECT p.id FROM content.posts p
-    WHERE (p.hashtags @> ARRAY[p_tag] OR p.indirect_hashtags @> ARRAY[p_tag]) AND p.visibility >= 0
+    WHERE (p.hashtags @> ARRAY[p_tag] OR p.indirect_hashtags @> ARRAY[p_tag])
+      AND p.visibility = 0
+      AND (p_lang IS NULL OR p.lang = p_lang)
     ORDER BY CASE WHEN p_order_mode = 0 THEN p.view_count    END DESC NULLS LAST,
              CASE WHEN p_order_mode = 1 THEN p.like_count    END DESC NULLS LAST,
              CASE WHEN p_order_mode = 2 THEN p.comment_count END DESC NULLS LAST,

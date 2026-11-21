@@ -135,6 +135,18 @@ func CreatePost(ctx context.Context, callerID int64, input post_models.CreatePos
 		finalHashtagsList = append(finalHashtagsList, authorHashtag)
 	}
 
+	// ── ÉTAPE 4b : RÉSOLUTION DE LA LANGUE DU POST ──────────────────────────
+	userSettingsLang := variables.DefaultContentLanguage
+	if callerSettings, errSettings := object_cache_service.GetUserSettingsCascade(ctx, callerID); errSettings == nil {
+		if variables.IsSupportedLanguage(callerSettings.DisplayAndContent.Language) {
+			userSettingsLang = callerSettings.DisplayAndContent.Language
+		}
+	}
+	resolvedLang, errLang := variables.ResolveContentLanguage(input.Lang, input.LangISO, userSettingsLang)
+	if errLang != nil {
+		return -1, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "La langue de publication spécifiée n'est pas supportée.", errLang)
+	}
+
 	// ── ÉTAPE 5 : ASSEMBLAGE DE L'OBJET POST ────────────────────────────────
 	postPayload := post_models.PostPayload{
 		ID:                newPostID,
@@ -159,6 +171,7 @@ func CreatePost(ctx context.Context, callerID int64, input post_models.CreatePos
 		TelemetryDwellSum: 0.0,
 		TelemetryDwellSq:  0.0,
 		TelemetryClicks:   0,
+		Lang:              resolvedLang,
 	}
 
 	// ── ÉTAPE 6 : VECTORISATION SÉMANTIQUE SYNCHRONE (O(1)) ─────────────────

@@ -28,6 +28,7 @@ type PostPayload struct {
 	IAScoreMax        float64   `bson:"ia_score_max" json:"ia_score_max" msgpack:"ia_score_max"` // MAX(P_ia) des 1 à 4 images
 	Vector            []float32 `bson:"vector" json:"vector" msgpack:"vector"`
 	VectorVersion     int       `bson:"vector_version" json:"vector_version" msgpack:"vector_version"`
+	Lang              int       `bson:"lang" json:"lang" msgpack:"lang"`
 	TelemetryDwellSum float64   `bson:"telemetry_dwell_sum" json:"telemetry_dwell_sum" msgpack:"telemetry_dwell_sum"`
 	TelemetryDwellSq  float64   `bson:"telemetry_dwell_sq" json:"telemetry_dwell_sq" msgpack:"telemetry_dwell_sq"`
 	TelemetryClicks   int       `bson:"telemetry_clicks" json:"telemetry_clicks" msgpack:"telemetry_clicks"`
@@ -55,6 +56,9 @@ func (p *PostPayload) Validate() error {
 		variables.PostVisibilityQuarantine:
 	default:
 		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le statut de visibilité de la publication est invalide.", nil)
+	}
+	if !variables.IsValidPostLanguage(p.Lang) {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le code de langue de la publication est invalide.", nil)
 	}
 	if p.LikeCount < 0 || p.CommentCount < 0 || p.ViewCount < 0 || p.ReportCount < 0 || p.TelemetryClicks < 0 {
 		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Les compteurs d'une publication ne peuvent pas être négatifs.", nil)

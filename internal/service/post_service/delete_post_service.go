@@ -44,8 +44,9 @@ func DeletePost(ctx context.Context, callerID int64, input post_models.DeletePos
 	// C. Purge des Commentaires en RAM associés à ce post (ZSET + JSON L1)
 	object_cache_service.PurgePostCommentsFromL1(ctx, input.PostID)
 
-	// D. Suppression Algorithmique (LSH)
+	// D. Suppression Algorithmique (LSH) et Éviction immédiate du Magasin public (MOST Cache)
 	_ = algorithm_service.PurgePostVectors(ctx, input.PostID)
+	cache_service.EvictPostFromPublicTrends(ctx, postPayload)
 
 	// E. Purge absolue des Médias associés en RAM (Eux ne sont pas requis en Tombstone)
 	for _, mediaID := range postPayload.MediaIDs {
