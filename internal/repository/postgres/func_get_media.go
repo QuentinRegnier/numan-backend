@@ -13,7 +13,7 @@ import (
 )
 
 func FuncGetMedia(ctx context.Context, mediaID int64) (media_models.MediaPayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return media_models.MediaPayload{}, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -25,7 +25,7 @@ func FuncGetMedia(ctx context.Context, mediaID int64) (media_models.MediaPayload
 	query := `SELECT id, owner_id, storage_path, visibility, created_at, updated_at FROM content.get_media($1)`
 
 	var m media_models.MediaPayload
-	err := postgres.PostgresDB.QueryRowContext(ctx, query, mediaID).Scan(
+	err := postgres.ReadDB().QueryRowContext(ctx, query, mediaID).Scan(
 		&m.ID,
 		&m.OwnerID,
 		&m.StoragePath,

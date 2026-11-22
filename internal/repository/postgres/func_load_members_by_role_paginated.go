@@ -14,7 +14,7 @@ import (
 
 // FuncLoadMembersByRolePaginated charge les membres d'une conversation par rôle (ex: -3 pour les requêtes)
 func FuncLoadMembersByRolePaginated(ctx context.Context, convID int64, role int, limit int64, offset int64) ([]member_models.MemberPayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -24,7 +24,7 @@ func FuncLoadMembersByRolePaginated(ctx context.Context, convID int64, role int,
 	}
 
 	query := `SELECT * FROM messaging.func_load_members_by_role_paginated($1, $2, $3, $4)`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, convID, role, limit, offset)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, convID, role, limit, offset)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

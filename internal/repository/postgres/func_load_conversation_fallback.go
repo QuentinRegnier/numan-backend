@@ -19,7 +19,7 @@ type inboxFallbackResult struct {
 }
 
 func FuncLoadConversationFallback(ctx context.Context, userID int64, convIDs []int64) ([]inboxFallbackResult, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -31,7 +31,7 @@ func FuncLoadConversationFallback(ctx context.Context, userID int64, convIDs []i
 	query := `SELECT messaging.func_load_conversation_fallback_json($1, $2)`
 
 	var b []byte
-	err := postgres.PostgresDB.QueryRowContext(
+	err := postgres.ReadDB().QueryRowContext(
 		ctx,
 		query,
 		userID,

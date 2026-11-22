@@ -15,7 +15,7 @@ import (
 
 // FuncGetMember récupère l'intégralité d'un membre depuis L3
 func FuncGetMember(ctx context.Context, convID int64, userID int64) (member_models.MemberPayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return member_models.MemberPayload{}, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -31,7 +31,7 @@ func FuncGetMember(ctx context.Context, convID int64, userID int64) (member_mode
 	var lastID sql.NullInt64
 	var settingsRaw sql.NullString
 
-	err := postgres.PostgresDB.QueryRowContext(ctx, query, convID, userID).Scan(
+	err := postgres.ReadDB().QueryRowContext(ctx, query, convID, userID).Scan(
 		&m.ID, &m.ConversationID, &m.UserID, &m.Role, &settingsRaw, &m.JoinedAt, &m.UnreadCount, &frozenID, &lastID, &m.CreatedAt, &m.UpdatedAt,
 	)
 

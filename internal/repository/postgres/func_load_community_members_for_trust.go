@@ -18,7 +18,7 @@ func FuncLoadCommunityMembersForTrust(ctx context.Context, convIDs []int64, memb
 	if len(convIDs) == 0 {
 		return []community_recommendation_models.CommunityMemberRoleRecord{}, nil
 	}
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -28,7 +28,7 @@ func FuncLoadCommunityMembersForTrust(ctx context.Context, convIDs []int64, memb
 	}
 
 	query := `SELECT conversation_id, user_id, role FROM messaging.func_load_community_members_for_trust($1, $2)`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, pq.Array(convIDs), memberCap)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, pq.Array(convIDs), memberCap)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

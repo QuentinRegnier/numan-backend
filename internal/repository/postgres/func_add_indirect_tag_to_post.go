@@ -12,7 +12,7 @@ import (
 // FuncAddIndirectTagToPost appelle directement la fonction SQL compilée (Pur DDD)
 // pour ajouter un tag indirect sans risque de Race Condition.
 func FuncAddIndirectTagToPost(ctx context.Context, postID int64, tag string) error {
-	if postgres.PostgresDB == nil {
+	if postgres.WriteDB() == nil {
 		return numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -23,7 +23,7 @@ func FuncAddIndirectTagToPost(ctx context.Context, postID int64, tag string) err
 
 	query := `SELECT content.func_add_indirect_tag_to_post($1, $2)`
 
-	_, err := postgres.PostgresDB.ExecContext(ctx, query, postID, tag)
+	_, err := postgres.WriteDB().ExecContext(ctx, query, postID, tag)
 	if err != nil {
 		return numan_error.NewAppError(
 			http.StatusInternalServerError,

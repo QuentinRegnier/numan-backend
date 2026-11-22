@@ -22,7 +22,7 @@ func FuncLoadCommentsKeyset(ctx context.Context, postID int64, afterScore *int, 
 		}
 	}
 
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -32,7 +32,7 @@ func FuncLoadCommentsKeyset(ctx context.Context, postID int64, afterScore *int, 
 	}
 
 	query := `SELECT id, post_id, user_id, content, visibility, like_count, score, created_at, updated_at FROM content.func_load_comments_keyset($1, $2, $3, $4, $5)`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, postID, afterScore, afterCreatedAt, afterID, limit)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, postID, afterScore, afterCreatedAt, afterID, limit)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

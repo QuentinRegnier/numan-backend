@@ -2,6 +2,9 @@ package worker
 
 import (
 	"context"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
@@ -12,8 +15,56 @@ import (
 // # MANAGER : CHEF D'ORCHESTRE DE L'ASYNCHRONISME
 // ############################################################################
 
+const (
+	minWorkerConcurrency     = 1
+	defaultWorkerConcurrency = redis.QueueShards // 64 goroutines par défaut (1 par shard)
+	maxWorkerConcurrency     = 1024
+)
+
+var (
+	workerWG    sync.WaitGroup
+	workerWGMux sync.Mutex
+)
+
+// ResolveWorkerConcurrency résout le nombre plastique de goroutines Write-Behind depuis WORKER_CONCURRENCY.
+// Borné entre 1 et 1024 (défaut 64). Permet d'adapter le débit d'un pod worker aux ressources CPU du serveur
+// (ex: 64 en monolith, 128/256/512 sur un serveur dédié AMD EPYC) sans jamais modifier les 64 shards Redis.
+func ResolveWorkerConcurrency() int {
+	raw := strings.TrimSpace(os.Getenv("WORKER_CONCURRENCY"))
+	if raw == "" {
+		return defaultWorkerConcurrency
+	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v < minWorkerConcurrency {
+		return defaultWorkerConcurrency
+	}
+	if v > maxWorkerConcurrency {
+		return maxWorkerConcurrency
+	}
+	return v
+}
+
+// assignWorkerShards répartit équitablement les totalShards Redis (64) entre totalWorkers goroutines.
+//   - Si totalWorkers >= totalShards (ex: 64, 128, 256) : chaque worker consomme 1 shard (workerIdx % totalShards),
+//     plusieurs goroutines consommant en parallèle chaque shard de façon atomique via BLPOP.
+//   - Si totalWorkers < totalShards (ex: 16) : chaque worker couvre un sous-ensemble disjoint de shards via
+//     BLPOP multi-clés natif Redis, garantissant qu'aucun des 64 shards ne reste jamais orphelin.
+func assignWorkerShards(workerIdx, totalWorkers, totalShards int) []int {
+	if totalWorkers <= 0 || totalShards <= 0 {
+		return nil
+	}
+	if totalWorkers >= totalShards {
+		return []int{workerIdx % totalShards}
+	}
+	shards := make([]int, 0, (totalShards/totalWorkers)+1)
+	for s := workerIdx; s < totalShards; s += totalWorkers {
+		shards = append(shards, s)
+	}
+	return shards
+}
+
 // StartBackgroundWorkers lance tous les processus asynchrones vitaux de l'API numan.
-// Il déploie les planificateurs (Crons) et les pools de travailleurs (Sharding) qui
+// Il déploie les planificateurs (Crons) et les pools de travailleurs (Sharding plastique) qui
 // dépilent les files d'attente Redis H24.
 func StartBackgroundWorkers(ctx context.Context) {
 	numan_log.Info(ctx).Msg("Démarrage du moteur de persistance et des processus asynchrones...")
@@ -68,25 +119,39 @@ func StartBackgroundWorkers(ctx context.Context) {
 	// Initialise le client SMTP et consomme les requêtes d'Emails Sortants
 	go startEmailWorker(ctx)
 
-	// ── ÉTAPE 4 : DÉPLOIEMENT DU WORKER POOL (SHARDING) ─────────────────────
-	// L'infrastructure asynchrone repose sur 64 Shards Redis pour annuler
-	// la contention (Locking) et traiter massivement les flux d'E/S en parallèle.
+	// ── ÉTAPE 4 : DÉPLOIEMENT DU WORKER POOL PLASTIQUE (1..1024 WORKERS / 64 SHARDS) ──
+	concurrency := ResolveWorkerConcurrency()
 
-	var wg sync.WaitGroup
+	workerWGMux.Lock()
+	for i := 0; i < concurrency; i++ {
+		assigned := assignWorkerShards(i, concurrency, redis.QueueShards)
+		workerWG.Add(1)
 
-	for i := 0; i < redis.QueueShards; i++ {
-		wg.Add(1)
-
-		// Chaque Goroutine gère exclusivement son propre Shard
-		go func(shardID int) {
-			defer wg.Done()
-			runWorker(ctx, shardID)
-		}(i)
+		go func(workerID int, shards []int) {
+			defer workerWG.Done()
+			runWorkerOnShards(ctx, workerID, shards)
+		}(i, assigned)
 	}
+	workerWGMux.Unlock()
 
-	// Note : L'attente du WaitGroup (wg.Wait) n'est pas bloquante ici,
-	// car le maintien en vie de l'application est géré directement par le serveur
-	// HTTP principal (Gin) dans cmd/main.go. Les workers tourneront tant que
-	// le contexte global ne recevra pas le signal d'arrêt (ctx.Done).
-	numan_log.Info(ctx).Msg("Moteur de persistance asynchrone opérationnel. Les 64 Workers sont à l'écoute.")
+	numan_log.Info(ctx).
+		Int("worker_concurrency", concurrency).
+		Int("queue_shards", redis.QueueShards).
+		Msg("Moteur de persistance asynchrone opérationnel (pool Write-Behind plastique à l'écoute).")
+}
+
+// WaitForShutdown attend la fin propre de tous les workers Write-Behind actifs jusqu'à expiration du contexte.
+func WaitForShutdown(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		workerWG.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

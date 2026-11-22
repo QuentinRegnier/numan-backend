@@ -18,7 +18,7 @@ type orphanLikeTarget struct {
 // FuncDeleteOrphanLikes appelle la fonction SQL stockée pour purger les likes orphelins
 // et récupère leurs identifiants pour répercuter le nettoyage sur le cache L2 (MongoDB).
 func FuncDeleteOrphanLikes(ctx context.Context) ([]orphanLikeTarget, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.WriteDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -29,7 +29,7 @@ func FuncDeleteOrphanLikes(ctx context.Context) ([]orphanLikeTarget, error) {
 
 	query := `SELECT target_type, target_id FROM content.func_delete_orphan_likes()`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query)
+	rows, err := postgres.WriteDB().QueryContext(ctx, query)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

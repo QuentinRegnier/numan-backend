@@ -1,0 +1,13 @@
+# TEMPLATE: render first (make render); the rendered copy lives in build/rendered/03-databases-ha/.
+# Optional HA PostgreSQL stack (CloudNativePG operator). Not included in the root kustomization because
+# it requires the CloudNativePG CRDs (`make install-cnpg`).
+#
+# Deploy with:
+#   make install-cnpg
+#   make deploy-postgres-ha ENV_FILE=infrastructure.env
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: numan
+resources:
+  - __TEMPLATE_NOT_RENDERED__run-make-render-first.yaml
+  - postgresql-cnpg.yaml

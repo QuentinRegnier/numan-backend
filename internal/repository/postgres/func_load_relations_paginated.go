@@ -21,7 +21,7 @@ type relationSeedPayload struct {
 
 // FuncLoadRelationsPaginated appelle la fonction SQL auth.func_load_relations_paginated
 func FuncLoadRelationsPaginated(ctx context.Context, limit, offset int) ([]relationSeedPayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -31,7 +31,7 @@ func FuncLoadRelationsPaginated(ctx context.Context, limit, offset int) ([]relat
 	}
 
 	query := `SELECT * FROM auth.func_load_relations_paginated($1, $2)`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, limit, offset)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, limit, offset)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

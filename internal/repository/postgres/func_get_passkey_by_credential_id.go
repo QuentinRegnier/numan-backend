@@ -14,7 +14,7 @@ import (
 
 // FuncGetPasskeyByCredentialID charge une Passkey par son CredentialID depuis PostgreSQL (L3).
 func FuncGetPasskeyByCredentialID(ctx context.Context, credentialID string) (two_factor_models.PasskeyPayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.WriteDB() == nil {
 		return two_factor_models.PasskeyPayload{}, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -29,7 +29,7 @@ func FuncGetPasskeyByCredentialID(ctx context.Context, credentialID string) (two
 	var aaguid []byte
 	var transports pq.StringArray
 
-	err := postgres.PostgresDB.QueryRowContext(ctx, query, credentialID).Scan(
+	err := postgres.WriteDB().QueryRowContext(ctx, query, credentialID).Scan(
 		&p.ID,
 		&p.UserID,
 		&p.CredentialID,

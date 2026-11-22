@@ -13,7 +13,7 @@ import (
 
 // FuncSetCommunityPin exécute l'épinglage atomique dans PostgreSQL (L3) avec gestion de collision.
 func FuncSetCommunityPin(ctx context.Context, convID int64, slot int, forceReplace bool) (community_recommendation_models.PinMutationResult, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.WriteDB() == nil {
 		return community_recommendation_models.PinMutationResult{}, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -27,7 +27,7 @@ func FuncSetCommunityPin(ctx context.Context, convID int64, slot int, forceRepla
 	var oldSlot sql.NullInt64
 	var displaced sql.NullInt64
 
-	if err := postgres.PostgresDB.QueryRowContext(ctx, query, convID, slot, forceReplace).Scan(
+	if err := postgres.WriteDB().QueryRowContext(ctx, query, convID, slot, forceReplace).Scan(
 		&res.StatusCode,
 		&res.ConvLang,
 		&oldSlot,

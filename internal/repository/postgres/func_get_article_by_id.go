@@ -17,7 +17,7 @@ func FuncGetArticleByID(ctx context.Context, articleID int64) (article_models.Ar
 		return article_models.ArticlePayload{}, false, nil
 	}
 
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return article_models.ArticlePayload{}, false, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -32,7 +32,7 @@ func FuncGetArticleByID(ctx context.Context, articleID int64) (article_models.Ar
 		FROM content.func_get_article_by_id($1)
 	`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, articleID)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, articleID)
 	if err != nil {
 		return article_models.ArticlePayload{}, false, numan_error.NewAppError(
 			http.StatusInternalServerError,

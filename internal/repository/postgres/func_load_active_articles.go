@@ -13,7 +13,7 @@ import (
 
 // FuncLoadActiveArticles charge tous les articles actifs (publiés et brouillons) depuis PostgreSQL L3 pour le seeding et la reconstruction L1.
 func FuncLoadActiveArticles(ctx context.Context) ([]article_models.ArticlePayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -28,7 +28,7 @@ func FuncLoadActiveArticles(ctx context.Context) ([]article_models.ArticlePayloa
 		FROM content.func_load_active_articles()
 	`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

@@ -16,33 +16,64 @@ metadata:
 data:
   # --- APPLICATION (source: .env) ---------------------------------------------
   PORT: "8080"
-  # Legacy default. API pods keep "monolith" (the legacy prod stack ran api1/api2 as
-  # monoliths and had NO separate worker service). The worker StatefulSet overrides this.
-  SERVER_ROLE: "monolith"
+  # Internal Prometheus /metrics scrape port (never exposed via Traefik Ingress).
+  METRICS_PORT: "9090"
+  # Datacenter identity & deployment profile (used for Redis cluster auto-discovery & CLI topology).
+  DATACENTER_ID: "${DC_ID}"
+  DATACENTER_INDEX: "${DC_INDEX}"
+  DEPLOYMENT_PROFILE: "${CLUSTER_PROFILE}"
+  # Default role for API StatefulSet ('monolith' in all-in-one, 'api_node' in distributed/edge-stateless).
+  # The websocket StatefulSet overrides this with 'ws_node' and the worker StatefulSet overrides with 'worker_node'.
+  SERVER_ROLE: "${API_SERVER_ROLE}"
   # MUST stay "false". With Kubernetes restarts a "true" would wipe the DB on every restart.
   # scripts/validate.sh refuses to proceed if this is not "false".
   CLEAN_DB_ON_STARTUP: "false"
+  # 12-Factor logging: write JSON logs exclusively to stdout (required for readOnlyRootFilesystem: true).
+  LOG_TO_FILE: "false"
+  # WebAuthn / Passkey Relying Party ID (must match the public domain served to clients).
+  NUMAN_RP_ID: "${NUMAN_DOMAIN}"
+  # WireGuard VPN CIDR trusted by AdminGuard middleware (requires Traefik externalTrafficPolicy: Local).
+  WIREGUARD_SUBNET: "${ADMIN_WIREGUARD_SUBNET}"
 
   # --- WORKER TUNING (source: .env) --------------------------------------------
+  WORKER_CONCURRENCY: "${WORKER_POOL_SIZE}"
   WORKER_MAX_BATCH_SIZE: "5000"
   WORKER_MIN_BACKOFF_MS: "50"
   WORKER_MAX_BACKOFF_MS: "1000"
 
-  # --- TOPOLOGY (Kubernetes Service names; same short names as legacy Compose) --
-  POSTGRES_HOST: "postgres"
+  # --- TOPOLOGY (Kubernetes Service names; seamlessly switches standalone <-> HA) --
+  POSTGRES_HOST: "${DB_POSTGRES_HOST}"
+  POSTGRES_READ_HOST: "${DB_POSTGRES_READ_HOST}"
   POSTGRES_PORT: "5432"
   POSTGRES_DB: "numan"
+  # Bounded per-pod PostgreSQL pool (prevents exhausting Postgres max_connections under HPA scaling).
+  POSTGRES_MAX_OPEN_CONNS: "15"
+  POSTGRES_MAX_IDLE_CONNS: "10"
+  POSTGRES_CONN_MAX_LIFETIME_SEC: "900"
+  POSTGRES_CONN_MAX_IDLE_TIME_SEC: "300"
+  POSTGRES_SSLMODE: "${DB_POSTGRES_SSLMODE}"
   MONGO_HOST: "mongo"
   MONGO_PORT: "27017"
-  MONGO_DB: "numan"
+  MONGO_HOSTS: "${DB_MONGO_HOSTS}"
+  MONGO_REPLICA_SET: "${DB_MONGO_REPLICA_SET}"
+  MONGO_READ_PREFERENCE: "${DB_MONGO_READ_PREFERENCE}"
+  MONGO_LOCAL_THRESHOLD_MS: "${DB_MONGO_LOCAL_THRESHOLD_MS}"
+  MONGO_DB: "numan_mongo"
+  # Least-privilege MongoDB app user created by job/mongo-init authenticates against MONGO_DB (not admin).
+  MONGO_AUTH_SOURCE: "numan_mongo"
+  MONGO_TLS: "${DB_MONGO_TLS}"
   REDIS_ADDR: "redis:6379"
+  REDIS_MASTER_NAME: "${DB_REDIS_MASTER_NAME}"
+  REDIS_SENTINEL_ADDRS: "${DB_REDIS_SENTINEL_ADDRS}"
+  REDIS_TLS: "${DB_REDIS_TLS}"
   # Stable internal name of the hot MinIO S3 endpoint (Service minio-hot, port 9000).
   MINIO_ENDPOINT: "minio-hot:9000"
   # Deployment variable: the same value feeds the bootstrap Job, so app and bucket cannot drift apart.
   MINIO_BUCKET_NAME: "${MINIO_HOT_BUCKET}"
   MINIO_PUBLIC_BUCKET_NAME: "${MINIO_PUBLIC_BUCKET}"
   PUBLIC_MEDIA_BASE_URL: "https://${NUMAN_DOMAIN}/public"
-  WATERMARK_API_URL: "http://watermark:8080"
+  # Public base URL embedded in HMAC-signed URLs returned to clients (routed by Traefik /process -> watermark:8080).
+  WATERMARK_API_URL: "https://${NUMAN_DOMAIN}"
 
   # --- REDIS SIZING (source: .env; also consumed by the redis StatefulSet) ------
   REDIS_MAXMEMORY: "4gb"

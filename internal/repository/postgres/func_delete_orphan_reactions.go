@@ -13,7 +13,7 @@ import (
 // FuncDeleteOrphanReactions appelle la fonction SQL pour purger les réactions orphelines
 // et retourne la liste des message_ids concernés.
 func FuncDeleteOrphanReactions(ctx context.Context) ([]int64, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.WriteDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -24,7 +24,7 @@ func FuncDeleteOrphanReactions(ctx context.Context) ([]int64, error) {
 
 	query := `SELECT message_id FROM messaging.func_delete_orphan_reactions()`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query)
+	rows, err := postgres.WriteDB().QueryContext(ctx, query)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

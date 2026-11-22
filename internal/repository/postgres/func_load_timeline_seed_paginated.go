@@ -20,7 +20,7 @@ type timelineSeedPayload struct {
 
 // FuncLoadTimelineSeedPaginated appelle la fonction SQL content.func_load_timeline_seed_paginated
 func FuncLoadTimelineSeedPaginated(ctx context.Context, limit, offset int) ([]timelineSeedPayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -30,7 +30,7 @@ func FuncLoadTimelineSeedPaginated(ctx context.Context, limit, offset int) ([]ti
 	}
 
 	query := `SELECT * FROM content.func_load_timeline_seed_paginated($1, $2)`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, limit, offset)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, limit, offset)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

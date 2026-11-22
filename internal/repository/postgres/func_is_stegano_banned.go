@@ -11,7 +11,7 @@ import (
 
 // FuncIsSteganoBanned vérifie en L3 si l'identifiant stéganographique d'un utilisateur est banni.
 func FuncIsSteganoBanned(ctx context.Context, userID int64) (bool, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.WriteDB() == nil {
 		return false, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -21,7 +21,7 @@ func FuncIsSteganoBanned(ctx context.Context, userID int64) (bool, error) {
 	}
 	const query = `SELECT moderation.func_is_stegano_banned($1)`
 	var banned bool
-	if err := postgres.PostgresDB.QueryRowContext(ctx, query, userID).Scan(&banned); err != nil {
+	if err := postgres.WriteDB().QueryRowContext(ctx, query, userID).Scan(&banned); err != nil {
 		return false, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,

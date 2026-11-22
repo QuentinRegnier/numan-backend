@@ -23,7 +23,7 @@ type graphSeedPayload struct {
 
 // FuncLoadPostsForGraphSeeding ramène l'historique sémantique complet trié du plus vieux au plus récent
 func FuncLoadPostsForGraphSeeding(ctx context.Context) ([]graphSeedPayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -34,7 +34,7 @@ func FuncLoadPostsForGraphSeeding(ctx context.Context) ([]graphSeedPayload, erro
 
 	query := `SELECT id, hashtags, indirect_hashtags, created_at, lang FROM content.func_load_posts_for_graph_seeding()`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

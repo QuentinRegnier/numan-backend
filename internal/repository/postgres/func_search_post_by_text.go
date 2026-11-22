@@ -12,7 +12,7 @@ import (
 
 // FuncSearchPostIDsByText appelle la recherche Full-Text Postgres.
 func FuncSearchPostIDsByText(ctx context.Context, queryStr string, orderMode int, offset, limit int64) ([]int64, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -23,7 +23,7 @@ func FuncSearchPostIDsByText(ctx context.Context, queryStr string, orderMode int
 
 	query := `SELECT id FROM content.func_search_post_ids_by_text($1, $2::integer, $3::integer, $4::integer)`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, queryStr, orderMode, offset, limit)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, queryStr, orderMode, offset, limit)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

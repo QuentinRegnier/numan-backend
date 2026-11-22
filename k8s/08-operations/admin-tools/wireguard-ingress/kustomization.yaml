@@ -1,0 +1,14 @@
+# TEMPLATE: render first (make render); the rendered copy lives in build/rendered/.
+# Optional WireGuard-only browser Ingress for Admin UIs (Option B).
+# Default Option A (`make deploy-admin`) uses ClusterIP + `kubectl port-forward` with ZERO Ingress.
+#
+# CRITICAL PREREQUISITE before `make deploy-admin-ingress`:
+#   Traefik MUST run with `externalTrafficPolicy: Local` (`make deploy-traefik`), otherwise
+#   Kubernetes SNATs client IPs and Middleware/wireguard-only cannot verify the WireGuard source CIDR.
+#   `scripts/deploy.sh --stack admin-ingress` automatically verifies this precondition.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: numan
+resources:
+  - __TEMPLATE_NOT_RENDERED__run-make-render-first.yaml
+  - ingress-wireguard.yaml

@@ -1,13 +1,51 @@
 # OPTIONAL administrative web UIs: pgAdmin, mongo-express, Redis Commander.
-# Safe-by-default design:
-#   * replicas: 0  -> nothing runs until an operator enables a tool (scripts/admin.sh on <tool>).
-#   * ClusterIP Services only, NO Ingress, and NetworkPolicies allow NO inbound traffic to these pods.
-#     Access is `kubectl port-forward` from an authenticated operator workstation (kubectl auth = the access control;
-#     put the Kubernetes API behind VPN/IP allow-list). Do NOT add a public Ingress without an auth layer + explicit decision.
-#   * Separate credentials per tool (Secrets *-credentials). mongo-express and Redis Commander still need the
-#     datastore credentials themselves (mongo root; redis password) - an inherent property of those tools.
-#   * Disable again when done: scripts/admin.sh off <tool>.
-# The UIDs below are numeric (runAsNonRoot must be verifiable) and VALIDATED ONLY AGAINST DOCUMENTATION, not the images.
+# Safe-by-default dual-access design:
+#   * replicas: 0  -> nothing runs until an operator enables a tool (`scripts/admin.sh on <tool>`).
+#   * Option A (Default, zero Ingress): `ClusterIP` Services + `scripts/admin.sh forward <tool>`
+#     (kubectl port-forward bound to 127.0.0.1).
+#   * Option B (Optional WireGuard browser UI): deploy `make deploy-admin-ingress` (requires Traefik
+#     with `externalTrafficPolicy: Local` -> `make deploy-traefik` + Traefik `wireguard-only` ipAllowList).
+#   * HA-aware out of the box:
+#       - pgAdmin mounts pre-configured servers.json with Primary (${DB_POSTGRES_HOST}) + Read Replicas (postgres-ro).
+#       - mongo-express connects to MongoDB Replica Set (MONGO_HOSTS / MONGO_REPLICA_SET, readPreference=secondaryPreferred)
+#         when HA is enabled, falling back cleanly to standalone `mongo:27017`.
+#       - redis-commander connects via Redis Sentinel (REDIS_SENTINELS / REDIS_SENTINEL_NAME) when HA is enabled,
+#         falling back cleanly to standalone `redis:6379`.
+#   * Disable again when done: `scripts/admin.sh off all`.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pgadmin-servers
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: pgadmin
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: admin
+data:
+  servers.json: |
+    {
+      "Servers": {
+        "1": {
+          "Name": "Numan PostgreSQL Primary (${DB_POSTGRES_HOST})",
+          "Group": "Numan Cluster",
+          "Host": "${DB_POSTGRES_HOST}",
+          "Port": 5432,
+          "MaintenanceDB": "numan",
+          "Username": "numan",
+          "SSLMode": "${DB_POSTGRES_SSLMODE}"
+        },
+        "2": {
+          "Name": "Numan PostgreSQL Read Replicas (postgres-ro)",
+          "Group": "Numan Cluster",
+          "Host": "postgres-ro",
+          "Port": 5432,
+          "MaintenanceDB": "numan",
+          "Username": "numan",
+          "SSLMode": "${DB_POSTGRES_SSLMODE}"
+        }
+      }
+    }
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -38,6 +76,7 @@ spec:
         app.kubernetes.io/part-of: numan
         app.kubernetes.io/component: admin
         numan.io/uses-postgres: "true"
+        numan.io/admin-wireguard-ingress: "true"
     spec:
       serviceAccountName: admin-tools
       automountServiceAccountToken: false
@@ -55,6 +94,8 @@ spec:
           env:
             - name: PGADMIN_LISTEN_PORT      # unprivileged port (capabilities are dropped, so :80 is not bindable)
               value: "8080"
+            - name: PGADMIN_SERVER_JSON_FILE
+              value: "/pgadmin4/servers.json"
             - name: PGADMIN_DEFAULT_EMAIL
               valueFrom: {secretKeyRef: {name: pgadmin-credentials, key: PGADMIN_DEFAULT_EMAIL}}
             - name: PGADMIN_DEFAULT_PASSWORD
@@ -70,8 +111,12 @@ spec:
             capabilities: {drop: ["ALL"]}     # root FS is writable: pgAdmin writes in several places
           volumeMounts:
             - {name: data, mountPath: /var/lib/pgadmin}
+            - {name: servers, mountPath: /pgadmin4/servers.json, subPath: servers.json, readOnly: true}
       volumes:
-        - {name: data, emptyDir: {}}          # ephemeral: saved server definitions are lost on restart
+        - {name: data, emptyDir: {}}
+        - name: servers
+          configMap:
+            name: pgadmin-servers
 ---
 apiVersion: v1
 kind: Service
@@ -102,6 +147,7 @@ spec:
         app.kubernetes.io/part-of: numan
         app.kubernetes.io/component: admin
         numan.io/uses-mongo: "true"
+        numan.io/admin-wireguard-ingress: "true"
     spec:
       serviceAccountName: admin-tools
       automountServiceAccountToken: false
@@ -113,11 +159,24 @@ spec:
       containers:
         - name: mongo-express
           image: mongo-express:1.0.2-20     # legacy used :latest (unpinned)
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              if [ -n "$MONGO_HOSTS" ] && [ -n "$MONGO_REPLICA_SET" ]; then
+                export ME_CONFIG_MONGODB_URL="mongodb://$ME_CONFIG_MONGODB_ADMINUSERNAME:$ME_CONFIG_MONGODB_ADMINPASSWORD@$MONGO_HOSTS/admin?replicaSet=$MONGO_REPLICA_SET&readPreference=secondaryPreferred"
+                unset ME_CONFIG_MONGODB_SERVER
+              fi
+              exec /sbin/tini -- /docker-entrypoint.sh mongo-express
           ports:
             - {name: http, containerPort: 8081}
           env:
             - name: ME_CONFIG_MONGODB_SERVER
               value: mongo
+            - name: MONGO_HOSTS
+              valueFrom: {configMapKeyRef: {name: numan-config, key: MONGO_HOSTS}}
+            - name: MONGO_REPLICA_SET
+              valueFrom: {configMapKeyRef: {name: numan-config, key: MONGO_REPLICA_SET}}
             - name: ME_CONFIG_MONGODB_ADMINUSERNAME
               valueFrom: {secretKeyRef: {name: mongo-credentials, key: MONGO_ROOT_USER}}
             - name: ME_CONFIG_MONGODB_ADMINPASSWORD
@@ -165,6 +224,7 @@ spec:
         app.kubernetes.io/part-of: numan
         app.kubernetes.io/component: admin
         numan.io/uses-redis: "true"
+        numan.io/admin-wireguard-ingress: "true"
     spec:
       serviceAccountName: admin-tools
       automountServiceAccountToken: false
@@ -176,6 +236,17 @@ spec:
       containers:
         - name: redis-commander
           image: ghcr.io/joeferner/redis-commander:0.9.0     # legacy used :latest (unpinned)
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              if [ -n "$REDIS_SENTINEL_ADDRS" ]; then
+                export REDIS_SENTINELS="$REDIS_SENTINEL_ADDRS"
+                export REDIS_SENTINEL_NAME="$REDIS_MASTER_NAME"
+                unset REDIS_HOST
+                unset REDIS_PORT
+              fi
+              exec /redis-commander/docker/entrypoint.sh
           ports:
             - {name: http, containerPort: 8081}
           env:
@@ -183,6 +254,10 @@ spec:
               value: redis
             - name: REDIS_PORT
               value: "6379"
+            - name: REDIS_MASTER_NAME
+              valueFrom: {configMapKeyRef: {name: numan-config, key: REDIS_MASTER_NAME}}
+            - name: REDIS_SENTINEL_ADDRS
+              valueFrom: {configMapKeyRef: {name: numan-config, key: REDIS_SENTINEL_ADDRS}}
             - name: REDIS_PASSWORD
               valueFrom: {secretKeyRef: {name: redis-credentials, key: REDIS_PASSWORD}}
             - name: HTTP_USER

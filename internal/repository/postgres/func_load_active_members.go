@@ -23,7 +23,7 @@ type activeMemberResult struct {
 
 // FuncLoadActiveMembers récupère les membres pour le Seeding de l'Inbox
 func FuncLoadActiveMembers(ctx context.Context) ([]activeMemberResult, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -33,7 +33,7 @@ func FuncLoadActiveMembers(ctx context.Context) ([]activeMemberResult, error) {
 	}
 
 	query := `SELECT conversation_id, user_id, role, settings, unread_count, frozen_message_id, last_read_message_id, last_message_id, joined_at FROM messaging.func_load_active_members()`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

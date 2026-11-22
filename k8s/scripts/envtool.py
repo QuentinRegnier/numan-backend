@@ -17,7 +17,7 @@ Exit codes: 0 ok | 1 validation/lint failure | 2 usage or environment error.
 Nothing here evaluates shell code. Values are data: they are validated against a strict character set and are never
 re-expanded.
 """
-import os, re, sys
+import ipaddress, os, re, sys
 from fractions import Fraction
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -127,6 +127,27 @@ def _timezone(v):
         pass
 
 
+def _cidr(v):
+    if "/" not in v:
+        return "must be an IPv4 or IPv6 CIDR (e.g. 10.8.0.0/24)"
+    try:
+        ipaddress.ip_network(v, strict=False)
+    except ValueError:
+        return "not a valid IPv4/IPv6 CIDR network"
+
+
+def _host_list(v):
+    entries = v.split(",")
+    for entry in entries:
+        if ":" not in entry:
+            return f"invalid host:port entry {entry!r} (expected comma-separated host:port list)"
+        host, port = entry.rsplit(":", 1)
+        if not re.match(r"^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$", host):
+            return f"invalid hostname {host!r} in host-list"
+        if not re.match(r"^[1-9][0-9]{0,4}$", port) or not (1 <= int(port) <= 65535):
+            return f"invalid port {port!r} in host-list (must be 1..65535)"
+
+
 def check_type(t, v):
     """Return an error string or None."""
     if t.startswith("int:"):
@@ -152,6 +173,7 @@ def check_type(t, v):
         "kube-context": lambda x: None if re.match(r"^[A-Za-z0-9_.:@/-]+$", x) else "unexpected characters in context name",
         "semver": lambda x: None if re.match(r"^[0-9]+\.[0-9]+\.[0-9]+$", x) else "expected MAJOR.MINOR.PATCH",
         "bool": lambda x: None if x in ("true", "false") else "must be exactly true or false",
+        "cidr": _cidr, "host-list": _host_list,
         "hostname": _hostname, "email": _email, "image-registry": _registry, "image-tag": _tag,
         "image-ref": _imageref, "cron": _cron, "timezone": _timezone,
     }
@@ -435,9 +457,104 @@ def resolve(path, strict=False):
     for a, b in (("QUOTA_REQUESTS_CPU", "QUOTA_LIMITS_CPU"), ("QUOTA_REQUESTS_MEMORY", "QUOTA_LIMITS_MEMORY")):
         if q(a) > q(b):
             errs.append(f"{a} ({R[a]}) must be <= {b} ({R[b]})")
-    total = sum(q(n) for n in R if n.startswith("PVC_SIZE_"))
+    pg_standalone = int(R["DB_POSTGRES_STANDALONE_REPLICAS"])
+    pg_cnpg = int(R["DB_POSTGRES_INSTANCES"])
+    pg_storage_count = pg_standalone if pg_standalone > 0 else pg_cnpg
+    mongo_replicas = int(R["DB_MONGO_REPLICAS"])
+    redis_replicas = int(R["DB_REDIS_REPLICAS"])
+    sentinel_replicas = int(R["DB_REDIS_SENTINEL_REPLICAS"])
+
+    total = (
+        q("PVC_SIZE_POSTGRES") * pg_storage_count
+        + q("PVC_SIZE_MONGODB") * mongo_replicas
+        + q("PVC_SIZE_REDIS") * redis_replicas
+        + q("PVC_SIZE_MINIO_HOT")
+        + q("PVC_SIZE_MINIO_COLD")
+    )
     if total > q("QUOTA_REQUESTS_STORAGE"):
-        errs.append(f"sum of PVC_SIZE_* exceeds QUOTA_REQUESTS_STORAGE ({R['QUOTA_REQUESTS_STORAGE']})")
+        errs.append(
+            f"total PVC storage across replicas ({float(total) / (2**30):.1f}Gi) exceeds "
+            f"QUOTA_REQUESTS_STORAGE ({R['QUOTA_REQUESTS_STORAGE']})"
+        )
+
+    # ---- Database HA & quorum validation (supports 1=standalone, 2=dev replica test, odd>=3=prod HA)
+    if pg_standalone == 1 and pg_cnpg > 1:
+        errs.append(
+            "DB_POSTGRES_INSTANCES > 1 with DB_POSTGRES_STANDALONE_REPLICAS=1 would run both standalone and CNPG "
+            "PostgreSQL simultaneously; set DB_POSTGRES_STANDALONE_REPLICAS=0 when using CloudNativePG HA"
+        )
+    if pg_cnpg == 2:
+        if strict:
+            errs.append(
+                "DB_POSTGRES_INSTANCES=2 has no automatic HA quorum if 1 node fails (dev-only); "
+                "use 1 (standalone) or an odd count >= 3 (e.g. 3) for strict/production deploys"
+            )
+        else:
+            notes.append(
+                "DB_POSTGRES_INSTANCES=2 (dev/test Primary+Replica mode): valid for testing read routing & manual "
+                "failover, but cannot maintain automatic HA quorum in production (use 3+ odd in prod)"
+            )
+    elif pg_cnpg >= 4 and pg_cnpg % 2 == 0:
+        errs.append(f"DB_POSTGRES_INSTANCES={pg_cnpg} is even (>=4); use an odd count (3, 5, 7, 9) for HA quorum")
+    if R["DB_POSTGRES_READ_HOST"] and pg_standalone == 1 and pg_cnpg < 2:
+        errs.append(
+            "DB_POSTGRES_READ_HOST is set while running standalone PostgreSQL (DB_POSTGRES_STANDALONE_REPLICAS=1, "
+            "DB_POSTGRES_INSTANCES=1); deploy CloudNativePG with DB_POSTGRES_INSTANCES >= 2 or leave DB_POSTGRES_READ_HOST empty"
+        )
+    if pg_standalone == 0 and R["DB_POSTGRES_HOST"] == "postgres":
+        notes.append("DB_POSTGRES_STANDALONE_REPLICAS=0 with DB_POSTGRES_HOST=postgres: CNPG primary Service is 'postgres-rw'")
+
+    if mongo_replicas > 1:
+        if not R["DB_MONGO_REPLICA_SET"]:
+            errs.append("DB_MONGO_REPLICAS > 1 requires DB_MONGO_REPLICA_SET to be set (e.g. rs0)")
+        if not R["DB_MONGO_HOSTS"]:
+            errs.append(
+                "DB_MONGO_REPLICAS > 1 requires DB_MONGO_HOSTS (e.g. mongo-0.mongo-headless:27017,mongo-1.mongo-headless:27017,...)"
+            )
+        if mongo_replicas == 2:
+            if strict:
+                errs.append(
+                    "DB_MONGO_REPLICAS=2 has no Raft voting majority if 1 node dies (dev-only); "
+                    "use 1 (standalone) or an odd count >= 3 (e.g. 3) for strict/production deploys"
+                )
+            else:
+                notes.append(
+                    "DB_MONGO_REPLICAS=2 (dev/test Primary+Secondary mode): valid for testing read preferences & failover "
+                    "locally, but 2 voting members cannot elect a Primary if 1 node fails (use 3+ odd in prod)"
+                )
+        elif mongo_replicas >= 4 and mongo_replicas % 2 == 0:
+            errs.append(f"DB_MONGO_REPLICAS={mongo_replicas} is even (>=4); MongoDB Raft quorum requires an odd count (3, 5, 7, 9)")
+
+    if sentinel_replicas > 0:
+        if sentinel_replicas < 3 or sentinel_replicas % 2 == 0:
+            errs.append(
+                f"DB_REDIS_SENTINEL_REPLICAS={sentinel_replicas} is invalid: Sentinel requires 0 (disabled) or an odd quorum >= 3 (3, 5, 7)"
+            )
+        if not R["DB_REDIS_SENTINEL_ADDRS"]:
+            errs.append(
+                "DB_REDIS_SENTINEL_REPLICAS > 0 requires DB_REDIS_SENTINEL_ADDRS "
+                "(e.g. redis-sentinel-0.redis-sentinel-headless:26379,...)"
+            )
+        quorum = int(R["DB_REDIS_SENTINEL_QUORUM"])
+        min_quorum = (sentinel_replicas // 2) + 1
+        if quorum > sentinel_replicas or quorum < min_quorum:
+            errs.append(
+                f"DB_REDIS_SENTINEL_QUORUM={quorum} must be between {min_quorum} and {sentinel_replicas} "
+                f"for DB_REDIS_SENTINEL_REPLICAS={sentinel_replicas}"
+            )
+        if int(R["DB_REDIS_SENTINEL_FAILOVER_TIMEOUT_MS"]) < int(R["DB_REDIS_SENTINEL_DOWN_AFTER_MS"]):
+            errs.append("DB_REDIS_SENTINEL_FAILOVER_TIMEOUT_MS must be >= DB_REDIS_SENTINEL_DOWN_AFTER_MS")
+    if redis_replicas > 1 and sentinel_replicas == 0:
+        if strict or redis_replicas >= 3:
+            errs.append(
+                f"DB_REDIS_REPLICAS={redis_replicas} requires DB_REDIS_SENTINEL_REPLICAS >= 3 (odd) for automatic failover"
+            )
+        else:
+            notes.append(
+                "DB_REDIS_REPLICAS=2 with DB_REDIS_SENTINEL_REPLICAS=0 (dev/test mode): replication active without "
+                "automatic Sentinel election (enable 3 Sentinels for automatic failover)"
+            )
+
     lock, mode, days = R["MINIO_COLD_OBJECT_LOCK"], R["MINIO_COLD_RETENTION_MODE"], R["MINIO_COLD_RETENTION_DAYS"]
     if (mode or days) and lock != "true":
         errs.append("MINIO_COLD_RETENTION_MODE/DAYS require MINIO_COLD_OBJECT_LOCK=true")
@@ -445,8 +562,48 @@ def resolve(path, strict=False):
         errs.append("MINIO_COLD_RETENTION_MODE and MINIO_COLD_RETENTION_DAYS must be set together (or both empty)")
     if lock == "true" and R["MINIO_COLD_VERSIONING"] != "true":
         errs.append("MINIO_COLD_OBJECT_LOCK=true requires MINIO_COLD_VERSIONING=true")
-    if int(R["API_MAX_REPLICAS"]) >= 11:
-        errs.append("API_MAX_REPLICAS must be < 11 (worker NODE_IDs start at 11)")
+    dc_index = int(R["DC_INDEX"])
+    dc_min, dc_max = dc_index * 128, dc_index * 128 + 127
+    ranges = []
+
+    api_start = int(R["API_NODE_ID_START"])
+    api_end = api_start + int(R["API_MAX_REPLICAS"]) - 1
+    ranges.append(("API", api_start, api_end))
+
+    ws_replicas = int(R["WS_REPLICAS"])
+    if ws_replicas > 0:
+        ws_start = int(R["WS_NODE_ID_START"])
+        ws_end = ws_start + ws_replicas - 1
+        ranges.append(("WebSocket", ws_start, ws_end))
+
+    worker_replicas = int(R["WORKER_REPLICAS"])
+    if worker_replicas > 0:
+        w_start = int(R["WORKER_NODE_ID_START"])
+        w_end = w_start + worker_replicas - 1
+        ranges.append(("Worker", w_start, w_end))
+
+    for label, start, end in ranges:
+        if end > 1023:
+            errs.append(f"{label} Snowflake NODE_ID range ({start}..{end}) exceeds 10-bit Snowflake maximum (1023)")
+        if start < dc_min or end > dc_max:
+            errs.append(
+                f"{label} Snowflake NODE_ID range ({start}..{end}) is outside DC_INDEX={dc_index} "
+                f"partition ({dc_min}..{dc_max})"
+            )
+
+    for i in range(len(ranges)):
+        for j in range(i + 1, len(ranges)):
+            l1, s1, e1 = ranges[i]
+            l2, s2, e2 = ranges[j]
+            if s1 <= e2 and s2 <= e1:
+                errs.append(f"{l1} NODE_ID range ({s1}..{e1}) overlaps {l2} NODE_ID range ({s2}..{e2})")
+
+    if R["WS_BACKEND_SERVICE"] == "websocket" and ws_replicas < 1:
+        errs.append("WS_BACKEND_SERVICE=websocket requires WS_REPLICAS >= 1")
+    if R["API_SERVER_ROLE"] == "api_node" and R["WS_BACKEND_SERVICE"] == "api":
+        errs.append("API_SERVER_ROLE=api_node does not expose /ws; set WS_BACKEND_SERVICE=websocket and WS_REPLICAS >= 1")
+    if R["API_SERVER_ROLE"] == "api_node" and worker_replicas < 1:
+        notes.append("API_SERVER_ROLE=api_node with WORKER_REPLICAS=0: no Write-Behind workers will run in this cluster")
     if strict:
         for n in ("NUMAN_DOMAIN", "IMAGE_REGISTRY"):
             host = R[n].split("/")[0].split(":")[0]

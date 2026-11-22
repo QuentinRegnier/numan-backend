@@ -13,7 +13,7 @@ import (
 
 // FuncUpdateCommunityLang met à jour atomiquement la langue d'une communauté publique et supprime son pin éventuel.
 func FuncUpdateCommunityLang(ctx context.Context, convID int64, newLang string) (community_recommendation_models.LangChangeMutationResult, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.WriteDB() == nil {
 		return community_recommendation_models.LangChangeMutationResult{}, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -26,7 +26,7 @@ func FuncUpdateCommunityLang(ctx context.Context, convID int64, newLang string) 
 	var res community_recommendation_models.LangChangeMutationResult
 	var oldSlot sql.NullInt64
 
-	if err := postgres.PostgresDB.QueryRowContext(ctx, query, convID, newLang).Scan(
+	if err := postgres.WriteDB().QueryRowContext(ctx, query, convID, newLang).Scan(
 		&res.StatusCode,
 		&res.OldLang,
 		&res.NewLang,

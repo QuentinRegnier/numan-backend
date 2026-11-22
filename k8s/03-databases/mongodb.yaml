@@ -1,12 +1,16 @@
-# MongoDB - SINGLE STANDALONE INSTANCE (this is NOT a replica set).
-#   * No replication/failover. No multi-document transactions or change streams (they need a replica
-#     set); the legacy stack was also standalone, so nothing regresses - but verify the Go code does
-#     not depend on them.
-#   * A real replica set needs rs.initiate(), a keyFile, stable per-member DNS and >=3 voting members;
-#     it is intentionally not faked with N standalone replicas. See docs/01-ARCHITECTURE.md.
-# Legacy: mongo:7, MONGO_INITDB_ROOT_USERNAME/PASSWORD <- MONGO_ROOT_USER/PASSWORD, port 27017.
-# NOTE: the legacy docker-compose.infra.yml mongo used env_file only, so those INITDB variables were
-# never set there => it ran WITHOUT authentication. Do not copy that file's behaviour.
+# MongoDB 7 - Native StatefulSet Replica Set (rs0) with keyFile authentication.
+#   * Plastic scaling (1 -> 2 -> 3+ odd):
+#       - replicas=1 (default): single-node Replica Set rs0 on Mac / small VPS.
+#         Running with --replSet rs0 even at 1 replica enables hot-adding mongo-1 and mongo-2
+#         online with ZERO downtime or restart of mongo-0!
+#       - replicas=2: dev/test Primary + Secondary (tests readPreference & manual failover locally).
+#       - replicas=3+ (odd): full production HA with automatic Raft Primary election.
+#   * Hardware plasticity:
+#       - podAntiAffinity is SOFT (preferred): spreads pods across physical servers when available,
+#         OR co-locates 3 replicas on 1 physical server with 3 separate NVMe SSDs via WaitForFirstConsumer
+#         local PVs (STORAGE_CLASS_MONGODB=nvme-mongo; see 04-storage/nvme-local-pv.example.yaml).
+#   * Bootstrap / scaling: job/mongo-init (03-databases/mongo-init-job.yaml) idempotently initializes rs0,
+#     registers members 0..(N-1) with configurable priority, and provisions least-privilege MONGO_APP_USER.
 apiVersion: v1
 kind: Service
 metadata:
@@ -18,12 +22,13 @@ metadata:
     app.kubernetes.io/component: database
 spec:
   clusterIP: None
+  publishNotReadyAddresses: true
   selector:
     app.kubernetes.io/name: mongo
   ports:
     - {name: mongo, port: 27017, targetPort: mongo}
 ---
-# Name "mongo" == legacy MONGO_HOST value.
+# Client-facing ClusterIP Service (fallback for single-node clients & bootstrap).
 apiVersion: v1
 kind: Service
 metadata:
@@ -40,6 +45,21 @@ spec:
   ports:
     - {name: mongo, port: 27017, targetPort: mongo}
 ---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mongo
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: mongo
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: database
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mongo
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -51,8 +71,8 @@ metadata:
     app.kubernetes.io/component: database
 spec:
   serviceName: mongo-headless
-  replicas: 1                      # DO NOT raise (would create independent empty databases).
-  podManagementPolicy: OrderedReady
+  replicas: ${DB_MONGO_REPLICAS}
+  podManagementPolicy: Parallel
   updateStrategy:
     type: RollingUpdate
   persistentVolumeClaimRetentionPolicy:
@@ -78,10 +98,81 @@ spec:
         fsGroup: 999
         fsGroupChangePolicy: OnRootMismatch
         seccompProfile: {type: RuntimeDefault}
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["db-mongo"]
+            - weight: 80
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["db"]
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["all-in-one"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: mongo
+                topologyKey: kubernetes.io/hostname
+      tolerations:
+        - key: numan.io/dedicated
+          operator: Equal
+          value: db-mongo
+          effect: NoSchedule
+        - key: numan.io/dedicated
+          operator: Equal
+          value: db
+          effect: NoSchedule
+      initContainers:
+        # mongod strictly requires keyFile permissions <= 0600 owned by UID 999 (Secret mounts may be 0444/group-readable).
+        - name: prepare-keyfile
+          image: mongo:7.0.14
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              cp /etc/mongo-keyfile-src/keyfile /etc/mongo-keyfile/keyfile
+              chmod 0400 /etc/mongo-keyfile/keyfile
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: keyfile-src, mountPath: /etc/mongo-keyfile-src, readOnly: true}
+            - {name: keyfile, mountPath: /etc/mongo-keyfile}
       containers:
         - name: mongo
           image: mongo:7.0.14        # legacy line: mongo:7. Pin the latest 7.0.x patch at deploy time.
           imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              if [ -n "$MONGO_REPLICA_SET" ]; then
+                exec docker-entrypoint.sh mongod \
+                  --replSet "$MONGO_REPLICA_SET" \
+                  --keyFile /etc/mongo-keyfile/keyfile \
+                  --bind_ip_all
+              else
+                exec docker-entrypoint.sh mongod --bind_ip_all
+              fi
           ports:
             - {name: mongo, containerPort: 27017}
           env:
@@ -89,6 +180,8 @@ spec:
               valueFrom: {secretKeyRef: {name: mongo-credentials, key: MONGO_ROOT_USER}}
             - name: MONGO_INITDB_ROOT_PASSWORD
               valueFrom: {secretKeyRef: {name: mongo-credentials, key: MONGO_ROOT_PASSWORD}}
+            - name: MONGO_REPLICA_SET
+              valueFrom: {configMapKeyRef: {name: numan-config, key: MONGO_REPLICA_SET}}
           # TCP probes on purpose: during first-run init the image starts a temporary mongod bound to
           # localhost only, so the pod IP port only opens for the real, authenticated server. (An exec
           # probe with mongosh would spawn a heavy Node process every few seconds.)
@@ -116,9 +209,15 @@ spec:
           volumeMounts:
             - {name: data, mountPath: /data/db}
             - {name: configdb, mountPath: /data/configdb}
+            - {name: keyfile, mountPath: /etc/mongo-keyfile, readOnly: true}
             - {name: tmp, mountPath: /tmp}
       volumes:
         - {name: configdb, emptyDir: {}}
+        - {name: keyfile, emptyDir: {sizeLimit: 1Mi}}
+        - name: keyfile-src
+          secret:
+            secretName: mongo-keyfile
+            defaultMode: 256
         - {name: tmp, emptyDir: {}}
   volumeClaimTemplates:
     - metadata:
@@ -128,6 +227,7 @@ spec:
           app.kubernetes.io/part-of: numan
       spec:
         accessModes: [ReadWriteOnce]
+        storageClassName: "${STORAGE_CLASS_MONGODB}"
         resources:
           requests:
             storage: "${PVC_SIZE_MONGODB}"            # size: see infrastructure.env.template (immutable once created)

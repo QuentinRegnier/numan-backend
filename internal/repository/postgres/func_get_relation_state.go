@@ -12,7 +12,7 @@ import (
 
 // FuncGetRelationState interroge directement la fonction SQL compilée pour obtenir l'état.
 func FuncGetRelationState(ctx context.Context, callerID int64, targetID int64) (int, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return 0, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -24,7 +24,7 @@ func FuncGetRelationState(ctx context.Context, callerID int64, targetID int64) (
 	query := `SELECT auth.func_get_relation_state($1, $2)`
 
 	var state int
-	err := postgres.PostgresDB.QueryRowContext(ctx, query, callerID, targetID).Scan(&state)
+	err := postgres.ReadDB().QueryRowContext(ctx, query, callerID, targetID).Scan(&state)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return 0, nil

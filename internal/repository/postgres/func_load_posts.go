@@ -13,7 +13,7 @@ import (
 )
 
 func FuncLoadPosts(ctx context.Context, postIDs []int64, limit int, offset int) ([]post_models.PostPayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -46,7 +46,7 @@ func FuncLoadPosts(ctx context.Context, postIDs []int64, limit int, offset int) 
 	`
 
 	// 3. Exécution de la requête
-	rows, err := postgres.PostgresDB.QueryContext(ctx, sqlStatement, pPostIDs, limit, offset)
+	rows, err := postgres.ReadDB().QueryContext(ctx, sqlStatement, pPostIDs, limit, offset)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

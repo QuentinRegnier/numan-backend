@@ -1,0 +1,104 @@
+# OPTIONAL WireGuard-only Traefik Ingresses for Admin UIs (pgAdmin, mongo-express, redis-commander).
+#
+# Defense-in-depth layers:
+#   1. Deployments stay at replicas: 0 until explicitly turned on (`scripts/admin.sh on <tool>`).
+#   2. Traefik Middleware `numan-wireguard-only@kubernetescrd` (ipAllowList) rejects 100% of requests
+#      whose source IP is outside `${ADMIN_WIREGUARD_SUBNET}` with HTTP 403.
+#      REQUIRES Traefik `externalTrafficPolicy: Local` (`make deploy-traefik`) so kube-proxy does NOT SNAT.
+#   3. Each UI enforces its own application authentication (`*-credentials` Secrets).
+#   4. NetworkPolicy `allow-traefik-to-admin-ui` restricts pod ingress strictly to Traefik on ports 8080/8081.
+#
+# DNS / WireGuard routing:
+#   Point private WireGuard DNS (or local /etc/hosts) for pgadmin.${NUMAN_DOMAIN},
+#   mongo-ui.${NUMAN_DOMAIN}, redis-ui.${NUMAN_DOMAIN} to your cluster's WireGuard/Traefik IP.
+#   Do NOT publish public DNS records for these admin hostnames.
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: admin-pgadmin-wireguard
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: pgadmin
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: admin
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.middlewares: numan-wireguard-only@kubernetescrd,numan-hsts@kubernetescrd
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: ["pgadmin.${NUMAN_DOMAIN}"]
+      secretName: numan-tls
+  rules:
+    - host: "pgadmin.${NUMAN_DOMAIN}"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: pgadmin
+                port:
+                  number: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: admin-mongo-express-wireguard
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: mongo-express
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: admin
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.middlewares: numan-wireguard-only@kubernetescrd,numan-hsts@kubernetescrd
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: ["mongo-ui.${NUMAN_DOMAIN}"]
+      secretName: numan-tls
+  rules:
+    - host: "mongo-ui.${NUMAN_DOMAIN}"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mongo-express
+                port:
+                  number: 8081
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: admin-redis-commander-wireguard
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: redis-commander
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: admin
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.middlewares: numan-wireguard-only@kubernetescrd,numan-hsts@kubernetescrd
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: ["redis-ui.${NUMAN_DOMAIN}"]
+      secretName: numan-tls
+  rules:
+    - host: "redis-ui.${NUMAN_DOMAIN}"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: redis-commander
+                port:
+                  number: 8081

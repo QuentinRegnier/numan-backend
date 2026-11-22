@@ -1,0 +1,234 @@
+# Idempotent MongoDB Replica Set (rs0) + least-privilege application user bootstrap Job.
+#
+# 1. Waits for every configured member mongo-0..mongo-(N-1).mongo-headless:27017 to be reachable.
+# 2. If MONGO_REPLICA_SET is set (default: rs0):
+#      - Initializes the Replica Set if NotYetInitialized (rs.initiate) with member priorities
+#        (mongo-0 receives MONGO_INIT_PRIMARY_PRIORITY, other members receive priority 1).
+#      - If already initialized and member count or priorities changed (e.g. hot-scaling 1 -> 3),
+#        reconfigures the live Primary online via rs.reconfig() with ZERO downtime.
+#      - Waits until a writable Primary is elected.
+# 3. Creates/updates the dedicated least-privilege application user (MONGO_APP_USER / MONGO_APP_PASSWORD
+#    from Secret mongo-app-credentials) with `readWrite` strictly scoped to MONGO_DB (numan_mongo).
+#
+# Jobs are immutable: scripts/deploy.sh deletes finished init Jobs (label numan.io/job-type=init) before apply.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mongo-init
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: mongo-init
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: init
+    numan.io/job-type: init
+spec:
+  backoffLimit: 6
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mongo-init
+        app.kubernetes.io/part-of: numan
+        app.kubernetes.io/component: init
+        numan.io/uses-mongo: "true"
+    spec:
+      serviceAccountName: mongo-init
+      automountServiceAccountToken: false
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: init
+          image: mongo:7.0.14
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              export HOME=/tmp
+              REPLICAS="$MONGO_INIT_REPLICAS"
+              RS_NAME="$MONGO_REPLICA_SET"
+              PRIMARY_PRIO="$MONGO_INIT_PRIMARY_PRIORITY"
+
+              wait_member() {
+                h="$1"
+                echo "Waiting for MongoDB member $h:$MONGO_PORT ..."
+                i=0
+                until mongosh --quiet --host "$h" --port "$MONGO_PORT" \
+                      -u "$MONGO_ROOT_USER" -p "$MONGO_ROOT_PASSWORD" --authenticationDatabase admin \
+                      --eval "db.adminCommand({ ping: 1 }).ok" | grep -qx "1"; do
+                  i=$((i+1))
+                  if [ "$i" -ge 90 ]; then echo "ERROR: MongoDB member $h not ready after 15 min" >&2; exit 1; fi
+                  sleep 10
+                done
+              }
+
+              if [ -n "$RS_NAME" ]; then
+                idx=0
+                SEED_LIST=""
+                while [ "$idx" -lt "$REPLICAS" ]; do
+                  member="mongo-$idx.mongo-headless"
+                  wait_member "$member"
+                  if [ -n "$SEED_LIST" ]; then SEED_LIST="$SEED_LIST,$member:$MONGO_PORT"; else SEED_LIST="$member:$MONGO_PORT"; fi
+                  idx=$((idx+1))
+                done
+
+                echo "Reconciling MongoDB Replica Set '$RS_NAME' for $REPLICAS member(s) (mongo-0 priority=$PRIMARY_PRIO)..."
+                mongosh --quiet --host "mongo-0.mongo-headless" --port "$MONGO_PORT" \
+                  -u "$MONGO_ROOT_USER" -p "$MONGO_ROOT_PASSWORD" --authenticationDatabase admin \
+                  --eval '
+                    const rsName = process.env.MONGO_REPLICA_SET;
+                    const replicas = parseInt(process.env.MONGO_INIT_REPLICAS, 10);
+                    const port = process.env.MONGO_PORT;
+                    const primaryPrio = parseInt(process.env.MONGO_INIT_PRIMARY_PRIORITY, 10);
+                    const desiredMembers = [];
+                    for (let i = 0; i < replicas; i++) {
+                      desiredMembers.push({
+                        _id: i,
+                        host: "mongo-" + i + ".mongo-headless:" + port,
+                        priority: i === 0 ? primaryPrio : 1
+                      });
+                    }
+                    let initialized = true;
+                    try {
+                      rs.status();
+                    } catch (e) {
+                      if (e.code === 94 || (e.message && e.message.includes("NotYetInitialized"))) {
+                        initialized = false;
+                      } else {
+                        throw e;
+                      }
+                    }
+                    if (!initialized) {
+                      print("Initializing Replica Set " + rsName + " with " + replicas + " member(s)...");
+                      const res = rs.initiate({ _id: rsName, members: desiredMembers });
+                      if (!res.ok) { throw new Error("rs.initiate failed: " + JSON.stringify(res)); }
+                      print("rs.initiate OK");
+                    } else {
+                      print("Replica Set " + rsName + " already initialized.");
+                    }
+                  '
+
+                echo "Waiting for writable Primary in Replica Set '$RS_NAME'..."
+                RS_URI="mongodb://$SEED_LIST/admin?replicaSet=$RS_NAME"
+                j=0
+                until mongosh --quiet "$RS_URI" \
+                      -u "$MONGO_ROOT_USER" -p "$MONGO_ROOT_PASSWORD" \
+                      --eval "db.hello().isWritablePrimary ? 1 : 0" | grep -qx "1"; do
+                  j=$((j+1))
+                  if [ "$j" -ge 60 ]; then echo "ERROR: No writable Primary elected in $RS_NAME after 5 min" >&2; exit 1; fi
+                  sleep 5
+                done
+
+                echo "Primary elected. Checking membership & priorities via rs.reconfig() if needed..."
+                mongosh --quiet "$RS_URI" \
+                  -u "$MONGO_ROOT_USER" -p "$MONGO_ROOT_PASSWORD" \
+                  --eval '
+                    const replicas = parseInt(process.env.MONGO_INIT_REPLICAS, 10);
+                    const port = process.env.MONGO_PORT;
+                    const primaryPrio = parseInt(process.env.MONGO_INIT_PRIMARY_PRIORITY, 10);
+                    const cfg = rs.conf();
+                    const desired = [];
+                    for (let i = 0; i < replicas; i++) {
+                      desired.push({
+                        _id: i,
+                        host: "mongo-" + i + ".mongo-headless:" + port,
+                        priority: i === 0 ? primaryPrio : 1
+                      });
+                    }
+                    let changed = cfg.members.length !== desired.length;
+                    if (!changed) {
+                      for (let i = 0; i < desired.length; i++) {
+                        if (cfg.members[i].host !== desired[i].host || cfg.members[i].priority !== desired[i].priority) {
+                          changed = true;
+                          break;
+                        }
+                      }
+                    }
+                    if (changed) {
+                      cfg.version = (cfg.version || 1) + 1;
+                      cfg.members = desired;
+                      const res = rs.reconfig(cfg);
+                      if (!res.ok) { throw new Error("rs.reconfig failed: " + JSON.stringify(res)); }
+                      print("rs.reconfig OK -> " + replicas + " member(s)");
+                    } else {
+                      print("Replica Set membership & priorities already match desired state.");
+                    }
+                  '
+
+                echo "Ensuring least-privilege application user on database '$MONGO_DB' via Primary..."
+                mongosh --quiet "$RS_URI" \
+                  -u "$MONGO_ROOT_USER" -p "$MONGO_ROOT_PASSWORD" \
+                  --eval '
+                    const dbName = process.env.MONGO_DB;
+                    const appUser = process.env.MONGO_APP_USER;
+                    const appPwd = process.env.MONGO_APP_PASSWORD;
+                    const targetDB = db.getSiblingDB(dbName);
+                    const desiredRoles = [{ role: "readWrite", db: dbName }];
+                    const existing = targetDB.getUser(appUser);
+                    if (!existing) {
+                      targetDB.createUser({ user: appUser, pwd: appPwd, roles: desiredRoles });
+                      print("Created least-privilege MongoDB user " + appUser + " on " + dbName);
+                    } else {
+                      targetDB.updateUser(appUser, { pwd: appPwd, roles: desiredRoles });
+                      print("Updated least-privilege MongoDB user " + appUser + " on " + dbName);
+                    }
+                  '
+              else
+                wait_member "$MONGO_HOST"
+                echo "Standalone MongoDB reachable. Ensuring least-privilege application user on '$MONGO_DB'..."
+                mongosh --quiet --host "$MONGO_HOST" --port "$MONGO_PORT" \
+                  -u "$MONGO_ROOT_USER" -p "$MONGO_ROOT_PASSWORD" --authenticationDatabase admin \
+                  --eval '
+                    const dbName = process.env.MONGO_DB;
+                    const appUser = process.env.MONGO_APP_USER;
+                    const appPwd = process.env.MONGO_APP_PASSWORD;
+                    const targetDB = db.getSiblingDB(dbName);
+                    const desiredRoles = [{ role: "readWrite", db: dbName }];
+                    const existing = targetDB.getUser(appUser);
+                    if (!existing) {
+                      targetDB.createUser({ user: appUser, pwd: appPwd, roles: desiredRoles });
+                      print("Created least-privilege MongoDB user " + appUser + " on " + dbName);
+                    } else {
+                      targetDB.updateUser(appUser, { pwd: appPwd, roles: desiredRoles });
+                      print("Updated least-privilege MongoDB user " + appUser + " on " + dbName);
+                    }
+                  '
+              fi
+              echo "mongo-init bootstrap OK"
+          env:
+            - name: MONGO_HOST
+              valueFrom: {configMapKeyRef: {name: numan-config, key: MONGO_HOST}}
+            - name: MONGO_PORT
+              valueFrom: {configMapKeyRef: {name: numan-config, key: MONGO_PORT}}
+            - name: MONGO_DB
+              valueFrom: {configMapKeyRef: {name: numan-config, key: MONGO_DB}}
+            - name: MONGO_REPLICA_SET
+              valueFrom: {configMapKeyRef: {name: numan-config, key: MONGO_REPLICA_SET}}
+            - name: MONGO_INIT_REPLICAS
+              value: "${DB_MONGO_REPLICAS}"
+            - name: MONGO_INIT_PRIMARY_PRIORITY
+              value: "${DB_MONGO_PRIMARY_PRIORITY}"
+            - name: MONGO_ROOT_USER
+              valueFrom: {secretKeyRef: {name: mongo-credentials, key: MONGO_ROOT_USER}}
+            - name: MONGO_ROOT_PASSWORD
+              valueFrom: {secretKeyRef: {name: mongo-credentials, key: MONGO_ROOT_PASSWORD}}
+            - name: MONGO_APP_USER
+              valueFrom: {secretKeyRef: {name: mongo-app-credentials, key: MONGO_APP_USER}}
+            - name: MONGO_APP_PASSWORD
+              valueFrom: {secretKeyRef: {name: mongo-app-credentials, key: MONGO_APP_PASSWORD}}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 384Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 128Mi}}

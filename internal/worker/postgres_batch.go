@@ -248,7 +248,7 @@ func bulkInsertPostgres(ctx context.Context, entity redis.EntityType, events []r
 		return numan_error.NewNotFound(numan_error.CodeNotFound, "Échec BulkInsert : mapper introuvable", err)
 	}
 
-	tx, errTx := postgres.PostgresDB.BeginTx(ctx, nil)
+	tx, errTx := postgres.WriteDB().BeginTx(ctx, nil)
 	if errTx != nil {
 		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction BulkInsert", errTx)
 	}
@@ -296,7 +296,7 @@ func bulkInsertPostgres(ctx context.Context, entity redis.EntityType, events []r
 
 // handleMessageReactionUpsert gère l'insertion d'une réaction avec résolution de conflit.
 func handleMessageReactionUpsert(ctx context.Context, events []redis.AsyncEvent) error {
-	tx, errTx := postgres.PostgresDB.BeginTx(ctx, nil)
+	tx, errTx := postgres.WriteDB().BeginTx(ctx, nil)
 	if errTx != nil {
 		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction Upsert", errTx)
 	}
@@ -356,7 +356,7 @@ func handlePOIReviewUpsert(ctx context.Context, events []redis.AsyncEvent) error
 		dedup[k] = r
 	}
 
-	tx, errTx := postgres.PostgresDB.BeginTx(ctx, nil)
+	tx, errTx := postgres.WriteDB().BeginTx(ctx, nil)
 	if errTx != nil {
 		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction POIReview Upsert", errTx)
 	}
@@ -419,7 +419,7 @@ func handleArticleUpsert(ctx context.Context, events []redis.AsyncEvent) error {
 		}
 	}
 
-	tx, errTx := postgres.PostgresDB.BeginTx(ctx, nil)
+	tx, errTx := postgres.WriteDB().BeginTx(ctx, nil)
 	if errTx != nil {
 		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction Article Upsert", errTx)
 	}
@@ -497,7 +497,7 @@ func bulkUpdatePostgres(ctx context.Context, entity redis.EntityType, events []r
 		dedupEvents = append(dedupEvents, e)
 	}
 
-	tx, errTx := postgres.PostgresDB.BeginTx(ctx, nil)
+	tx, errTx := postgres.WriteDB().BeginTx(ctx, nil)
 	if errTx != nil {
 		return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction BulkUpdate", errTx)
 	}
@@ -570,7 +570,7 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 
 	// ── CAS SPÉCIAL : LES LIKES (Clé Composite) ─────────────────────────────
 	if entity == redis.EntityLike {
-		tx, errTx := postgres.PostgresDB.BeginTx(ctx, nil)
+		tx, errTx := postgres.WriteDB().BeginTx(ctx, nil)
 		if errTx != nil {
 			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction Like Delete", errTx)
 		}
@@ -609,7 +609,7 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 
 	// ── CAS SPÉCIAL : LES RELATIONS (Clé Composite) ─────────────────────────
 	if entity == redis.EntityRelation {
-		tx, errTx := postgres.PostgresDB.BeginTx(ctx, nil)
+		tx, errTx := postgres.WriteDB().BeginTx(ctx, nil)
 		if errTx != nil {
 			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction Relation Delete", errTx)
 		}
@@ -646,7 +646,7 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 
 	// ── CAS SPÉCIAL : RÉACTIONS AUX MESSAGES (Clé Composite) ────────────────
 	if entity == redis.EntityMessageReaction {
-		tx, errTx := postgres.PostgresDB.BeginTx(ctx, nil)
+		tx, errTx := postgres.WriteDB().BeginTx(ctx, nil)
 		if errTx != nil {
 			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction Msg Reaction Delete", errTx)
 		}
@@ -681,7 +681,7 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 
 	// ── CAS SPÉCIAL : FAVORIS (Clé Composite) ───────────────────────────────
 	if entity == redis.EntitySaved {
-		tx, errTx := postgres.PostgresDB.BeginTx(ctx, nil)
+		tx, errTx := postgres.WriteDB().BeginTx(ctx, nil)
 		if errTx != nil {
 			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction Saved Delete", errTx)
 		}
@@ -718,7 +718,7 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 
 	// ── CAS SPÉCIAL : AVIS & NOTES POI (Clé Composite poi_id, user_id) ──────
 	if entity == redis.EntityPOIReview {
-		tx, errTx := postgres.PostgresDB.BeginTx(ctx, nil)
+		tx, errTx := postgres.WriteDB().BeginTx(ctx, nil)
 		if errTx != nil {
 			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec démarrage transaction POIReview Delete", errTx)
 		}
@@ -775,35 +775,35 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 
 	if entity == redis.EntityPost {
 		query = "SELECT content.func_bulk_soft_delete_posts($1, $2)"
-		if _, errExec := postgres.PostgresDB.ExecContext(ctx, query, pq.Array(ids), variables.MediaVisibilitySoftDeleted); errExec != nil {
+		if _, errExec := postgres.WriteDB().ExecContext(ctx, query, pq.Array(ids), variables.MediaVisibilitySoftDeleted); errExec != nil {
 			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Soft Delete Posts & Cascades", errExec)
 		}
 		return nil
 
 	} else if entity == redis.EntityMessage {
 		query = "SELECT messaging.func_bulk_soft_delete_messages($1)"
-		if _, errExec := postgres.PostgresDB.ExecContext(ctx, query, pq.Array(ids)); errExec != nil {
+		if _, errExec := postgres.WriteDB().ExecContext(ctx, query, pq.Array(ids)); errExec != nil {
 			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Soft Delete Message & Cascades", errExec)
 		}
 		return nil
 
 	} else if entity == redis.EntityComment {
 		query = "SELECT content.func_bulk_soft_delete_comments($1)"
-		if _, errExec := postgres.PostgresDB.ExecContext(ctx, query, pq.Array(ids)); errExec != nil {
+		if _, errExec := postgres.WriteDB().ExecContext(ctx, query, pq.Array(ids)); errExec != nil {
 			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Soft Delete Comment", errExec)
 		}
 		return nil
 
 	} else if entity == redis.EntityPOI {
 		query = "SELECT content.func_bulk_soft_delete_pois($1)"
-		if _, errExec := postgres.PostgresDB.ExecContext(ctx, query, pq.Array(ids)); errExec != nil {
+		if _, errExec := postgres.WriteDB().ExecContext(ctx, query, pq.Array(ids)); errExec != nil {
 			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Soft Delete POIs & Cascades", errExec)
 		}
 		return nil
 
 	} else if entity == redis.EntityArticle {
 		query = "SELECT content.func_bulk_soft_delete_articles($1)"
-		if _, errExec := postgres.PostgresDB.ExecContext(ctx, query, pq.Array(ids)); errExec != nil {
+		if _, errExec := postgres.WriteDB().ExecContext(ctx, query, pq.Array(ids)); errExec != nil {
 			return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Soft Delete Articles", errExec)
 		}
 		return nil
@@ -812,12 +812,12 @@ func bulkDeletePostgres(ctx context.Context, entity redis.EntityType, events []r
 		parts := strings.SplitN(mapper.TableName(), ".", 2)
 		if len(parts) == 2 {
 			query = "SELECT util.func_bulk_hard_delete($1, $2, $3)"
-			if _, errExec := postgres.PostgresDB.ExecContext(ctx, query, parts[0], parts[1], pq.Array(ids)); errExec != nil {
+			if _, errExec := postgres.WriteDB().ExecContext(ctx, query, parts[0], parts[1], pq.Array(ids)); errExec != nil {
 				return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Hard Delete Générique", errExec)
 			}
 		} else {
 			query = "SELECT util.func_bulk_hard_delete('public', $1, $2)"
-			if _, errExec := postgres.PostgresDB.ExecContext(ctx, query, parts[0], pq.Array(ids)); errExec != nil {
+			if _, errExec := postgres.WriteDB().ExecContext(ctx, query, parts[0], pq.Array(ids)); errExec != nil {
 				return numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeDatabaseError, "Échec Hard Delete Générique", errExec)
 			}
 		}
@@ -988,7 +988,7 @@ func updateCountersPostgres(ctx context.Context, events []redis.AsyncEvent) {
 		if delta == 0 {
 			continue
 		}
-		if _, err := postgres.PostgresDB.ExecContext(ctx, "SELECT content.func_increment_post_like($1, $2)", id, delta); err != nil {
+		if _, err := postgres.WriteDB().ExecContext(ctx, "SELECT content.func_increment_post_like($1, $2)", id, delta); err != nil {
 			numan_log.Error(ctx).Err(err).Int64("post_id", id).Msg("Échec exécution fonction func_increment_post_like")
 		}
 	}
@@ -996,7 +996,7 @@ func updateCountersPostgres(ctx context.Context, events []redis.AsyncEvent) {
 		if delta == 0 {
 			continue
 		}
-		if _, err := postgres.PostgresDB.ExecContext(ctx, "SELECT content.func_increment_post_comment($1, $2)", id, delta); err != nil {
+		if _, err := postgres.WriteDB().ExecContext(ctx, "SELECT content.func_increment_post_comment($1, $2)", id, delta); err != nil {
 			numan_log.Error(ctx).Err(err).Int64("post_id", id).Msg("Échec exécution fonction func_increment_post_comment")
 		}
 	}
@@ -1004,7 +1004,7 @@ func updateCountersPostgres(ctx context.Context, events []redis.AsyncEvent) {
 		if delta == 0 {
 			continue
 		}
-		if _, err := postgres.PostgresDB.ExecContext(ctx, "SELECT content.func_increment_post_view($1, $2)", id, delta); err != nil {
+		if _, err := postgres.WriteDB().ExecContext(ctx, "SELECT content.func_increment_post_view($1, $2)", id, delta); err != nil {
 			numan_log.Error(ctx).Err(err).Int64("post_id", id).Msg("Échec exécution fonction func_increment_post_view")
 		}
 	}
@@ -1012,7 +1012,7 @@ func updateCountersPostgres(ctx context.Context, events []redis.AsyncEvent) {
 		if delta == 0 {
 			continue
 		}
-		if _, err := postgres.PostgresDB.ExecContext(ctx, "SELECT content.func_increment_comment_metrics($1, $2)", id, delta); err != nil {
+		if _, err := postgres.WriteDB().ExecContext(ctx, "SELECT content.func_increment_comment_metrics($1, $2)", id, delta); err != nil {
 			numan_log.Error(ctx).Err(err).Int64("comment_id", id).Msg("Échec exécution fonction func_increment_comment_metrics")
 		}
 	}
@@ -1022,7 +1022,7 @@ func updateCountersPostgres(ctx context.Context, events []redis.AsyncEvent) {
 		if delta == 0 {
 			continue
 		}
-		if _, err := postgres.PostgresDB.ExecContext(ctx, "SELECT content.func_increment_post_report($1, $2)", id, delta); err != nil {
+		if _, err := postgres.WriteDB().ExecContext(ctx, "SELECT content.func_increment_post_report($1, $2)", id, delta); err != nil {
 			numan_log.Error(ctx).Err(err).Int64("post_id", id).Msg("Échec exécution fonction func_increment_post_report")
 		}
 	}
@@ -1031,13 +1031,13 @@ func updateCountersPostgres(ctx context.Context, events []redis.AsyncEvent) {
 			continue
 		}
 		// Appel de la procédure stockée spécifique aux commentaires
-		if _, err := postgres.PostgresDB.ExecContext(ctx, "SELECT content.func_increment_comment_report($1, $2)", id, delta); err != nil {
+		if _, err := postgres.WriteDB().ExecContext(ctx, "SELECT content.func_increment_comment_report($1, $2)", id, delta); err != nil {
 			numan_log.Error(ctx).Err(err).Int64("comment_id", id).Msg("Échec exécution fonction func_increment_comment_report")
 		}
 	}
 
 	for id, sum := range telemetryDwellSum {
-		if _, err := postgres.PostgresDB.ExecContext(ctx, "SELECT content.func_increment_post_telemetry($1, $2, $3, $4)", id, sum, telemetryDwellSq[id], telemetryClicks[id]); err != nil {
+		if _, err := postgres.WriteDB().ExecContext(ctx, "SELECT content.func_increment_post_telemetry($1, $2, $3, $4)", id, sum, telemetryDwellSq[id], telemetryClicks[id]); err != nil {
 			numan_log.Error(ctx).Err(err).Int64("post_id", id).Msg("Échec exécution fonction func_increment_post_telemetry")
 		}
 	}
@@ -1054,7 +1054,7 @@ func updateCountersPostgres(ctx context.Context, events []redis.AsyncEvent) {
 			if err != nil {
 				continue
 			}
-			if _, errExec := postgres.PostgresDB.ExecContext(ctx, "SELECT messaging.func_apply_reaction_delta($1, $2::jsonb)", msgID, string(deltasJSON)); errExec != nil {
+			if _, errExec := postgres.WriteDB().ExecContext(ctx, "SELECT messaging.func_apply_reaction_delta($1, $2::jsonb)", msgID, string(deltasJSON)); errExec != nil {
 				numan_log.Error(ctx).Err(errExec).Int64("message_id", msgID).Msg("Échec exécution fonction func_apply_reaction_delta")
 			}
 		}
@@ -1063,7 +1063,7 @@ func updateCountersPostgres(ctx context.Context, events []redis.AsyncEvent) {
 		if d.ratingSum == 0 && d.reviewCount == 0 {
 			continue
 		}
-		if _, errExec := postgres.PostgresDB.ExecContext(ctx, "SELECT content.func_increment_poi_counters($1, $2, $3)", poiID, d.ratingSum, d.reviewCount); errExec != nil {
+		if _, errExec := postgres.WriteDB().ExecContext(ctx, "SELECT content.func_increment_poi_counters($1, $2, $3)", poiID, d.ratingSum, d.reviewCount); errExec != nil {
 			numan_log.Error(ctx).Err(errExec).Int64("poi_id", poiID).Msg("Échec exécution fonction func_increment_poi_counters")
 		}
 	}

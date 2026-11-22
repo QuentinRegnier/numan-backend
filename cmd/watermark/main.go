@@ -6,6 +6,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -15,10 +16,14 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/pkg/metrics"
 	"github.com/gen2brain/avif"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -27,6 +32,7 @@ import (
 var minioClient *minio.Client
 var bucketName string
 var secretKey string
+var shuttingDown atomic.Bool
 
 const (
 	delta                    = 15.0 // Force du tatouage (plus élevé = plus robuste mais plus visible)
@@ -41,8 +47,15 @@ func main() {
 	// 1. Chargement des variables d'environnement
 	endpoint := os.Getenv("MINIO_ENDPOINT")
 	accessKey := os.Getenv("MINIO_ACCESS_KEY")
+	if accessKey == "" {
+		accessKey = os.Getenv("S3_ACCESS_KEY")
+	}
 	minioSecret := os.Getenv("MINIO_SECRET_KEY")
-	useSSL := os.Getenv("USE_SSL") == "true"
+	if minioSecret == "" {
+		minioSecret = os.Getenv("S3_SECRET_KEY")
+	}
+	useSSL := strings.EqualFold(strings.TrimSpace(os.Getenv("USE_SSL")), "true") ||
+		strings.EqualFold(strings.TrimSpace(os.Getenv("S3_USE_SSL")), "true")
 	bucketName = os.Getenv("MINIO_BUCKET_NAME")
 	secretKey = os.Getenv("WATERMARK_SECRET_KEY")
 
@@ -60,15 +73,106 @@ func main() {
 		log.Fatalf("❌ ERREUR MinIO: %v", err)
 	}
 
-	// 3. Définition de la route unique
-	http.HandleFunc("/process", processHandler)
+	// 3. Définition du routeur HTTP dédié (avec sondes Kubernetes /healthz et /readyz)
+	mux := newWatermarkMux()
 
-	// 4. Lancement du serveur
-	port := "8080" // Port interne du conteneur
-	log.Printf("✅ Service Watermark prêt sur le port %s", port)
-	if err := http.ListenAndServe(":"+port, nil); err != nil {
-		log.Fatalf("❌ ERREUR Serveur HTTP: %v", err)
+	// 4. Lancement du serveur avec Graceful Shutdown (SIGTERM/SIGINT) et timeouts explicites
+	port := strings.TrimSpace(os.Getenv("PORT"))
+	if port == "" {
+		port = "8080"
 	}
+	metricsPort := strings.TrimSpace(os.Getenv("METRICS_PORT"))
+	if metricsPort == "" {
+		metricsPort = "9090"
+	}
+	srv := newWatermarkServer(port, mux)
+
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", metrics.Handler())
+	metricsSrv := &http.Server{
+		Addr:              ":" + metricsPort,
+		Handler:           metricsMux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
+	sigCtx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stopSignals()
+
+	go func() {
+		if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("⚠️ Serveur interne /metrics Watermark arrêté: %v", err)
+		}
+	}()
+
+	srvErrCh := make(chan error, 1)
+	go func() {
+		log.Printf("✅ Service Watermark prêt sur le port %s (metrics_port=%s)", port, metricsPort)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			srvErrCh <- err
+		}
+		close(srvErrCh)
+	}()
+
+	select {
+	case err := <-srvErrCh:
+		if err != nil {
+			log.Fatalf("❌ ERREUR Serveur HTTP: %v", err)
+		}
+	case <-sigCtx.Done():
+		shuttingDown.Store(true)
+		log.Println("🛑 Signal d'arrêt reçu : vidage des requêtes Watermark en cours...")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			log.Printf("⚠️ Arrêt forcé du serveur Watermark: %v", err)
+		}
+		_ = metricsSrv.Shutdown(shutdownCtx)
+		cancel()
+		log.Println("✅ Service Watermark arrêté proprement.")
+	}
+}
+
+func newWatermarkServer(port string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              ":" + port,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+}
+
+func newWatermarkMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", healthzHandler)
+	mux.HandleFunc("/readyz", readyzHandler)
+	mux.HandleFunc("/process", processHandler)
+	return mux
+}
+
+func healthzHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"alive"}`))
+}
+
+func readyzHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if shuttingDown.Load() {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"status":"shutting_down"}`))
+		return
+	}
+	if secretKey == "" || minioClient == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"status":"not_ready"}`))
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ready"}`))
 }
 
 func resolveWatermarkTTLSeconds() int64 {

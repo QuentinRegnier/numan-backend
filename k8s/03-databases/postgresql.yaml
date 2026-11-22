@@ -47,7 +47,7 @@ metadata:
     app.kubernetes.io/component: database
 spec:
   serviceName: postgres-headless
-  replicas: 1                      # DO NOT raise: extra replicas would be independent, empty databases.
+  replicas: ${DB_POSTGRES_STANDALONE_REPLICAS}  # 1 = standalone (Mac/dev); 0 = disabled when CloudNativePG HA (03-databases-ha/) is active.
   podManagementPolicy: OrderedReady
   updateStrategy:
     type: RollingUpdate
@@ -74,10 +74,43 @@ spec:
         fsGroup: 999
         fsGroupChangePolicy: OnRootMismatch
         seccompProfile: {type: RuntimeDefault}
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["db-sql"]
+            - weight: 80
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["db"]
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["all-in-one"]
+      tolerations:
+        - key: numan.io/dedicated
+          operator: Equal
+          value: db-sql
+          effect: NoSchedule
+        - key: numan.io/dedicated
+          operator: Equal
+          value: db
+          effect: NoSchedule
       containers:
         - name: postgres
           image: postgres:16.10      # legacy line: postgres:16. Pin the latest 16.x patch at deploy time.
           imagePullPolicy: IfNotPresent
+          args:
+            - "-c"
+            - "max_connections=${DB_POSTGRES_MAX_CONNECTIONS}"
           ports:
             - {name: postgres, containerPort: 5432}
           env:
@@ -128,7 +161,7 @@ spec:
           app.kubernetes.io/part-of: numan
       spec:
         accessModes: [ReadWriteOnce]
-        # storageClassName is injected by kustomization.yaml (single place to change it).
+        storageClassName: "${STORAGE_CLASS_POSTGRES}"
         resources:
           requests:
             storage: "${PVC_SIZE_POSTGRES}"            # size: see infrastructure.env.template (immutable once created)

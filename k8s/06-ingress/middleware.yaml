@@ -98,3 +98,19 @@ spec:
     customResponseHeaders:
       Cache-Control: "public, max-age=31536000, immutable"
       X-Content-Type-Options: "nosniff"
+---
+# WireGuard VPN source-IP allow-list for optional Admin UI Ingresses (08-operations/admin-tools/wireguard-ingress/).
+# CRITICAL PREREQUISITE: K3s Traefik Service MUST run with `externalTrafficPolicy: Local` (`make deploy-traefik`).
+# Without `Local`, kube-proxy SNATs incoming packets to an internal node IP and ipAllowList will NOT see the real
+# WireGuard client IP. `scripts/deploy.sh --stack admin-ingress` enforces this check before applying.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: wireguard-only
+  namespace: numan
+  labels:
+    app.kubernetes.io/part-of: numan
+spec:
+  ipAllowList:
+    sourceRange:
+      - "${ADMIN_WIREGUARD_SUBNET}"

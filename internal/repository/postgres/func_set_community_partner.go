@@ -12,7 +12,7 @@ import (
 
 // FuncSetCommunityPartner met à jour le statut partenaire d'une communauté publique dans PostgreSQL (L3).
 func FuncSetCommunityPartner(ctx context.Context, convID int64, isPartner bool) (community_recommendation_models.PartnerMutationResult, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.WriteDB() == nil {
 		return community_recommendation_models.PartnerMutationResult{}, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -24,7 +24,7 @@ func FuncSetCommunityPartner(ctx context.Context, convID int64, isPartner bool) 
 	query := `SELECT status_code, conv_lang, is_partner FROM messaging.func_set_community_partner($1, $2)`
 	var res community_recommendation_models.PartnerMutationResult
 
-	if err := postgres.PostgresDB.QueryRowContext(ctx, query, convID, isPartner).Scan(
+	if err := postgres.WriteDB().QueryRowContext(ctx, query, convID, isPartner).Scan(
 		&res.StatusCode,
 		&res.ConvLang,
 		&res.IsPartner,

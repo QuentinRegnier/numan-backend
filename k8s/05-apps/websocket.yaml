@@ -1,0 +1,257 @@
+# Dedicated WebSocket Gateway (SERVER_ROLE=ws_node) - DISABLED BY DEFAULT (replicas: 0).
+#
+# In 'all-in-one' mode (default), API pods run SERVER_ROLE=monolith and serve both REST and /ws
+# (WS_BACKEND_SERVICE=api, WS_REPLICAS=0).
+# In 'distributed' or 'edge-stateless' mode, set:
+#   API_SERVER_ROLE=api_node
+#   WS_BACKEND_SERVICE=websocket
+#   WS_REPLICAS=2 (or more)
+#
+# Uses the exact same ./numan binary (numan-api image) with SERVER_ROLE=ws_node:
+#   * Exposes ONLY /ws (JWT+HMAC), /healthz, /readyz and internal :9090/metrics.
+#   * Skips Cuckoo Filter warmup, Smart Seeding and Write-Behind workers for ultra-fast boot.
+#   * Maintains a compact PostgreSQL pool (5 max open conns) since messaging hits Redis L1 / Mongo L2.
+#   * Uses StatefulSet ordinals starting at WS_NODE_ID_START (disjoint from API and Worker ranges).
+apiVersion: v1
+kind: Service
+metadata:
+  name: websocket-headless
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: websocket
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: app
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: websocket
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: websocket
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: websocket
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: app
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: websocket
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: websocket
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: websocket
+    app.kubernetes.io/part-of: numan
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: websocket
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: websocket
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: websocket
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: app
+spec:
+  serviceName: websocket-headless
+  replicas: ${WS_REPLICAS}
+  podManagementPolicy: Parallel
+  minReadySeconds: 5
+  ordinals:
+    start: ${WS_NODE_ID_START}
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: websocket
+  template:
+    metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+      labels:
+        app.kubernetes.io/name: websocket
+        app.kubernetes.io/part-of: numan
+        app.kubernetes.io/component: app
+        numan.io/exposed-via-traefik: "true"
+        numan.io/uses-postgres: "true"
+        numan.io/uses-mongo: "true"
+        numan.io/uses-redis: "true"
+        numan.io/uses-minio-hot: "true"
+        numan.io/uses-minio-cold: "true"
+        numan.io/egress-internet: "true"
+        numan.io/uses-smtp: "true"
+    spec:
+      serviceAccountName: websocket
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 90
+      # imagePullSecrets: [{name: registry-credentials}]
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["websocket"]
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["all-in-one"]
+      tolerations:
+        - key: numan.io/dedicated
+          operator: Equal
+          value: websocket
+          effect: NoSchedule
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: websocket
+      initContainers:
+        - name: wait-for-datastores
+          image: busybox:1.37.0
+          command: ["sh", "-c"]
+          args:
+            - |
+              for hp in "${DB_POSTGRES_HOST} 5432" "mongo 27017" "redis 6379" "minio-hot 9000"; do
+                set -- $hp
+                until nc -z -w 2 "$1" "$2"; do echo "waiting for $1:$2"; sleep 3; done
+              done
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 100m, memory: 32Mi}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+      containers:
+        - name: websocket
+          image: numan-api
+          imagePullPolicy: IfNotPresent
+          command: ["./numan"]
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: metrics, containerPort: 9090}
+          envFrom:
+            - configMapRef: {name: numan-config}
+          env:
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: NODE_ID
+              valueFrom: {fieldRef: {fieldPath: "metadata.labels['apps.kubernetes.io/pod-index']"}}
+            - name: SERVER_ROLE
+              value: ws_node
+            - name: POSTGRES_MAX_OPEN_CONNS
+              value: "5"
+            - name: POSTGRES_MAX_IDLE_CONNS
+              value: "3"
+            - name: POSTGRES_HOST
+              valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_HOST}}
+            - name: POSTGRES_PORT
+              valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_PORT}}
+            - name: POSTGRES_DB
+              valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_DB}}
+            - name: POSTGRES_SSLMODE
+              valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_SSLMODE}}
+            - name: POSTGRES_USER
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: POSTGRES_USER}}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: POSTGRES_PASSWORD}}
+            - name: DB_DSN
+              value: "host=$(POSTGRES_HOST) user=$(POSTGRES_USER) password=$(POSTGRES_PASSWORD) dbname=$(POSTGRES_DB) port=$(POSTGRES_PORT) sslmode=$(POSTGRES_SSLMODE)"
+            - name: MONGO_APP_USER
+              valueFrom: {secretKeyRef: {name: mongo-app-credentials, key: MONGO_APP_USER}}
+            - name: MONGO_APP_PASSWORD
+              valueFrom: {secretKeyRef: {name: mongo-app-credentials, key: MONGO_APP_PASSWORD}}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: redis-credentials, key: REDIS_PASSWORD}}
+            - name: JWT_SECRET
+              valueFrom: {secretKeyRef: {name: numan-app-secrets, key: JWT_SECRET}}
+            - name: HMAC_SECRET
+              valueFrom: {secretKeyRef: {name: numan-app-secrets, key: HMAC_SECRET}}
+            - name: WATERMARK_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: numan-app-secrets, key: WATERMARK_SECRET_KEY}}
+            - name: SMTP_HOST
+              valueFrom: {configMapKeyRef: {name: numan-config, key: SMTP_HOST}}
+            - name: SMTP_PORT
+              valueFrom: {configMapKeyRef: {name: numan-config, key: SMTP_PORT}}
+            - name: SMTP_FROM_ADDRESS
+              valueFrom: {configMapKeyRef: {name: numan-config, key: SMTP_FROM_ADDRESS}}
+            - name: SMTP_USER
+              valueFrom: {secretKeyRef: {name: numan-app-secrets, key: SMTP_USER}}
+            - name: SMTP_PASSWORD
+              valueFrom: {secretKeyRef: {name: numan-app-secrets, key: SMTP_PASSWORD}}
+            - name: MINIO_BUCKET_NAME
+              valueFrom: {configMapKeyRef: {name: numan-config, key: MINIO_BUCKET_NAME}}
+            - name: MINIO_PUBLIC_BUCKET_NAME
+              valueFrom: {configMapKeyRef: {name: numan-config, key: MINIO_PUBLIC_BUCKET_NAME}}
+            - name: PUBLIC_MEDIA_BASE_URL
+              valueFrom: {configMapKeyRef: {name: numan-config, key: PUBLIC_MEDIA_BASE_URL}}
+            - name: S3_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: minio-hot-users, key: S3_ACCESS_KEY}}
+            - name: S3_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: minio-hot-users, key: S3_SECRET_KEY}}
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 36
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 6
+          lifecycle:
+            preStop:
+              sleep: {seconds: 10}
+          resources:
+            requests:
+              cpu: "${WS_CPU_REQUEST}"
+              memory: "${WS_MEMORY_REQUEST}"
+            limits:
+              cpu: "${WS_CPU_LIMIT}"
+              memory: "${WS_MEMORY_LIMIT}"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 256Mi}

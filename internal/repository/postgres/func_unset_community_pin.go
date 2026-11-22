@@ -13,7 +13,7 @@ import (
 
 // FuncUnsetCommunityPin retire de manière idempotente le pin d'une communauté dans PostgreSQL (L3).
 func FuncUnsetCommunityPin(ctx context.Context, convID int64) (community_recommendation_models.UnpinMutationResult, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.WriteDB() == nil {
 		return community_recommendation_models.UnpinMutationResult{}, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -26,7 +26,7 @@ func FuncUnsetCommunityPin(ctx context.Context, convID int64) (community_recomme
 	var res community_recommendation_models.UnpinMutationResult
 	var oldSlot sql.NullInt64
 
-	if err := postgres.PostgresDB.QueryRowContext(ctx, query, convID).Scan(
+	if err := postgres.WriteDB().QueryRowContext(ctx, query, convID).Scan(
 		&res.StatusCode,
 		&res.ConvLang,
 		&oldSlot,

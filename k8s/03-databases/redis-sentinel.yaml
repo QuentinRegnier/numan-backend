@@ -1,0 +1,212 @@
+# Redis Sentinel HA - Quorum-based automatic Redis master monitoring & failover election.
+#   * Disabled by default (DB_REDIS_SENTINEL_REPLICAS=0) for standalone / Mac single-node dev.
+#   * Enable with DB_REDIS_SENTINEL_REPLICAS=3 (quorum=2) in ha-cluster or dev-replica-test profiles.
+#   * Ultra-lightweight (~32Mi RAM per pod), stateless (runtime sentinel.conf lives in /tmp emptyDir).
+#   * Uses Kubernetes stable DNS hostnames (`resolve-hostnames yes` + `announce-hostnames yes`) so pod
+#     IP churn across restarts never breaks Sentinel topology tracking.
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-sentinel-headless
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: redis-sentinel
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: database-ha
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: redis-sentinel
+  ports:
+    - {name: sentinel, port: 26379, targetPort: sentinel}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-sentinel
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: redis-sentinel
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: database-ha
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: redis-sentinel
+  ports:
+    - {name: sentinel, port: 26379, targetPort: sentinel}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis-sentinel
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: redis-sentinel
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: database-ha
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis-sentinel
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-sentinel
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: redis-sentinel
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: database-ha
+spec:
+  serviceName: redis-sentinel-headless
+  replicas: ${DB_REDIS_SENTINEL_REPLICAS}
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis-sentinel
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis-sentinel
+        app.kubernetes.io/part-of: numan
+        app.kubernetes.io/component: database-ha
+    spec:
+      serviceAccountName: redis-sentinel
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: {type: RuntimeDefault}
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["db-redis"]
+            - weight: 80
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["db"]
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["all-in-one"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: redis-sentinel
+                topologyKey: kubernetes.io/hostname
+      tolerations:
+        - key: numan.io/dedicated
+          operator: Equal
+          value: db-redis
+          effect: NoSchedule
+        - key: numan.io/dedicated
+          operator: Equal
+          value: db
+          effect: NoSchedule
+      containers:
+        - name: sentinel
+          image: redis:7.4.2
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              SELF_FQDN="$POD_NAME.redis-sentinel-headless.numan.svc.cluster.local"
+              INIT_MASTER="redis-0.redis-headless.numan.svc.cluster.local"
+              INIT_PORT="6379"
+
+              # If sibling Sentinels are already running, adopt their currently elected master
+              RES="$(redis-cli --no-auth-warning -h redis-sentinel -p 26379 SENTINEL get-master-addr-by-name "$REDIS_MASTER_NAME" 2>/dev/null || true)"
+              LIVE_H="$(printf '%s\n' "$RES" | sed -n '1p')"
+              LIVE_P="$(printf '%s\n' "$RES" | sed -n '2p')"
+              if [ -n "$LIVE_H" ] && [ -n "$LIVE_P" ]; then
+                INIT_MASTER="$LIVE_H"
+                INIT_PORT="$LIVE_P"
+              else
+                echo "Waiting for initial Redis master $INIT_MASTER:$INIT_PORT ..."
+                i=0
+                until redis-cli -h "$INIT_MASTER" -p "$INIT_PORT" ping 2>/dev/null | grep -q PONG; do
+                  i=$((i+1))
+                  if [ "$i" -ge 60 ]; then echo "ERROR: $INIT_MASTER not reachable after 5 min" >&2; exit 1; fi
+                  sleep 5
+                done
+              fi
+
+              CONF=/tmp/sentinel.conf
+              cat > "$CONF" <<EOF
+              port 26379
+              dir /tmp
+              sentinel resolve-hostnames yes
+              sentinel announce-hostnames yes
+              sentinel announce-ip $SELF_FQDN
+              sentinel announce-port 26379
+              sentinel monitor $REDIS_MASTER_NAME $INIT_MASTER $INIT_PORT $SENTINEL_QUORUM
+              sentinel auth-pass $REDIS_MASTER_NAME $REDIS_PASSWORD
+              sentinel down-after-milliseconds $REDIS_MASTER_NAME $SENTINEL_DOWN_AFTER_MS
+              sentinel failover-timeout $REDIS_MASTER_NAME $SENTINEL_FAILOVER_TIMEOUT_MS
+              sentinel parallel-syncs $REDIS_MASTER_NAME 1
+              EOF
+
+              echo "Starting Redis Sentinel $POD_NAME monitoring $REDIS_MASTER_NAME ($INIT_MASTER:$INIT_PORT, quorum=$SENTINEL_QUORUM)"
+              exec redis-sentinel "$CONF"
+          ports:
+            - {name: sentinel, containerPort: 26379}
+          env:
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: redis-credentials, key: REDIS_PASSWORD}}
+            - name: REDISCLI_AUTH
+              valueFrom: {secretKeyRef: {name: redis-credentials, key: REDIS_PASSWORD}}
+            - name: REDIS_MASTER_NAME
+              valueFrom: {configMapKeyRef: {name: numan-config, key: REDIS_MASTER_NAME}}
+            - name: SENTINEL_QUORUM
+              value: "${DB_REDIS_SENTINEL_QUORUM}"
+            - name: SENTINEL_DOWN_AFTER_MS
+              value: "${DB_REDIS_SENTINEL_DOWN_AFTER_MS}"
+            - name: SENTINEL_FAILOVER_TIMEOUT_MS
+              value: "${DB_REDIS_SENTINEL_FAILOVER_TIMEOUT_MS}"
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli -p 26379 ping | grep -q PONG"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli -p 26379 ping | grep -q PONG"]
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests: {cpu: 25m, memory: 32Mi}
+            limits: {cpu: 200m, memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 32Mi}}

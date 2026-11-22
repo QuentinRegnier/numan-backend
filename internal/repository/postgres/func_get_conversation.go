@@ -14,7 +14,7 @@ import (
 )
 
 func FuncGetConversation(ctx context.Context, convID int64) (conversation_models.ConversationPayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return conversation_models.ConversationPayload{}, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -27,7 +27,7 @@ func FuncGetConversation(ctx context.Context, convID int64) (conversation_models
 	var c conversation_models.ConversationPayload
 	var b []byte
 
-	err := postgres.PostgresDB.QueryRowContext(ctx, query, convID).Scan(&b)
+	err := postgres.ReadDB().QueryRowContext(ctx, query, convID).Scan(&b)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return conversation_models.ConversationPayload{}, numan_error.NewNotFound(

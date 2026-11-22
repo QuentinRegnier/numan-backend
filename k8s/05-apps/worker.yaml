@@ -11,8 +11,8 @@
 #     (no Dockerfile was supplied) - VERIFY. SERVER_ROLE=worker_node is one of the values listed in .env.
 #  4. NODE_ID: same reasoning as the API; ordinals start at 11 so worker IDs never collide with API IDs
 #     (1..10). VERIFY the maximum NODE_ID the application accepts.
-#  5. Concurrency is controlled by WORKER_MAX_BATCH_SIZE / WORKER_MIN_BACKOFF_MS / WORKER_MAX_BACKOFF_MS
-#     (numan-config). No other concurrency variable exists in the supplied files.
+#  5. Concurrency is controlled by WORKER_CONCURRENCY (from WORKER_POOL_SIZE: 1..1024, default 64 across all 64 Redis shards)
+#     and batch tuning WORKER_MAX_BATCH_SIZE / WORKER_MIN_BACKOFF_MS / WORKER_MAX_BACKOFF_MS (numan-config).
 #  6. No HPA: CPU is a poor signal for queue workers (consider KEDA on Redis queue length later).
 #  7. No health probes: the supplied files expose no worker health surface.
 apiVersion: v1
@@ -44,7 +44,7 @@ spec:
   podManagementPolicy: Parallel
   minReadySeconds: 10
   ordinals:
-    start: 11
+    start: ${WORKER_NODE_ID_START}
   updateStrategy:
     type: RollingUpdate
   selector:
@@ -52,6 +52,10 @@ spec:
       app.kubernetes.io/name: worker
   template:
     metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
       labels:
         app.kubernetes.io/name: worker
         app.kubernetes.io/part-of: numan
@@ -73,6 +77,26 @@ spec:
         runAsUser: 10001
         runAsGroup: 10001
         seccompProfile: {type: RuntimeDefault}
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["worker"]
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["all-in-one"]
+      tolerations:
+        - key: numan.io/dedicated
+          operator: Equal
+          value: worker
+          effect: NoSchedule
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
@@ -86,7 +110,7 @@ spec:
           command: ["sh", "-c"]
           args:
             - |
-              for hp in "postgres 5432" "mongo 27017" "redis 6379" "minio-hot 9000"; do
+              for hp in "${DB_POSTGRES_HOST} 5432" "mongo 27017" "redis 6379" "minio-hot 9000"; do
                 set -- $hp
                 until nc -z -w 2 "$1" "$2"; do echo "waiting for $1:$2"; sleep 3; done
               done
@@ -102,13 +126,18 @@ spec:
             capabilities: {drop: ["ALL"]}
       containers:
         - name: worker
-          image: numan-api                  # same application image as the API (infra compose: same build, other command)
+          image: numan-api                  # same binary as API, switched into worker-only mode via SERVER_ROLE=worker_node
           imagePullPolicy: IfNotPresent
-          command: ["./numan-worker"]     # VERIFY (from docker-compose.infra.yml)
+          command: ["./numan"]
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: metrics, containerPort: 9090}
           envFrom:
             - configMapRef: {name: numan-config}
           env:
             # ---- identity: unique per pod, derived from the StatefulSet ordinal (no shell/wrapper needed) ----
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
             - name: NODE_ID
               valueFrom: {fieldRef: {fieldPath: "metadata.labels['apps.kubernetes.io/pod-index']"}}
             - name: SERVER_ROLE         # overrides the "monolith" default from numan-config
@@ -120,17 +149,19 @@ spec:
               valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_PORT}}
             - name: POSTGRES_DB
               valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_DB}}
+            - name: POSTGRES_SSLMODE
+              valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_SSLMODE}}
             - name: POSTGRES_USER
               valueFrom: {secretKeyRef: {name: postgres-credentials, key: POSTGRES_USER}}
             - name: POSTGRES_PASSWORD
               valueFrom: {secretKeyRef: {name: postgres-credentials, key: POSTGRES_PASSWORD}}
-            - name: DB_DSN             # same format as the legacy .env; sslmode=disable is a legacy value (see docs)
-              value: "host=$(POSTGRES_HOST) user=$(POSTGRES_USER) password=$(POSTGRES_PASSWORD) dbname=$(POSTGRES_DB) port=$(POSTGRES_PORT) sslmode=disable"
-            # ---- MongoDB (the legacy app is given the ROOT credentials; no app-specific user var exists) ----
-            - name: MONGO_ROOT_USER
-              valueFrom: {secretKeyRef: {name: mongo-credentials, key: MONGO_ROOT_USER}}
-            - name: MONGO_ROOT_PASSWORD
-              valueFrom: {secretKeyRef: {name: mongo-credentials, key: MONGO_ROOT_PASSWORD}}
+            - name: DB_DSN
+              value: "host=$(POSTGRES_HOST) user=$(POSTGRES_USER) password=$(POSTGRES_PASSWORD) dbname=$(POSTGRES_DB) port=$(POSTGRES_PORT) sslmode=$(POSTGRES_SSLMODE)"
+            # ---- MongoDB: least-privilege application user (readWrite on MONGO_DB only, provisioned by job/mongo-init) ----
+            - name: MONGO_APP_USER
+              valueFrom: {secretKeyRef: {name: mongo-app-credentials, key: MONGO_APP_USER}}
+            - name: MONGO_APP_PASSWORD
+              valueFrom: {secretKeyRef: {name: mongo-app-credentials, key: MONGO_APP_PASSWORD}}
             # ---- Redis ----
             - name: REDIS_PASSWORD
               valueFrom: {secretKeyRef: {name: redis-credentials, key: REDIS_PASSWORD}}
@@ -169,6 +200,21 @@ spec:
             # - name: <COLD_ACCESS_KEY_VAR>    valueFrom: {secretKeyRef: {name: minio-cold-users, key: S3_ACCESS_KEY}}
             # - name: <COLD_SECRET_KEY_VAR>    valueFrom: {secretKeyRef: {name: minio-cold-users, key: S3_SECRET_KEY}}
             # NetworkPolicy access to minio-cold is already granted by the numan.io/uses-minio-cold label below.
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 6
           resources:                      # INITIAL RECOMMENDATION
             requests: {cpu: "${WORKER_CPU_REQUEST}", memory: "${WORKER_MEMORY_REQUEST}"}
             limits: {cpu: "${WORKER_CPU_LIMIT}", memory: "${WORKER_MEMORY_LIMIT}"}

@@ -12,7 +12,7 @@ import (
 
 // FuncApplyTrustScoreDelta applique atomiquement un delta de réputation ou un bannissement majeur en L3.
 func FuncApplyTrustScoreDelta(ctx context.Context, userID int64, delta float64, isInfraction bool, isMajorBan bool, banReason string) (auth_models.TrustDeltaResult, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.WriteDB() == nil {
 		return auth_models.TrustDeltaResult{}, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -26,7 +26,7 @@ func FuncApplyTrustScoreDelta(ctx context.Context, userID int64, delta float64, 
 	}
 	const query = `SELECT new_score, is_banned FROM auth.func_apply_trust_score_delta($1, $2, $3, $4, $5)`
 	var res auth_models.TrustDeltaResult
-	if err := postgres.PostgresDB.QueryRowContext(ctx, query, userID, delta, isInfraction, isMajorBan, reasonArg).Scan(&res.NewScore, &res.IsBanned); err != nil {
+	if err := postgres.WriteDB().QueryRowContext(ctx, query, userID, delta, isInfraction, isMajorBan, reasonArg).Scan(&res.NewScore, &res.IsBanned); err != nil {
 		return auth_models.TrustDeltaResult{}, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,

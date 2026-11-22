@@ -17,7 +17,7 @@ func FuncFilterUnreferencedArticleMedia(ctx context.Context, candidateMediaIDs [
 		return []int64{}, nil
 	}
 
-	if postgres.PostgresDB == nil {
+	if postgres.WriteDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -31,7 +31,7 @@ func FuncFilterUnreferencedArticleMedia(ctx context.Context, candidateMediaIDs [
 		FROM content.func_filter_unreferenced_article_media($1, $2)
 	`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, pq.Array(candidateMediaIDs), excludeArticleID)
+	rows, err := postgres.WriteDB().QueryContext(ctx, query, pq.Array(candidateMediaIDs), excludeArticleID)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

@@ -29,7 +29,7 @@ func startSavedCleanupCron(ctx context.Context) {
 			case <-ctx.Done():
 				return // Arrêt gracieux
 			case <-ticker.C:
-				processSavedCleanup(ctx)
+				runWithDistributedCronLock(ctx, "cron:saved_cleanup", 10*time.Minute, processSavedCleanup)
 			}
 		}
 	}()

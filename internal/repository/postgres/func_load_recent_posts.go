@@ -12,7 +12,7 @@ import (
 )
 
 func FuncLoadRecentPosts(ctx context.Context, days int) ([]post_models.PostPayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -23,7 +23,7 @@ func FuncLoadRecentPosts(ctx context.Context, days int) ([]post_models.PostPaylo
 
 	query := `SELECT * FROM content.func_load_recent_posts($1)`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, days)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, days)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

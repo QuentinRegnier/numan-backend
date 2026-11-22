@@ -32,7 +32,7 @@ SCHEMAS=(-schema-location default -schema-location 'https://raw.githubuserconten
 fail=0
 
 echo "==> kubeconform (Kubernetes ${K8S_VERSION}, strict)"
-for m in core tls admin; do
+for m in core tls admin admin-ingress postgres-ha; do
   kubeconform -strict -summary -kubernetes-version "$K8S_VERSION" "${SCHEMAS[@]}" "$OUT/manifests/$m.yaml" || fail=1
 done
 # the optional HelmChartConfig is a K3s CRD without a published schema: structural YAML check only

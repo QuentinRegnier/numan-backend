@@ -14,7 +14,7 @@ import (
 
 // FuncGetUserPasskeys charge toutes les Passkeys d'un utilisateur depuis PostgreSQL (L3).
 func FuncGetUserPasskeys(ctx context.Context, userID int64) ([]two_factor_models.PasskeyPayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.WriteDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -25,7 +25,7 @@ func FuncGetUserPasskeys(ctx context.Context, userID int64) ([]two_factor_models
 
 	const query = `SELECT id, user_id, credential_id, public_key, attestation_type, aaguid, sign_count, device_name, transports, created_at, updated_at FROM auth.func_get_user_passkeys($1)`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, userID)
+	rows, err := postgres.WriteDB().QueryContext(ctx, query, userID)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

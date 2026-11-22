@@ -15,7 +15,7 @@ import (
 
 // FuncLoadUserSessionsView récupère la vue expurgée des sessions (Pur DDD)
 func FuncLoadUserSessionsView(ctx context.Context, userID int64) ([]auth_models.SessionView, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -28,7 +28,7 @@ func FuncLoadUserSessionsView(ctx context.Context, userID int64) ([]auth_models.
 	query := `SELECT id, device_info, ip_history, created_at, expires_at 
 	          FROM auth.func_get_active_sessions_view($1)`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, userID)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, userID)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

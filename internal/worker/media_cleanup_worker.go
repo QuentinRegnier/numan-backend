@@ -30,7 +30,7 @@ func startMediaCleanupCron(ctx context.Context) {
 			case <-ctx.Done():
 				return // Arrêt gracieux
 			case <-ticker.C:
-				processMediaCleanup(ctx)
+				runWithDistributedCronLock(ctx, "cron:media_cleanup", 10*time.Minute, processMediaCleanup)
 			}
 		}
 	}()

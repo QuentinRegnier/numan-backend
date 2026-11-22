@@ -16,7 +16,7 @@ import (
 // FuncLoadAllUserSessions récupère les données persistantes des sessions actives d'un utilisateur.
 // Les données volatiles (Ratchet Secrets, Last JWT) ne sont volontairement pas extraites du L3.
 func FuncLoadAllUserSessions(ctx context.Context, userID int64) ([]auth_models.SessionsPayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.WriteDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -29,7 +29,7 @@ func FuncLoadAllUserSessions(ctx context.Context, userID int64) ([]auth_models.S
 	query := `SELECT id, user_id, master_token, firebase_installation_id, device_info, ip_history, created_at, expires_at 
 	          FROM auth.func_load_sessions(NULL, $1, NULL, NULL)`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, userID)
+	rows, err := postgres.WriteDB().QueryContext(ctx, query, userID)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

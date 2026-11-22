@@ -13,7 +13,7 @@ import (
 
 // FuncLoadActivePublicCommunityMemberships charge par lots les appartenances actives aux communautés publiques.
 func FuncLoadActivePublicCommunityMemberships(ctx context.Context, limit int, offset int) ([]community_recommendation_models.PublicCommunityMembershipRecord, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -23,7 +23,7 @@ func FuncLoadActivePublicCommunityMemberships(ctx context.Context, limit int, of
 	}
 
 	query := `SELECT user_id, conversation_id FROM messaging.func_load_active_public_community_memberships($1, $2)`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, limit, offset)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, limit, offset)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

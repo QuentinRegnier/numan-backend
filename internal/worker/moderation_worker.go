@@ -29,7 +29,9 @@ func StartModerationAgingCron(ctx context.Context) {
 				numan_log.Info(ctx).Msg("Arrêt du Cron de vieillissement de la modération.")
 				return
 			case <-ticker.C:
-				_, _ = ProcessModerationAgingBatch(ctx, domain.NowTime())
+				runWithDistributedCronLock(ctx, "cron:moderation_aging", 4*time.Minute, func(c context.Context) {
+					_, _ = ProcessModerationAgingBatch(c, domain.NowTime())
+				})
 			}
 		}
 	}()
@@ -52,9 +54,11 @@ func StartModerationExpirationWorker(ctx context.Context) {
 				numan_log.Info(ctx).Msg("Arrêt du Worker d'expiration de la modération.")
 				return
 			case <-ticker.C:
-				now := domain.NowTime()
-				_, _ = ProcessModerationLockExpirations(ctx, now)
-				_, _ = ProcessModerationWaitingInfoExpirations(ctx, now)
+				runWithDistributedCronLock(ctx, "cron:moderation_expiration", 50*time.Second, func(c context.Context) {
+					now := domain.NowTime()
+					_, _ = ProcessModerationLockExpirations(c, now)
+					_, _ = ProcessModerationWaitingInfoExpirations(c, now)
+				})
 			}
 		}
 	}()

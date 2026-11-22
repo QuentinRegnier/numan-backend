@@ -104,7 +104,7 @@ spec:
       ports:
         - {protocol: TCP, port: 8080}
 ---
-# Datastore access: postgres:5432
+# Datastore access: postgres:5432 (+ CloudNativePG HA replication & operator control plane)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -120,8 +120,21 @@ spec:
         - podSelector:
             matchLabels:
               numan.io/uses-postgres: "true"
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
       ports:
         - {protocol: TCP, port: 5432}
+    # CloudNativePG instance-manager status/replication API (port 8000) between CNPG pods and cnpg-system operator
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cnpg-system
+      ports:
+        - {protocol: TCP, port: 8000}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -141,7 +154,31 @@ spec:
       ports:
         - {protocol: TCP, port: 5432}
 ---
-# Datastore access: mongo:27017
+# PostgreSQL HA peer replication (pg_basebackup, WAL streaming, pg_rewind) & CNPG Kubernetes API lease updates
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgres-ha-egress
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - {protocol: TCP, port: 5432}
+        - {protocol: TCP, port: 8000}
+    # CNPG instance manager reports status/failover leases to the Kubernetes API server (443 / 6443)
+    - ports:
+        - {protocol: TCP, port: 443}
+        - {protocol: TCP, port: 6443}
+---
+# Datastore access: mongo:27017 (+ native Replica Set rs0 peer replication & Raft elections)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -157,6 +194,9 @@ spec:
         - podSelector:
             matchLabels:
               numan.io/uses-mongo: "true"
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mongo
       ports:
         - {protocol: TCP, port: 27017}
 ---
@@ -178,7 +218,25 @@ spec:
       ports:
         - {protocol: TCP, port: 27017}
 ---
-# Datastore access: redis:6379
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-mongo-ha-egress
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mongo
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mongo
+      ports:
+        - {protocol: TCP, port: 27017}
+---
+# Datastore access: redis:6379 + redis-sentinel:26379 (Primary/Replica replication & Sentinel elections)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -194,6 +252,12 @@ spec:
         - podSelector:
             matchLabels:
               numan.io/uses-redis: "true"
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis-sentinel
       ports:
         - {protocol: TCP, port: 6379}
 ---
@@ -214,6 +278,73 @@ spec:
               app.kubernetes.io/name: redis
       ports:
         - {protocol: TCP, port: 6379}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis-sentinel
+      ports:
+        - {protocol: TCP, port: 26379}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis-ha-egress
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - {protocol: TCP, port: 6379}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis-sentinel
+      ports:
+        - {protocol: TCP, port: 26379}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis-sentinel-ha
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: redis-sentinel
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              numan.io/uses-redis: "true"
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis-sentinel
+      ports:
+        - {protocol: TCP, port: 26379}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - {protocol: TCP, port: 6379}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis-sentinel
+      ports:
+        - {protocol: TCP, port: 26379}
 ---
 # Datastore access: minio-hot:9000
 apiVersion: networking.k8s.io/v1
@@ -428,3 +559,28 @@ spec:
               app.kubernetes.io/name: traefik
       ports:
         - {protocol: TCP, port: 8089}
+---
+# Optional WireGuard-protected Admin UIs (08-operations/admin-tools/wireguard-ingress/).
+# Has zero effect until an operator explicitly deploys `make deploy-admin-ingress` AND scales an admin pod to 1.
+# Traefik enforces `Middleware/wireguard-only` (ipAllowList) and MUST run with `externalTrafficPolicy: Local`.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-traefik-to-admin-ui
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      numan.io/admin-wireguard-ingress: "true"
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+      ports:
+        - {protocol: TCP, port: 8080}
+        - {protocol: TCP, port: 8081}

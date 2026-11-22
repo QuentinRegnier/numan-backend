@@ -13,7 +13,7 @@ import (
 
 // FuncLoadActiveCommunityPins charge tous les pins actifs des communautés publiques pour le seeding L1.
 func FuncLoadActiveCommunityPins(ctx context.Context) ([]community_recommendation_models.CommunityPinRecord, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -23,7 +23,7 @@ func FuncLoadActiveCommunityPins(ctx context.Context) ([]community_recommendatio
 	}
 
 	query := `SELECT conversation_id, lang, pin_slot FROM messaging.func_load_active_community_pins()`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

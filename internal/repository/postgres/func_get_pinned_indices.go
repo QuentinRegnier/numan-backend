@@ -12,7 +12,7 @@ import (
 
 // FuncGetPinnedIndices récupère les indices d'épingles (Source of Truth)
 func FuncGetPinnedIndices(ctx context.Context, userID int64) ([]int, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -22,7 +22,7 @@ func FuncGetPinnedIndices(ctx context.Context, userID int64) ([]int, error) {
 	}
 
 	query := `SELECT pinned FROM messaging.func_get_pinned_indices($1)`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, userID)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, userID)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

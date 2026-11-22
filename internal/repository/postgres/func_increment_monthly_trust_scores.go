@@ -13,7 +13,7 @@ import (
 
 // FuncIncrementMonthlyTrustScores exécute la récompense mensuelle (+0.02) pour les comptes sans infraction depuis 30 jours.
 func FuncIncrementMonthlyTrustScores(ctx context.Context) ([]auth_models.MonthlyTrustReward, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.WriteDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -22,7 +22,7 @@ func FuncIncrementMonthlyTrustScores(ctx context.Context) ([]auth_models.Monthly
 		)
 	}
 	const query = `SELECT user_id, new_trust_score FROM auth.func_increment_monthly_trust_scores()`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query)
+	rows, err := postgres.WriteDB().QueryContext(ctx, query)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

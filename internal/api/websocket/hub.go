@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	redisgo "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
@@ -37,12 +40,21 @@ type hub struct {
 	BroadcastRoute chan broadcastMessage
 
 	PubSub *redis.PubSub
+
+	stopCh       chan struct{}
+	doneCh       chan struct{}
+	shutdownOnce sync.Once
+	activeUsers  atomic.Int64
+	activeConns  atomic.Int64
 }
 
-var globalHub *hub
+var (
+	globalHub   *hub
+	globalHubMu sync.RWMutex
+)
 
 func InitHub() {
-	globalHub = &hub{
+	h := &hub{
 		Clients:            make(map[int64]map[*client]bool),
 		Communities:        make(map[int64]map[*client]bool),
 		Register:           make(chan *client),
@@ -50,52 +62,137 @@ func InitHub() {
 		SubscribeCommunity: make(chan communitySubscription),
 		BroadcastRoute:     make(chan broadcastMessage, 2048), // Buffer haute capacité
 		PubSub:             redisgo.Rdb.Subscribe(context.Background()),
+		stopCh:             make(chan struct{}),
+		doneCh:             make(chan struct{}),
 	}
 
-	go globalHub.run()
-	go globalHub.listenRedis()
+	globalHubMu.Lock()
+	globalHub = h
+	globalHubMu.Unlock()
+
+	go h.run()
+	go h.listenRedis()
+}
+
+// Shutdown ferme proprement le Hub WebSocket, déconnecte les clients actifs et libère Redis PubSub.
+func Shutdown() {
+	globalHubMu.RLock()
+	h := globalHub
+	globalHubMu.RUnlock()
+	if h == nil {
+		return
+	}
+	h.shutdown()
+}
+
+func (h *hub) shutdown() {
+	h.shutdownOnce.Do(func() {
+		if h.PubSub != nil {
+			_ = h.PubSub.Close()
+		}
+		close(h.stopCh)
+		select {
+		case <-h.doneCh:
+		case <-time.After(3 * time.Second):
+		}
+	})
+}
+
+// HubStats retourne le nombre d'utilisateurs uniques et de connexions WebSocket actives (thread-safe).
+func HubStats() (activeUsers int64, activeConnections int64) {
+	globalHubMu.RLock()
+	h := globalHub
+	globalHubMu.RUnlock()
+	if h == nil {
+		return 0, 0
+	}
+	return h.activeUsers.Load(), h.activeConns.Load()
 }
 
 // listenRedis capte les événements du réseau global et les pousse dans le sas d'attente
 func (h *hub) listenRedis() {
+	if h.PubSub == nil {
+		return
+	}
 	ch := h.PubSub.Channel()
-	for msg := range ch {
-		parts := strings.Split(msg.Channel, ":")
-		if len(parts) != 3 {
-			continue
-		}
+	for {
+		select {
+		case <-h.stopCh:
+			return
+		case msg, ok := <-ch:
+			if !ok {
+				return
+			}
+			parts := strings.Split(msg.Channel, ":")
+			if len(parts) != 3 {
+				continue
+			}
 
-		channelType := parts[1] // "user" ou "community"
-		var targetID int64
-		_, err := fmt.Sscanf(parts[2], "%d", &targetID)
-		if err != nil {
-			numan_log.Warn(context.Background()).Err(err).Str("channel", msg.Channel).Msg("Impossible de parser l'ID de la cible")
-			continue
-		}
+			channelType := parts[1] // "user" ou "community"
+			var targetID int64
+			_, err := fmt.Sscanf(parts[2], "%d", &targetID)
+			if err != nil {
+				numan_log.Warn(context.Background()).Err(err).Str("channel", msg.Channel).Msg("Impossible de parser l'ID de la cible")
+				continue
+			}
 
-		h.BroadcastRoute <- broadcastMessage{
-			ChannelType: channelType,
-			TargetID:    targetID,
-			Payload:     []byte(msg.Payload),
+			select {
+			case h.BroadcastRoute <- broadcastMessage{
+				ChannelType: channelType,
+				TargetID:    targetID,
+				Payload:     []byte(msg.Payload),
+			}:
+			case <-h.stopCh:
+				return
+			}
 		}
 	}
 }
 
+func (h *hub) updateStats() {
+	users := int64(len(h.Clients))
+	var conns int64
+	for _, set := range h.Clients {
+		conns += int64(len(set))
+	}
+	h.activeUsers.Store(users)
+	h.activeConns.Store(conns)
+}
+
 // run est l'unique boucle autorisée à muter les maps et écrire dans client.Send
 func (h *hub) run() {
+	defer close(h.doneCh)
 	for {
 		select {
+		case <-h.stopCh:
+			for userID, connections := range h.Clients {
+				for c := range connections {
+					close(c.Send)
+					delete(connections, c)
+				}
+				delete(h.Clients, userID)
+			}
+			for commID := range h.Communities {
+				delete(h.Communities, commID)
+			}
+			h.updateStats()
+			return
+
 		case c := <-h.Register:
 			if _, ok := h.Clients[c.UserID]; !ok {
 				h.Clients[c.UserID] = make(map[*client]bool)
-				// Abonnement dynamique au cluster
-				channel := fmt.Sprintf("channel:user:%d", c.UserID)
-				err := h.PubSub.Subscribe(context.Background(), channel)
-				if err != nil {
-					numan_log.Warn(context.Background()).Err(err).Str("channel", channel).Msg("Impossible de s'abonner au canal")
+				if h.PubSub != nil {
+					// Abonnement dynamique au cluster
+					channel := fmt.Sprintf("channel:user:%d", c.UserID)
+					err := h.PubSub.Subscribe(context.Background(), channel)
+					if err != nil {
+						numan_log.Warn(context.Background()).Err(err).Str("channel", channel).Msg("Impossible de s'abonner au canal")
+					}
 				}
 			}
 			h.Clients[c.UserID][c] = true
+			h.updateStats()
+
 		case c := <-h.Unregister:
 			if connections, ok := h.Clients[c.UserID]; ok {
 				if _, ok := connections[c]; ok {
@@ -104,23 +201,28 @@ func (h *hub) run() {
 
 					if len(connections) == 0 {
 						delete(h.Clients, c.UserID)
-						// Désabonnement réseau pour économiser le CPU Redis
-						channel := fmt.Sprintf("channel:user:%d", c.UserID)
-						err := h.PubSub.Unsubscribe(context.Background(), channel)
-						if err != nil {
-							numan_log.Warn(context.Background()).Err(err).Str("channel", channel).Msg("Impossible de se désabonner du canal")
+						if h.PubSub != nil {
+							// Désabonnement réseau pour économiser le CPU Redis
+							channel := fmt.Sprintf("channel:user:%d", c.UserID)
+							err := h.PubSub.Unsubscribe(context.Background(), channel)
+							if err != nil {
+								numan_log.Warn(context.Background()).Err(err).Str("channel", channel).Msg("Impossible de se désabonner du canal")
+							}
 						}
 					}
 				}
 			}
+			h.updateStats()
 
 		case sub := <-h.SubscribeCommunity:
 			if _, ok := h.Communities[sub.CommunityID]; !ok {
 				h.Communities[sub.CommunityID] = make(map[*client]bool)
-				channel := fmt.Sprintf("channel:community:%d", sub.CommunityID)
-				err := h.PubSub.Subscribe(context.Background(), channel)
-				if err != nil {
-					numan_log.Warn(context.Background()).Err(err).Str("channel", channel).Msg("Impossible de s'abonner au canal de communauté")
+				if h.PubSub != nil {
+					channel := fmt.Sprintf("channel:community:%d", sub.CommunityID)
+					err := h.PubSub.Subscribe(context.Background(), channel)
+					if err != nil {
+						numan_log.Warn(context.Background()).Err(err).Str("channel", channel).Msg("Impossible de s'abonner au canal de communauté")
+					}
 				}
 			}
 			h.Communities[sub.CommunityID][sub.Client] = true
@@ -137,6 +239,10 @@ func (h *hub) run() {
 							delete(connections, client)
 						}
 					}
+					if len(connections) == 0 {
+						delete(h.Clients, msg.TargetID)
+					}
+					h.updateStats()
 				}
 			} else if msg.ChannelType == "community" {
 				if connections, ok := h.Communities[msg.TargetID]; ok {

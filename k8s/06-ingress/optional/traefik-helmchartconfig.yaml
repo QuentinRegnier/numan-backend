@@ -3,9 +3,10 @@
 #     kubectl apply -f 06-ingress/optional/traefik-helmchartconfig.yaml
 #
 # Why:
-#  * externalTrafficPolicy: Local  -> preserves the real client IP (needed for logs/rate limits/LCEN-style
-#    connection logging; with the default "Cluster" policy the app sees a node IP). Consequence: DNS/the load
-#    balancer must only point at nodes that RUN a Traefik pod (with replicas: 2, use 2 nodes).
+#  * externalTrafficPolicy: Local  -> preserves the real client IP (MANDATORY for Traefik Middleware/wireguard-only
+#    ipAllowList on optional Admin UIs, Go AdminGuard WIREGUARD_SUBNET checks, rate limits, and LCEN-style
+#    connection logging; with the default "Cluster" policy Kubernetes SNATs traffic and Traefik sees a node IP).
+#    Consequence: DNS/the load balancer must only point at nodes that RUN a Traefik pod (with replicas: 2, use 2 nodes).
 #  * replicas: 2                   -> ingress survives the loss of one Traefik pod (and one node if they land on different nodes).
 #  * access logs enabled           -> request log with client IPs, status and latency (also the only ingress error-rate source
 #    until Traefik metrics are scraped).
@@ -23,6 +24,34 @@ spec:
     service:
       spec:
         externalTrafficPolicy: Local
+    affinity:
+      nodeAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+                - key: numan.io/node-profile
+                  operator: In
+                  values: ["ingress"]
+          - weight: 50
+            preference:
+              matchExpressions:
+                - key: numan.io/node-profile
+                  operator: In
+                  values: ["all-in-one"]
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: traefik
+              topologyKey: kubernetes.io/hostname
+    tolerations:
+      - key: numan.io/dedicated
+        operator: Equal
+        value: ingress
+        effect: NoSchedule
     logs:
       access:
         enabled: true

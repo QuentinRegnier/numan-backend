@@ -1,0 +1,162 @@
+# PostgreSQL High Availability via CloudNativePG (CNPG) operator.
+#
+# Prerequisites:
+#   1. Install the CNPG operator once per cluster: `make install-cnpg` (scripts/install-cnpg.sh).
+#   2. Provision Secrets (including postgres-cnpg-credentials): `scripts/create-secrets.sh`.
+#   3. In infrastructure.env, set:
+#        DB_POSTGRES_STANDALONE_REPLICAS=0
+#        DB_POSTGRES_INSTANCES=3          # 1 = single CNPG, 2 = dev test, 3+ odd = prod HA
+#        DB_POSTGRES_HOST=postgres-rw
+#        DB_POSTGRES_READ_HOST=postgres-ro
+#
+# Managed Services created automatically by CNPG:
+#   * postgres-rw :5432 -> ALWAYS points to the live Primary (writes & read-your-writes)
+#   * postgres-ro :5432 -> load-balances across healthy Read Replicas only
+#   * postgres-r  :5432 -> load-balances across ALL instances (fallback if all replicas are down)
+#
+# Hardware plasticity:
+#   * podAntiAffinityType: preferred (SOFT) -> spreads postgres-1..N across different physical
+#     servers whenever available, while STILL allowing all 3 pods on a single physical server
+#     equipped with 3 separate NVMe SSDs via WaitForFirstConsumer local PVs
+#     (set STORAGE_CLASS_POSTGRES=nvme-postgres; see 04-storage/nvme-local-pv.example.yaml).
+#
+# Failover:
+#   * Automatic primary election + pg_rewind handled natively by CloudNativePG (<15s failover).
+#   * Manual switchover drill: `kubectl cnpg promote postgres postgres-2 -n numan`
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: postgres
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: database
+spec:
+  instances: ${DB_POSTGRES_INSTANCES}
+  imageName: ghcr.io/cloudnative-pg/postgresql:16.10
+  imagePullPolicy: IfNotPresent
+
+  # Propagate standard Numan labels so NetworkPolicies (allow-ingress-to-postgres / allow-egress-to-postgres)
+  # match CNPG pods identically to standalone PostgreSQL pods.
+  inheritedMetadata:
+    labels:
+      app.kubernetes.io/name: postgres
+      app.kubernetes.io/part-of: numan
+      app.kubernetes.io/component: database
+
+  primaryUpdateStrategy: unsupervised
+  primaryUpdateMethod: switchover
+  startDelay: 120
+  stopDelay: 120
+  switchoverDelay: 60
+
+  bootstrap:
+    initdb:
+      database: numan
+      owner: numan
+      secret:
+        name: postgres-cnpg-credentials
+
+  postgresql:
+    parameters:
+      max_connections: "${DB_POSTGRES_MAX_CONNECTIONS}"
+      wal_level: "logical"
+      max_wal_senders: "10"
+      max_replication_slots: "10"
+      wal_keep_size: "512MB"
+      # Tune shared_buffers (~25% of container memory limit) and work_mem from production telemetry.
+      shared_buffers: "256MB"
+      checkpoint_completion_target: "0.9"
+      log_min_duration_statement: "500"
+
+  storage:
+    size: "${PVC_SIZE_POSTGRES}"
+    storageClass: "${STORAGE_CLASS_POSTGRES}"
+
+  resources:
+    requests:
+      cpu: "${POSTGRES_CPU_REQUEST}"
+      memory: "${POSTGRES_MEMORY_REQUEST}"
+    limits:
+      cpu: "${POSTGRES_CPU_LIMIT}"
+      memory: "${POSTGRES_MEMORY_LIMIT}"
+
+  affinity:
+    enablePodAntiAffinity: true
+    podAntiAffinityType: preferred
+    topologyKey: kubernetes.io/hostname
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          preference:
+            matchExpressions:
+              - key: numan.io/node-profile
+                operator: In
+                values: ["db-sql"]
+        - weight: 80
+          preference:
+            matchExpressions:
+              - key: numan.io/node-profile
+                operator: In
+                values: ["db"]
+        - weight: 50
+          preference:
+            matchExpressions:
+              - key: numan.io/node-profile
+                operator: In
+                values: ["all-in-one"]
+    tolerations:
+      - key: numan.io/dedicated
+        operator: Equal
+        value: db-sql
+        effect: NoSchedule
+      - key: numan.io/dedicated
+        operator: Equal
+        value: db
+        effect: NoSchedule
+
+  # Optional: enable once kube-prometheus-stack / PodMonitor CRD is installed.
+  monitoring:
+    enablePodMonitor: false
+
+  # Optional Point-In-Time Recovery (PITR) via continuous WAL archiving to off-site S3.
+  # Uncomment after configuring an S3 bucket in Secret backup-credentials:
+  # backup:
+  #   retentionPolicy: "30d"
+  #   barmanObjectStore:
+  #     destinationPath: "s3://<BACKUP_MIRROR_BUCKET>/cnpg-wal/${ENVIRONMENT_NAME}"
+  #     endpointURL: "https://<BACKUP_S3_ENDPOINT>"
+  #     s3Credentials:
+  #       accessKeyId:
+  #         name: backup-credentials
+  #         key: AWS_ACCESS_KEY_ID
+  #       secretAccessKey:
+  #         name: backup-credentials
+  #         key: AWS_SECRET_ACCESS_KEY
+  #     wal:
+  #       compression: gzip
+  #       maxParallel: 2
+---
+# Topology-aware Read-Replica Service (Kubernetes 1.31+ trafficDistribution: PreferClose).
+# Routes read queries to a same-zone/same-node CNPG read replica first to minimize network latency,
+# falling back automatically to other healthy replicas in the cluster.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-ro-local
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: database
+spec:
+  type: ClusterIP
+  trafficDistribution: PreferClose
+  selector:
+    cnpg.io/cluster: postgres
+    cnpg.io/instanceRole: replica
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432

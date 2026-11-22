@@ -25,7 +25,7 @@ func FuncLoadSession(ctx context.Context, ID int64, UserId int64, FirebaseInstal
 		)
 	}
 
-	if postgres.PostgresDB == nil {
+	if postgres.WriteDB() == nil {
 		return auth_models.SessionsPayload{}, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -71,7 +71,7 @@ func FuncLoadSession(ctx context.Context, ID int64, UserId int64, FirebaseInstal
 	res.LastJWT = ""
 	res.ToleranceTime = domain.TimeToMillis(time.Time{})
 
-	err := postgres.PostgresDB.QueryRowContext(ctx, sqlStatement, args...).Scan(
+	err := postgres.WriteDB().QueryRowContext(ctx, sqlStatement, args...).Scan(
 		&res.ID,
 		&res.UserID,
 		&res.MasterToken,

@@ -17,7 +17,7 @@ type userIdentifiers struct {
 }
 
 func FuncLoadAllUserIdentifiers(ctx context.Context) ([]userIdentifiers, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -27,7 +27,7 @@ func FuncLoadAllUserIdentifiers(ctx context.Context) ([]userIdentifiers, error) 
 	}
 
 	query := `SELECT username, email, phone FROM auth.func_load_all_user_identifiers()`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

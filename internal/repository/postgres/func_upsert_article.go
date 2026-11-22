@@ -13,7 +13,7 @@ import (
 
 // FuncUpsertArticle insère ou met à jour de manière idempotente un article en PostgreSQL L3.
 func FuncUpsertArticle(ctx context.Context, a article_models.ArticlePayload) error {
-	if postgres.PostgresDB == nil {
+	if postgres.WriteDB() == nil {
 		return numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -36,7 +36,7 @@ func FuncUpsertArticle(ctx context.Context, a article_models.ArticlePayload) err
 		SELECT content.func_upsert_article($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	`
 
-	_, err := postgres.PostgresDB.ExecContext(
+	_, err := postgres.WriteDB().ExecContext(
 		ctx,
 		query,
 		a.ID,

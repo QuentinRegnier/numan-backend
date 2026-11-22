@@ -13,7 +13,7 @@ import (
 
 // FuncLoadActiveCommunities appelle la fonction SQL pour récupérer les communautés publiques
 func FuncLoadActiveCommunities(ctx context.Context) ([]lite_models.CommunityLiteRequest, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -24,7 +24,7 @@ func FuncLoadActiveCommunities(ctx context.Context) ([]lite_models.CommunityLite
 
 	query := `SELECT id, name, description, avatar_id, member_count FROM messaging.func_load_active_communities()`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

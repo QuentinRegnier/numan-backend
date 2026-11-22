@@ -12,7 +12,7 @@ import (
 
 // FuncLoadAllTags récupère tous les slugs actifs depuis la base de données.
 func FuncLoadAllTags(ctx context.Context) ([]string, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -23,7 +23,7 @@ func FuncLoadAllTags(ctx context.Context) ([]string, error) {
 
 	sqlStatement := `SELECT slug FROM content.func_load_all_tags()`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, sqlStatement)
+	rows, err := postgres.ReadDB().QueryContext(ctx, sqlStatement)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

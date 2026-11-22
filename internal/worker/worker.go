@@ -10,6 +10,7 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
+	"github.com/QuentinRegnier/numan-backend/internal/pkg/metrics"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 )
@@ -45,39 +46,61 @@ func init() {
 // # WORKER PRINCIPAL : MOTEUR DE DÉPILEMENT ET DE DISPATCH
 // ############################################################################
 
-// runWorker est la boucle infinie exécutée par chaque Shard.
-// Elle consomme les événements Redis et applique un backoff exponentiel en cas d'inactivité.
+// runWorker est la boucle infinie exécutée sur un shard donné (rétrocompatible).
 func runWorker(ctx context.Context, shardID int) {
+	runWorkerOnShards(ctx, shardID, []int{shardID})
+}
+
+// runWorkerOnShards est la boucle infinie exécutée par une goroutine worker sur ses shards assignés.
+// Elle consomme les événements Redis et applique un backoff exponentiel en cas d'inactivité.
+func runWorkerOnShards(ctx context.Context, workerID int, shards []int) {
 	currentBackoff := minBackoff
 
 	for {
 		// ── ÉTAPE 1 : ÉCOUTE DU SIGNAL D'ARRÊT GRACIEUX ─────────────────────
 		select {
 		case <-ctx.Done():
-			numan_log.Info(ctx).Int("shard_id", shardID).Msg("Worker : Arrêt gracieux de la boucle de consommation.")
+			numan_log.Info(ctx).Int("worker_id", workerID).Msg("Worker : Arrêt gracieux de la boucle de consommation.")
 			return
 		default:
 		}
 
-		// ── ÉTAPE 2 : DÉPILEMENT BLOQUANT (BLMPOP) ──────────────────────────
+		// ── ÉTAPE 2 : DÉPILEMENT BLOQUANT (BLPOP MULTI-SHARDS) ──────────────
 		// Le worker se met en pause (0 CPU) jusqu'à ce qu'un événement arrive
 		// ou que le timeout de Redis soit atteint.
-		events, err := redis.PopSmartBatchBlocking(ctx, shardID, maxBatchSize)
+		events, err := redis.PopSmartBatchBlockingMulti(ctx, shards, maxBatchSize)
 		if err != nil {
-			numan_log.Error(ctx).Err(err).Int("shard_id", shardID).Msg("Worker Redis : Échec critique lors du dépilement (BLMPOP)")
-			time.Sleep(1 * time.Second) // Temporisation de sécurité en cas de crash réseau
+			if ctx.Err() != nil {
+				numan_log.Info(ctx).Int("worker_id", workerID).Msg("Worker : Arrêt gracieux suite à l'annulation du contexte.")
+				return
+			}
+			numan_log.Error(ctx).Err(err).Int("worker_id", workerID).Msg("Worker Redis : Échec critique lors du dépilement (BLPOP)")
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(1 * time.Second): // Temporisation de sécurité en cas de crash réseau
+			}
 			continue
 		}
 
 		// ── ÉTAPE 3 : TRAITEMENT ET GESTION DE L'ÉNERGIE (BACKOFF) ──────────
 		if len(events) > 0 {
-			processBatch(ctx, events)
+			// On détache l'annulation parente le temps de finaliser ce lot déjà dépilé de Redis
+			// afin de garantir zéro perte de données pendant un SIGTERM Kubernetes.
+			batchCtx, cancelBatch := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			processBatch(batchCtx, events)
+			cancelBatch()
 
 			// RESET DU SOMMEIL : on a trouvé du travail, on repasse en hyperactivité !
 			currentBackoff = minBackoff
 		} else {
 			// SLEEP : la file était vide (malgré le blocage initial), on s'endort doucement.
-			time.Sleep(currentBackoff)
+			select {
+			case <-ctx.Done():
+				numan_log.Info(ctx).Int("worker_id", workerID).Msg("Worker : Arrêt gracieux pendant le backoff.")
+				return
+			case <-time.After(currentBackoff):
+			}
 			currentBackoff *= 2
 			if currentBackoff > maxBackoff {
 				currentBackoff = maxBackoff
@@ -134,6 +157,7 @@ func processBatch(ctx context.Context, events []redis.AsyncEvent) {
 	// Si on mettait à jour le cache algorithmique avant, une erreur BDD créerait
 	// une désynchronisation permanente entre la RAM et le disque.
 	wg.Wait()
+	metrics.IncWorkerBatch(len(validEvents))
 
 	// ── ÉTAPE 5 : HYDRATATION DES CACHES ALGORITHMIQUES (L1) ────────────────
 	// À cet instant, on est certain que le disque est à jour.

@@ -171,7 +171,7 @@ func ResolvePublicMediaMapCascade(ctx context.Context, mediaIDs []int64) map[int
 // generateWatermarkedURL crée l'URL finale pointant vers le micro-service de tatouage.
 // Elle est signée cryptographiquement avec HMAC pour empêcher la falsification des paramètres.
 func generateWatermarkedURL(mediaStoragePath string, authorID int64, contextID int64, readerID int64) string {
-	baseURL := os.Getenv("WATERMARK_API_URL")
+	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("WATERMARK_API_URL")), "/")
 	secretKey := os.Getenv("WATERMARK_SECRET_KEY")
 	currentTimestamp := domain.TimeToSeconds(domain.NowTime())
 

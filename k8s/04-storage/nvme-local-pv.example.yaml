@@ -1,0 +1,124 @@
+# EXAMPLE: Hardware-Aware Local NVMe StorageClasses & PersistentVolumes (NOT in kustomization.yaml).
+#
+# Why this exists:
+#   Kubernetes `local` PersistentVolumes with `volumeBindingMode: WaitForFirstConsumer` let you bind
+#   each database replica to a DEDICATED physical NVMe SSD — supporting BOTH topologies seamlessly:
+#
+#   1. SINGLE PHYSICAL SERVER WITH MULTIPLE NVMe SSDs (e.g. 1 bare-metal host with 3 NVMe drives):
+#      - Mount /dev/nvme0n1 -> /mnt/nvme0, /dev/nvme1n1 -> /mnt/nvme1, /dev/nvme2n1 -> /mnt/nvme2
+#      - Create 3 PVs on the SAME node (`server-fr-01`) with `storageClassName: nvme-postgres`
+#      - Because all database manifests use SOFT podAntiAffinity (`preferred`), Kubernetes schedules
+#        postgres-1, postgres-2, postgres-3 onto server-fr-01 and binds EACH pod to its own
+#        dedicated physical NVMe SSD (zero I/O contention, independent disk failure domains).
+#
+#   2. MULTI-SERVER HA CLUSTER (e.g. 3 bare-metal hosts, 1+ NVMe each):
+#      - Create 1 PV per server (`server-fr-01`, `server-fr-02`, `server-fr-03`)
+#      - Soft podAntiAffinity + WaitForFirstConsumer automatically places 1 replica on each server!
+#
+# Use scripts/bind-nvme-disk.sh to generate ready-to-apply PV manifests for your real node names.
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nvme-postgres
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nvme-mongo
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nvme-redis
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain
+---
+# Example PV #1: binds to physical NVMe #0 on node "server-fr-01" for PostgreSQL replica 1.
+# Prerequisite on host: mkdir -p /mnt/nvme0/postgres && chown 999:999 /mnt/nvme0/postgres
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-postgres-nvme0-fr01
+  labels:
+    app.kubernetes.io/part-of: numan
+    numan.io/storage-tier: nvme-postgres
+spec:
+  capacity:
+    storage: 200Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nvme-postgres
+  local:
+    path: /mnt/nvme0/postgres
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - server-fr-01
+---
+# Example PV #2: binds to physical NVMe #1 on SAME node "server-fr-01" (or "server-fr-02" in multi-node).
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-postgres-nvme1-fr01
+  labels:
+    app.kubernetes.io/part-of: numan
+    numan.io/storage-tier: nvme-postgres
+spec:
+  capacity:
+    storage: 200Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nvme-postgres
+  local:
+    path: /mnt/nvme1/postgres
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - server-fr-01
+---
+# Example PV #3: binds to physical NVMe #2 on SAME node "server-fr-01" (or "server-fr-03" in multi-node).
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-postgres-nvme2-fr01
+  labels:
+    app.kubernetes.io/part-of: numan
+    numan.io/storage-tier: nvme-postgres
+spec:
+  capacity:
+    storage: 200Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nvme-postgres
+  local:
+    path: /mnt/nvme2/postgres
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - server-fr-01

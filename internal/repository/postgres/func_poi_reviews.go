@@ -19,7 +19,7 @@ func FuncGetPOIReviewByUser(ctx context.Context, poiID, userID int64) (map_model
 		return map_models.POIReviewPayload{}, false, nil
 	}
 
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return map_models.POIReviewPayload{}, false, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -35,7 +35,7 @@ func FuncGetPOIReviewByUser(ctx context.Context, poiID, userID int64) (map_model
 
 	var r map_models.POIReviewPayload
 	var contentSQL sql.NullString
-	err := postgres.PostgresDB.QueryRowContext(ctx, query, poiID, userID).Scan(
+	err := postgres.ReadDB().QueryRowContext(ctx, query, poiID, userID).Scan(
 		&r.ID,
 		&r.POIID,
 		&r.UserID,
@@ -69,7 +69,7 @@ func FuncGetPOIReviewsPaginated(ctx context.Context, poiID int64, limit, offset 
 		return []map_models.POIReviewPayload{}, nil
 	}
 
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -83,7 +83,7 @@ func FuncGetPOIReviewsPaginated(ctx context.Context, poiID int64, limit, offset 
 		FROM content.func_get_poi_reviews_paginated($1, $2, $3)
 	`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, poiID, limit, offset)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, poiID, limit, offset)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
@@ -107,7 +107,7 @@ func FuncGetPOIReviewsByIDs(ctx context.Context, reviewIDs []int64) ([]map_model
 		return []map_models.POIReviewPayload{}, nil
 	}
 
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -121,7 +121,7 @@ func FuncGetPOIReviewsByIDs(ctx context.Context, reviewIDs []int64) ([]map_model
 		FROM content.func_get_poi_reviews_by_ids($1)
 	`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, pq.Array(reviewIDs))
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, pq.Array(reviewIDs))
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

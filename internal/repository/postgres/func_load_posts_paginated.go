@@ -12,7 +12,7 @@ import (
 )
 
 func FuncLoadPostsPaginated(ctx context.Context, limit int, offset int) ([]post_models.PostPayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -23,7 +23,7 @@ func FuncLoadPostsPaginated(ctx context.Context, limit int, offset int) ([]post_
 
 	query := `SELECT * FROM content.func_load_posts_paginated($1, $2)`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, limit, offset)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, limit, offset)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

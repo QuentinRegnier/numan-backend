@@ -17,7 +17,7 @@ type orphanMediaResult struct {
 
 // FuncDeleteOrphanMedia exécute la purge SQL et retourne les médias détruits.
 func FuncDeleteOrphanMedia(ctx context.Context) ([]orphanMediaResult, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.WriteDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -27,7 +27,7 @@ func FuncDeleteOrphanMedia(ctx context.Context) ([]orphanMediaResult, error) {
 	}
 
 	query := `SELECT id, storage_path FROM content.func_delete_orphan_media()`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query)
+	rows, err := postgres.WriteDB().QueryContext(ctx, query)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

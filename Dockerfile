@@ -1,22 +1,17 @@
 # ==========================================
 # 1. BASE (Le socle commun)
 # ==========================================
-# On part de la même image Go que tu as choisie
 FROM golang:1.25-alpine AS base
 
-# POURQUOI : On installe les outils C ici pour ne le faire qu'une seule fois.
-# C'est l'étape la plus longue (gcc, musl-dev, libwebp-dev).
-# Docker mettra cette étape en cache_service et ne la refera plus jamais tant que tu ne touches pas à cette ligne.
-RUN apk add --no-cache_service gcc musl-dev libwebp-dev
+# Outils C nécessaires à la compilation CGo (gcc, musl-dev, libwebp-dev)
+RUN apk add --no-cache gcc musl-dev libwebp-dev
 
 WORKDIR /app
 
-# POURQUOI : On installe "Air" ici.
-# C'est l'outil qui va surveiller tes fichiers et redémarrer l'appli en 1 seconde.
+# Live-reload pour le target dev uniquement
 RUN go install github.com/air-verse/air@latest
 
-# POURQUOI : On télécharge les dépendances Go (go.mod/sum).
-# En le faisant dans "base", le cache_service est partagé entre le mode Dev et le mode Prod.
+# Cache partagé des dépendances Go
 COPY go.mod go.sum ./
 RUN go mod download
 
@@ -25,44 +20,65 @@ RUN go mod download
 # ==========================================
 FROM base AS dev
 
-# POURQUOI : On ne fait PAS de "COPY . ." ici.
-# En dev, ton code sera "monté" via le docker-compose (volumes).
-# Ainsi, Air verra tes fichiers locaux changer instantanément.
-
-# Commande de démarrage pour le dev : on lance Air
 CMD ["air", "-c", ".air.toml"]
 
 # ==========================================
-# 3. BUILDER-PROD (La compilation pour la Prod)
+# 3. BUILDER-WATERMARK (Compilation du microservice Watermark)
 # ==========================================
-# On repart de "base", mais cette fois pour construire le binaire final
-FROM base AS builder-prod
+FROM base AS builder-watermark
 
-# POURQUOI : Ici, on COPIE le code source dans l'image.
-# C'est nécessaire pour la prod car l'image doit être autonome (sans volume).
 COPY . .
 
-# Ta commande de compilation originale (optimisée et strippée)
-RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-w -s" -o numan cmd/main.go
+RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-w -s" -o numan-watermark ./cmd/watermark
 
 # ==========================================
-# 4. PROD (L'image finale légère)
+# 4. WATERMARK (Image finale légère non-root UID 10001)
+# Build: docker build --target watermark -t <registry>/numan-watermark:<tag> .
 # ==========================================
-# C'est ton étape finale actuelle, inchangée.
-FROM alpine:latest AS prod
+FROM alpine:3.21 AS watermark
 
-# On réinstalle la lib d'exécution (nécessaire pour l'image finale minimaliste)
-RUN apk add --no-cache_service libwebp ca-certificates
+RUN apk add --no-cache ca-certificates libwebp \
+    && addgroup -g 10001 -S numan \
+    && adduser -u 10001 -S -G numan -H -s /sbin/nologin numan
 
 WORKDIR /app
 
-# On copie uniquement le binaire compilé depuis l'étape "builder-prod"
-COPY --from=builder-prod /app/numan .
-COPY --from=builder-prod /app/docs ./docs
-COPY --from=builder-prod /app/docs.html .
+COPY --from=builder-watermark --chown=10001:10001 /app/numan-watermark ./numan-watermark
+RUN chmod 0555 /app/numan-watermark
 
-RUN mkdir -p /app/uploads
-ENV GIN_MODE=release
+USER 10001:10001
 EXPOSE 8080
+
+CMD ["./numan-watermark"]
+
+# ==========================================
+# 5. BUILDER-PROD (Compilation de l'API & Worker)
+# ==========================================
+FROM base AS builder-prod
+
+COPY . .
+
+RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-w -s" -o numan ./cmd/main.go
+
+# ==========================================
+# 6. PROD (Image finale légère non-root UID 10001 — API & Worker)
+# Build: docker build --target prod -t <registry>/numan-api:<tag> .
+# ==========================================
+FROM alpine:3.21 AS prod
+
+RUN apk add --no-cache libwebp ca-certificates \
+    && addgroup -g 10001 -S numan \
+    && adduser -u 10001 -S -G numan -H -s /sbin/nologin numan
+
+WORKDIR /app
+
+COPY --from=builder-prod --chown=10001:10001 /app/numan ./numan
+COPY --from=builder-prod --chown=10001:10001 /app/docs ./docs
+COPY --from=builder-prod --chown=10001:10001 /app/docs.html ./docs.html
+RUN chmod 0555 /app/numan
+
+ENV GIN_MODE=release
+USER 10001:10001
+EXPOSE 8080 9090
 
 CMD ["./numan"]

@@ -15,7 +15,7 @@ import (
 // FuncGetPOIsInBBox récupère les Points d'Intérêt situés dans une Bounding Box depuis PostgreSQL L3
 // via la fonction SQL `content.func_get_pois_in_bbox` (fallback sur cache miss spatial L1).
 func FuncGetPOIsInBBox(ctx context.Context, swLat, swLng, neLat, neLng float64, limit int) ([]map_models.POIPayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -35,7 +35,7 @@ func FuncGetPOIsInBBox(ctx context.Context, swLat, swLng, neLat, neLng float64, 
 		FROM content.func_get_pois_in_bbox($1, $2, $3, $4, $5)
 	`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, swLat, swLng, neLat, neLng, limit)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, swLat, swLng, neLat, neLng, limit)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

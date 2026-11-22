@@ -85,6 +85,26 @@ spec:
         fsGroup: 1000
         fsGroupChangePolicy: OnRootMismatch
         seccompProfile: {type: RuntimeDefault}
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["storage"]
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["all-in-one"]
+      tolerations:
+        - key: numan.io/dedicated
+          operator: Equal
+          value: storage
+          effect: NoSchedule
       containers:
         - name: minio
           # Image is a deployment variable (MINIO_IMAGE): see SUPPLY-CHAIN WARNING above.

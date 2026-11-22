@@ -12,7 +12,7 @@ import (
 
 // FuncLoadMessageIDsPaginated récupère uniquement l'Index depuis le B-Tree Postgres (0.1ms) en appliquant le gel de l'historique.
 func FuncLoadMessageIDsPaginated(ctx context.Context, convID int64, offsetID int64, limit int64, direction string, frozenID int64) ([]int64, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -28,7 +28,7 @@ func FuncLoadMessageIDsPaginated(ctx context.Context, convID int64, offsetID int
 
 	query := `SELECT id FROM messaging.func_load_message_ids_paginated($1, $2, $3, $4, $5)`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, convID, offsetID, limit, direction, pFrozenID)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, convID, offsetID, limit, direction, pFrozenID)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

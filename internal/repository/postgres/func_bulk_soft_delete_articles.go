@@ -16,7 +16,7 @@ func FuncBulkSoftDeleteArticles(ctx context.Context, articleIDs []int64) error {
 		return nil
 	}
 
-	if postgres.PostgresDB == nil {
+	if postgres.WriteDB() == nil {
 		return numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -26,7 +26,7 @@ func FuncBulkSoftDeleteArticles(ctx context.Context, articleIDs []int64) error {
 	}
 
 	query := `SELECT content.func_bulk_soft_delete_articles($1)`
-	if _, err := postgres.PostgresDB.ExecContext(ctx, query, pq.Array(articleIDs)); err != nil {
+	if _, err := postgres.WriteDB().ExecContext(ctx, query, pq.Array(articleIDs)); err != nil {
 		return numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,

@@ -12,7 +12,7 @@ import (
 
 // FuncSearchPostIDsByTag appelle la procédure SQL de recherche par tag avec tri.
 func FuncSearchPostIDsByTag(ctx context.Context, tag string, orderMode int, offset, limit int64, lang ...int) ([]int64, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -32,7 +32,7 @@ func FuncSearchPostIDsByTag(ctx context.Context, tag string, orderMode int, offs
 		query = `SELECT id FROM content.func_search_post_ids_by_tag($1, $2::smallint, $3::integer, $4::integer)`
 		args = []any{tag, orderMode, offset, limit}
 	}
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, args...)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

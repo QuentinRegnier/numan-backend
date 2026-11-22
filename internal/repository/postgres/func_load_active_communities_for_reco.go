@@ -16,7 +16,7 @@ import (
 // FuncLoadActiveCommunitiesForReco charge toutes les communautés publiques actives (type=3, state=0)
 // avec leurs métadonnées complètes pour le worker de scoring.
 func FuncLoadActiveCommunitiesForReco(ctx context.Context) ([]community_recommendation_models.ActiveCommunityRecoRecord, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -26,7 +26,7 @@ func FuncLoadActiveCommunitiesForReco(ctx context.Context) ([]community_recommen
 	}
 
 	query := `SELECT id, title, description, avatar_id, lang, is_partner, pin_slot, settings, created_at, member_count FROM messaging.func_load_active_communities_for_reco()`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

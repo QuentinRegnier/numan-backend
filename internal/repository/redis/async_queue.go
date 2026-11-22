@@ -143,22 +143,37 @@ func EnqueueDB(ctx context.Context, id int64, partitionKey int64, entity EntityT
 
 // --- OUTILS POUR LE WORKER INTELLIGENT ---
 
-// PopSmartBatchBlocking attend une donnée sans consommer de CPU, puis rafle jusqu'à batchSize éléments.
+// PopSmartBatchBlocking attend une donnée sans consommer de CPU, puis rafle jusqu'à batchSize éléments sur un shard.
 func PopSmartBatchBlocking(ctx context.Context, shardID int, batchSize int64) ([]AsyncEvent, error) {
-	shardStr := strconv.Itoa(shardID)
-	queueKey := fmt.Sprintf("%s%s", queueBasePrefix, shardStr) // q:14
-	statsKey := statsBasePrefix + shardStr
+	return PopSmartBatchBlockingMulti(ctx, []int{shardID}, batchSize)
+}
 
-	// 1. Attente BLOQUANTE du tout premier élément (Timeout de 2s pour pouvoir écouter le ctx.Done du serveur)
-	blpopRes, err := redisgo.Rdb.BLPop(ctx, 2*time.Second, queueKey).Result()
+// PopSmartBatchBlockingMulti attend de façon bloquante (BLPOP multi-clés natif Redis) sur un ou plusieurs shards
+// assignés à une goroutine worker, puis rafle jusqu'à batchSize éléments sur le shard réveillé.
+// Permet une plasticité totale du pool (de 1 à 1024 workers) sans jamais laisser de shard orphelin.
+func PopSmartBatchBlockingMulti(ctx context.Context, shardIDs []int, batchSize int64) ([]AsyncEvent, error) {
+	if len(shardIDs) == 0 {
+		return nil, nil
+	}
+
+	queueKeys := make([]string, len(shardIDs))
+	for i, id := range shardIDs {
+		queueKeys[i] = fmt.Sprintf("%s%d", queueBasePrefix, id)
+	}
+
+	// 1. Attente BLOQUANTE du tout premier élément sur l'un des shards assignés (Timeout 2s pour écouter ctx.Done)
+	blpopRes, err := redisgo.Rdb.BLPop(ctx, 2*time.Second, queueKeys...).Result()
 	if err != nil {
-		if errors.Is(err, redis.Nil) { // Timeout de 2s atteint, file toujours vide
+		if errors.Is(err, redis.Nil) { // Timeout de 2s atteint, files toujours vides
 			return nil, nil
 		}
 		return nil, err // Vraie erreur (ou context annulé)
 	}
 
-	// blpopRes[0] est la clé, blpopRes[1] est la valeur
+	// blpopRes[0] est la clé réveillée (ex: request_cache:q:14), blpopRes[1] est la valeur
+	queueKey := blpopRes[0]
+	shardStr := strings.TrimPrefix(queueKey, queueBasePrefix)
+	statsKey := statsBasePrefix + shardStr
 	rawElements := []string{blpopRes[1]}
 
 	// 2. On rafle le reste de la file d'un coup (Non-bloquant)
@@ -230,4 +245,26 @@ func GetShardID(id int64) int {
 func getShardID(id int64) uint32 {
 	idStr := strconv.FormatInt(id, 10)
 	return crc32.ChecksumIEEE([]byte(idStr)) % QueueShards
+}
+
+// TotalQueueDepth retourne le nombre total d'événements Write-Behind en attente sur les 64 shards Redis.
+func TotalQueueDepth(ctx context.Context) (int64, error) {
+	if redisgo.Rdb == nil {
+		return 0, errors.New("redis client not initialized")
+	}
+	pipe := redisgo.Rdb.Pipeline()
+	cmds := make([]*redis.IntCmd, QueueShards)
+	for i := 0; i < QueueShards; i++ {
+		cmds[i] = pipe.LLen(ctx, fmt.Sprintf("%s%d", queueBasePrefix, i))
+	}
+	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+		return 0, err
+	}
+	var total int64
+	for _, cmd := range cmds {
+		if n, err := cmd.Result(); err == nil {
+			total += n
+		}
+	}
+	return total, nil
 }

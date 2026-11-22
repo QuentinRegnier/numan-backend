@@ -15,7 +15,7 @@ import (
 // FuncLoadLikes charge les objets complets de likes pour permettre l'auto-guérison L2.
 // On passe <= 0 pour targetID ou userID si on ne souhaite pas filtrer sur ces champs.
 func FuncLoadLikes(ctx context.Context, targetType int, targetID int64, userID int64, limit int64, orderMode int64) ([]like_models.LikePayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -40,7 +40,7 @@ func FuncLoadLikes(ctx context.Context, targetType int, targetID int64, userID i
 	query := `SELECT id, target_type, target_id, user_id, created_at 
 	          FROM content.func_load_likes($1, $2, $3, $4, $5)`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, pTargetType, pTargetID, pUserID, limit, orderMode)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, pTargetType, pTargetID, pUserID, limit, orderMode)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

@@ -11,7 +11,7 @@ import (
 
 // FuncRegisterSteganoBan inscrit définitivement l'identifiant stéganographique d'un utilisateur banni pour infraction majeure.
 func FuncRegisterSteganoBan(ctx context.Context, userID int64, steganoID string, reason string, sourcePostID int64) error {
-	if postgres.PostgresDB == nil {
+	if postgres.WriteDB() == nil {
 		return numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -24,7 +24,7 @@ func FuncRegisterSteganoBan(ctx context.Context, userID int64, steganoID string,
 		postArg = sourcePostID
 	}
 	const query = `SELECT moderation.func_register_stegano_ban($1, $2, $3, $4)`
-	if _, err := postgres.PostgresDB.ExecContext(ctx, query, userID, steganoID, reason, postArg); err != nil {
+	if _, err := postgres.WriteDB().ExecContext(ctx, query, userID, steganoID, reason, postArg); err != nil {
 		return numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,

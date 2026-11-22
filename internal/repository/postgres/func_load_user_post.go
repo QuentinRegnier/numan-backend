@@ -14,7 +14,7 @@ import (
 // FuncLoadUserPostsKeyset charge les publications d'un utilisateur via content.func_load_user_posts_keyset.
 // Le curseur est composé de (beforeCreatedAt, beforeID). Si les deux sont nil, la première page est renvoyée.
 func FuncLoadUserPostsKeyset(ctx context.Context, userID int64, beforeCreatedAt *int64, beforeID *int64, limit int64) ([]post_models.PostPayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -25,7 +25,7 @@ func FuncLoadUserPostsKeyset(ctx context.Context, userID int64, beforeCreatedAt 
 
 	query := `SELECT * FROM content.func_load_user_posts_keyset($1, $2, $3, $4)`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, userID, beforeCreatedAt, beforeID, limit)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, userID, beforeCreatedAt, beforeID, limit)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

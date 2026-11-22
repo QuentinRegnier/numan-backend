@@ -16,7 +16,7 @@ func FuncCheckUnique(ctx context.Context, entity redis.EntityType, field string,
 		return false, err
 	}
 
-	if postgres.PostgresDB == nil {
+	if postgres.WriteDB() == nil {
 		return false, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -28,7 +28,7 @@ func FuncCheckUnique(ctx context.Context, entity redis.EntityType, field string,
 	query := `SELECT views.func_check_unique($1, $2, $3, $4::text)`
 
 	var exists bool
-	err = postgres.PostgresDB.QueryRowContext(ctx, query, target.Schema, target.Table, field, value).Scan(&exists)
+	err = postgres.WriteDB().QueryRowContext(ctx, query, target.Schema, target.Table, field, value).Scan(&exists)
 	if err != nil {
 		return false, numan_error.NewAppError(
 			http.StatusInternalServerError,

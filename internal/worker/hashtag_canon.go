@@ -314,14 +314,14 @@ func min3Int(a, b, c int) int {
 // persistCommunityTags sauvegarde les tags communautaires dans PostgreSQL.
 // Utilise la fonction SQL content.func_upsert_community_tags pour l'insertion de masse idempotente.
 func persistCommunityTags(ctx context.Context, tags []string) {
-	if len(tags) == 0 || postgres.PostgresDB == nil {
+	if len(tags) == 0 || postgres.WriteDB() == nil {
 		return
 	}
 
 	query := "SELECT content.func_upsert_community_tags($1)"
 
 	var inserted int
-	err := postgres.PostgresDB.QueryRowContext(ctx, query, pq.Array(tags)).Scan(&inserted)
+	err := postgres.WriteDB().QueryRowContext(ctx, query, pq.Array(tags)).Scan(&inserted)
 	if err != nil {
 		numan_log.Error(ctx).Err(err).Msg("Échec lors de la persistance SQL des tags communautaires (L3)")
 	} else {

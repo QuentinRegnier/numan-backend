@@ -13,7 +13,7 @@ import (
 
 // FuncLoadQuarantinedMediaPaginated charge la file des médias en quarantaine (visibility = 2) pour le back-office.
 func FuncLoadQuarantinedMediaPaginated(ctx context.Context, limit, offset int64) ([]media_models.MediaPayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -22,7 +22,7 @@ func FuncLoadQuarantinedMediaPaginated(ctx context.Context, limit, offset int64)
 		)
 	}
 	const query = `SELECT id, owner_id, storage_path, visibility, created_at, updated_at FROM moderation.func_load_quarantined_media_paginated($1::integer, $2::integer)`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, limit, offset)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, limit, offset)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

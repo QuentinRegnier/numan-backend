@@ -16,7 +16,7 @@ import (
 )
 
 func FuncLoadActiveConversations(ctx context.Context) ([]lite_models.ConvLiteRequest, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -26,7 +26,7 @@ func FuncLoadActiveConversations(ctx context.Context) ([]lite_models.ConvLiteReq
 	}
 
 	query := `SELECT id, type, title, description, avatar_id, last_message_id, settings, external_link, lang, is_partner, pin_slot FROM messaging.func_load_active_conversations()`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

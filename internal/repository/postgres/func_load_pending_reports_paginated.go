@@ -19,7 +19,7 @@ func FuncLoadPendingReportsPaginated(ctx context.Context, limit, offset int64) (
 
 // funcLoadPendingReportsFilteredPaginated charge les tickets en attente avec filtrage optionnel par origine (User/AutoAI/Hybrid) et type de cible.
 func FuncLoadPendingReportsFilteredPaginated(ctx context.Context, limit, offset int64, originFilter *int, targetTypeFilter *int) ([]report_models.ReportPayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -35,7 +35,7 @@ func FuncLoadPendingReportsFilteredPaginated(ctx context.Context, limit, offset 
 		targetTypeArg = *targetTypeFilter
 	}
 	const query = `SELECT id, reporter_id, report_origin, target_type, target_ids, target_owner_id, author_trust_score, ia_score_max, accumulated_report_score, report_count, category, reason, rationale, state, importance, created_at, updated_at FROM moderation.func_load_pending_reports_paginated($1::integer, $2::integer, $3::smallint, $4::smallint)`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, limit, offset, originArg, targetTypeArg)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, limit, offset, originArg, targetTypeArg)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

@@ -3,7 +3,12 @@ package mongo
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
+	"net/url"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
@@ -11,40 +16,276 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/mongo/readpref"
+	"go.mongodb.org/mongo-driver/mongo/writeconcern"
+)
+
+const (
+	defaultMongoHost             = "mongo"
+	defaultMongoPort             = "27017"
+	defaultMongoLocalThresholdMs = 15
+	defaultMongoMaxPoolSize      = 100
+	defaultMongoMinPoolSize      = 5
+	minMongoMaxStalenessSec      = 90
 )
 
 var MongoClient *mongo.Client
 
-func InitMongo() {
-	// 1. On récupère l'URI depuis le .env
-	user := os.Getenv("MONGO_ROOT_USER")
-	password := os.Getenv("MONGO_ROOT_PASSWORD")
-	uri := "mongodb://" + user + ":" + password + "@mongo:27017"
+// MongoConfig regroupe la configuration MongoDB résolue (Standalone ou Replica Set HA avec routage RTT).
+type MongoConfig struct {
+	URI            string
+	ReplicaSet     string
+	ReadPreference string
+	LocalThreshold time.Duration
+	MaxStaleness   time.Duration
+	WriteConcern   string
+	MaxPoolSize    uint64
+	MinPoolSize    uint64
+}
 
-	// SÉCURITÉ : Si vide, on met une valeur par défaut, MAIS on prévient
-	if uri == "" {
-		numan_log.Warn(context.Background()).Msg("MONGO_URI vide, fallback sur localhost (ça plantera dans Docker !)")
-		uri = "mongodb://localhost:27017"
+func parsePositiveIntEnv(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
 	}
+	v, err := strconv.Atoi(raw)
+	if err != nil || v <= 0 {
+		return fallback
+	}
+	return v
+}
+
+func normalizeMongoHosts(rawHosts, defaultPort string) string {
+	parts := strings.Split(rawHosts, ",")
+	cleaned := make([]string, 0, len(parts))
+	for _, p := range parts {
+		h := strings.TrimSpace(p)
+		if h == "" {
+			continue
+		}
+		if _, _, err := net.SplitHostPort(h); err != nil {
+			h = net.JoinHostPort(h, defaultPort)
+		}
+		cleaned = append(cleaned, h)
+	}
+	return strings.Join(cleaned, ",")
+}
+
+// ResolveMongoURI construit l'URI MongoDB de manière dynamique depuis les variables d'environnement.
+// Priorité :
+//  1. MONGO_URI complète (ex. Replica Set avec readPreference=nearest et tls=true)
+//  2. MONGO_HOSTS (seed list CSV multi-hôtes Replica Set) ou MONGO_HOST / MONGO_PORT / MONGO_DB
+//     avec credentials applicatifs (MONGO_APP_USER/MONGO_APP_PASSWORD en priorité, sinon MONGO_ROOT_*).
+func ResolveMongoURI() string {
+	if rawURI := strings.TrimSpace(os.Getenv("MONGO_URI")); rawURI != "" {
+		return rawURI
+	}
+
+	port := strings.TrimSpace(os.Getenv("MONGO_PORT"))
+	if port == "" {
+		port = defaultMongoPort
+	}
+
+	var authority string
+	if rawHosts := strings.TrimSpace(os.Getenv("MONGO_HOSTS")); rawHosts != "" {
+		authority = normalizeMongoHosts(rawHosts, port)
+	}
+	if authority == "" {
+		host := strings.TrimSpace(os.Getenv("MONGO_HOST"))
+		if host == "" {
+			host = defaultMongoHost
+		}
+		authority = net.JoinHostPort(host, port)
+	}
+
+	dbName := strings.TrimSpace(os.Getenv("MONGO_DB"))
+	if dbName == "" {
+		dbName = variables.MongoDatabaseName
+	}
+
+	user := strings.TrimSpace(os.Getenv("MONGO_APP_USER"))
+	password := os.Getenv("MONGO_APP_PASSWORD")
+	defaultAuthSource := dbName
+	if user == "" {
+		user = strings.TrimSpace(os.Getenv("MONGO_ROOT_USER"))
+		password = os.Getenv("MONGO_ROOT_PASSWORD")
+		defaultAuthSource = "admin"
+	}
+
+	authSource := strings.TrimSpace(os.Getenv("MONGO_AUTH_SOURCE"))
+	if authSource == "" {
+		authSource = defaultAuthSource
+	}
+
+	q := url.Values{}
+	userPrefix := ""
+	if user != "" {
+		userPrefix = url.UserPassword(user, password).String() + "@"
+		if authSource != "" {
+			q.Set("authSource", authSource)
+		}
+	}
+
+	if rs := strings.TrimSpace(os.Getenv("MONGO_REPLICA_SET")); rs != "" {
+		q.Set("replicaSet", rs)
+	}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("MONGO_TLS")), "true") {
+		q.Set("tls", "true")
+	}
+	if rp := strings.TrimSpace(os.Getenv("MONGO_READ_PREFERENCE")); rp != "" {
+		q.Set("readPreference", rp)
+	}
+
+	uri := fmt.Sprintf("mongodb://%s%s/%s", userPrefix, authority, dbName)
+	if encoded := q.Encode(); encoded != "" {
+		uri += "?" + encoded
+	}
+	return uri
+}
+
+// ResolveMongoConfig résout l'ensemble des paramètres HA, routage RTT, pool et tolérance aux pannes MongoDB.
+func ResolveMongoConfig() MongoConfig {
+	uri := ResolveMongoURI()
+	rs := strings.TrimSpace(os.Getenv("MONGO_REPLICA_SET"))
+
+	rp := strings.TrimSpace(os.Getenv("MONGO_READ_PREFERENCE"))
+	if rp == "" && rs != "" && !strings.Contains(strings.ToLower(uri), "readpreference=") {
+		rp = "secondaryPreferred"
+	}
+
+	localThresholdMs := parsePositiveIntEnv("MONGO_LOCAL_THRESHOLD_MS", defaultMongoLocalThresholdMs)
+
+	var maxStaleness time.Duration
+	if rawStale := strings.TrimSpace(os.Getenv("MONGO_MAX_STALENESS_SEC")); rawStale != "" {
+		if sec, err := strconv.Atoi(rawStale); err == nil && sec > 0 {
+			if sec < minMongoMaxStalenessSec {
+				sec = minMongoMaxStalenessSec
+			}
+			maxStaleness = time.Duration(sec) * time.Second
+		}
+	}
+
+	wc := strings.TrimSpace(os.Getenv("MONGO_WRITE_CONCERN"))
+	if wc == "" && rs != "" {
+		wc = "majority"
+	}
+
+	maxPool := uint64(parsePositiveIntEnv("MONGO_MAX_POOL_SIZE", defaultMongoMaxPoolSize))
+	minPool := uint64(parsePositiveIntEnv("MONGO_MIN_POOL_SIZE", defaultMongoMinPoolSize))
+	if minPool > maxPool {
+		minPool = maxPool
+	}
+
+	return MongoConfig{
+		URI:            uri,
+		ReplicaSet:     rs,
+		ReadPreference: rp,
+		LocalThreshold: time.Duration(localThresholdMs) * time.Millisecond,
+		MaxStaleness:   maxStaleness,
+		WriteConcern:   wc,
+		MaxPoolSize:    maxPool,
+		MinPoolSize:    minPool,
+	}
+}
+
+func resolveReadPref(mode string, maxStaleness time.Duration) *readpref.ReadPref {
+	var rpOpts []readpref.Option
+	if maxStaleness >= minMongoMaxStalenessSec*time.Second {
+		rpOpts = append(rpOpts, readpref.WithMaxStaleness(maxStaleness))
+	}
+
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "primary":
+		return readpref.Primary()
+	case "primarypreferred":
+		return readpref.PrimaryPreferred(rpOpts...)
+	case "secondary":
+		return readpref.Secondary(rpOpts...)
+	case "secondarypreferred":
+		return readpref.SecondaryPreferred(rpOpts...)
+	case "nearest":
+		return readpref.Nearest(rpOpts...)
+	default:
+		return nil
+	}
+}
+
+// BuildMongoClientOptions construit et valide les options du driver MongoDB (routage RTT, retries, pool, write concern).
+func BuildMongoClientOptions(cfg MongoConfig) (*options.ClientOptions, error) {
+	opts := options.Client().
+		ApplyURI(cfg.URI).
+		SetLocalThreshold(cfg.LocalThreshold).
+		SetRetryWrites(true).
+		SetRetryReads(true).
+		SetMaxPoolSize(cfg.MaxPoolSize).
+		SetMinPoolSize(cfg.MinPoolSize)
+
+	if cfg.ReplicaSet != "" {
+		opts.SetReplicaSet(cfg.ReplicaSet)
+	}
+	if rp := resolveReadPref(cfg.ReadPreference, cfg.MaxStaleness); rp != nil {
+		opts.SetReadPreference(rp)
+	}
+	if strings.EqualFold(cfg.WriteConcern, "majority") {
+		opts.SetWriteConcern(writeconcern.Majority())
+	}
+
+	if err := opts.Validate(); err != nil {
+		return nil, err
+	}
+	return opts, nil
+}
+
+// RedactMongoURI masque tout mot de passe présent dans une URI MongoDB (mono-hôte ou multi-hôtes) avant journalisation.
+func RedactMongoURI(rawURI string) string {
+	parsed, err := url.Parse(rawURI)
+	if err != nil || parsed.Scheme == "" {
+		return "<redacted-mongo-uri>"
+	}
+	return fmt.Sprintf("%s://%s%s", parsed.Scheme, parsed.Host, parsed.Path)
+}
+
+func InitMongo() {
+	cfg := ResolveMongoConfig()
+	safeTarget := RedactMongoURI(cfg.URI)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// 2. On se connecte
-	clientOptions := options.Client().ApplyURI(uri)
-	client, err := mongo.Connect(ctx, clientOptions)
+	clientOptions, err := BuildMongoClientOptions(cfg)
 	if err != nil {
-		numan_log.Fatal(ctx).Err(err).Msg("Impossible de créer le client Mongo")
+		numan_log.Fatal(ctx).Err(err).Str("mongo_target", safeTarget).Msg("Configuration MongoDB invalide")
 	}
 
-	// 3. Ping pour vérifier que ça marche VRAIMENT
-	err = client.Ping(ctx, nil)
+	client, err := mongo.Connect(ctx, clientOptions)
 	if err != nil {
-		numan_log.Fatal(ctx).Err(err).Str("uri", uri).Msg("Impossible de ping Mongo")
+		numan_log.Fatal(ctx).Err(err).Str("mongo_target", safeTarget).Msg("Impossible de créer le client Mongo")
+	}
+
+	// PrimaryPreferred tolère une brève élection Raft (<2s) au démarrage d'un pod sans crash en cascade
+	err = client.Ping(ctx, readpref.PrimaryPreferred())
+	if err != nil {
+		numan_log.Fatal(ctx).Err(err).Str("mongo_target", safeTarget).Msg("Impossible de ping Mongo")
 	}
 
 	MongoClient = client
-	numan_log.Info(ctx).Msg("Connecté à MongoDB avec succès !")
+	numan_log.Info(ctx).
+		Str("mongo_target", safeTarget).
+		Str("replica_set", cfg.ReplicaSet).
+		Str("read_preference", cfg.ReadPreference).
+		Int64("local_threshold_ms", cfg.LocalThreshold.Milliseconds()).
+		Str("write_concern", cfg.WriteConcern).
+		Int("max_pool_size", int(cfg.MaxPoolSize)).
+		Int("min_pool_size", int(cfg.MinPoolSize)).
+		Msg("Connecté à MongoDB avec succès !")
+}
+
+// CloseMongo ferme proprement la connexion MongoDB lors d'un arrêt gracieux.
+func CloseMongo(ctx context.Context) error {
+	if MongoClient == nil {
+		return nil
+	}
+	return MongoClient.Disconnect(ctx)
 }
 
 func EnsureIndexes(ctx context.Context, db *mongo.Database) error {

@@ -60,10 +60,19 @@ spec:
                 - |
                   set -eu
                   export PGPASSWORD="$POSTGRES_PASSWORD"
-                  pg_dump -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc -f /backup/numan.dump
-                  pg_dumpall -h postgres -U "$POSTGRES_USER" --globals-only -f /backup/globals.sql
+                  TARGET_HOST="$POSTGRES_HOST"
+                  if [ -n "$POSTGRES_READ_HOST" ]; then
+                    TARGET_HOST="$POSTGRES_READ_HOST"
+                  fi
+                  echo "Dumping PostgreSQL from $TARGET_HOST ..."
+                  pg_dump -h "$TARGET_HOST" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc -f /backup/numan.dump
+                  pg_dumpall -h "$TARGET_HOST" -U "$POSTGRES_USER" --globals-only -f /backup/globals.sql
                   ls -l /backup
               env:
+                - name: POSTGRES_HOST
+                  valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_HOST}}
+                - name: POSTGRES_READ_HOST
+                  valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_READ_HOST}}
                 - name: POSTGRES_USER
                   valueFrom: {secretKeyRef: {name: postgres-credentials, key: POSTGRES_USER}}
                 - name: POSTGRES_PASSWORD
@@ -162,10 +171,32 @@ spec:
               args:
                 - |
                   set -eu
-                  mongodump --host mongo --port 27017 --username "$MONGO_ROOT_USER" --password "$MONGO_ROOT_PASSWORD" \
-                    --authenticationDatabase admin --archive=/backup/mongo.archive.gz --gzip
+                  if [ -n "$MONGO_HOSTS" ] && [ -n "$MONGO_REPLICA_SET" ]; then
+                    echo "Dumping MongoDB Replica Set '$MONGO_REPLICA_SET' via secondaryPreferred + --oplog..."
+                    mongodump \
+                      --uri="mongodb://$MONGO_HOSTS/admin?replicaSet=$MONGO_REPLICA_SET&readPreference=secondaryPreferred" \
+                      --username "$MONGO_ROOT_USER" --password "$MONGO_ROOT_PASSWORD" \
+                      --oplog --archive=/backup/mongo.archive.gz --gzip
+                  elif [ -n "$MONGO_REPLICA_SET" ]; then
+                    echo "Dumping single-node Replica Set '$MONGO_REPLICA_SET' with --oplog..."
+                    mongodump --host "$MONGO_HOST" --port "$MONGO_PORT" \
+                      --username "$MONGO_ROOT_USER" --password "$MONGO_ROOT_PASSWORD" \
+                      --authenticationDatabase admin --oplog --archive=/backup/mongo.archive.gz --gzip
+                  else
+                    mongodump --host "$MONGO_HOST" --port "$MONGO_PORT" \
+                      --username "$MONGO_ROOT_USER" --password "$MONGO_ROOT_PASSWORD" \
+                      --authenticationDatabase admin --archive=/backup/mongo.archive.gz --gzip
+                  fi
                   ls -l /backup
               env:
+                - name: MONGO_HOST
+                  valueFrom: {configMapKeyRef: {name: numan-config, key: MONGO_HOST}}
+                - name: MONGO_PORT
+                  valueFrom: {configMapKeyRef: {name: numan-config, key: MONGO_PORT}}
+                - name: MONGO_HOSTS
+                  valueFrom: {configMapKeyRef: {name: numan-config, key: MONGO_HOSTS}}
+                - name: MONGO_REPLICA_SET
+                  valueFrom: {configMapKeyRef: {name: numan-config, key: MONGO_REPLICA_SET}}
                 - name: MONGO_ROOT_USER
                   valueFrom: {secretKeyRef: {name: mongo-credentials, key: MONGO_ROOT_USER}}
                 - name: MONGO_ROOT_PASSWORD
@@ -262,9 +293,26 @@ spec:
               args:
                 - |
                   set -eu
-                  redis-cli -h redis -p 6379 --rdb /backup/redis.rdb
+                  TARGET_HOST="redis"
+                  TARGET_PORT="6379"
+                  if [ -n "$REDIS_SENTINEL_ADDRS" ]; then
+                    # Prefer a healthy Replica discovered via Sentinel so RDB fork does not stall the Primary
+                    REP_IP="$(redis-cli --no-auth-warning -h redis-sentinel -p 26379 --raw SENTINEL replicas "$REDIS_MASTER_NAME" 2>/dev/null | awk 'f{print; exit} $0=="ip"{f=1}' || true)"
+                    if [ -n "$REP_IP" ]; then
+                      TARGET_HOST="$REP_IP"
+                    else
+                      MST_IP="$(redis-cli --no-auth-warning -h redis-sentinel -p 26379 --raw SENTINEL get-master-addr-by-name "$REDIS_MASTER_NAME" 2>/dev/null | sed -n '1p' || true)"
+                      if [ -n "$MST_IP" ]; then TARGET_HOST="$MST_IP"; fi
+                    fi
+                  fi
+                  echo "Dumping Redis RDB from $TARGET_HOST:$TARGET_PORT ..."
+                  redis-cli -h "$TARGET_HOST" -p "$TARGET_PORT" --rdb /backup/redis.rdb
                   ls -l /backup
               env:
+                - name: REDIS_MASTER_NAME
+                  valueFrom: {configMapKeyRef: {name: numan-config, key: REDIS_MASTER_NAME}}
+                - name: REDIS_SENTINEL_ADDRS
+                  valueFrom: {configMapKeyRef: {name: numan-config, key: REDIS_SENTINEL_ADDRS}}
                 - name: REDISCLI_AUTH
                   valueFrom: {secretKeyRef: {name: redis-credentials, key: REDIS_PASSWORD}}
               resources:

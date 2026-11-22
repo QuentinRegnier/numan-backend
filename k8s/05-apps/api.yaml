@@ -69,7 +69,7 @@ spec:
   podManagementPolicy: Parallel
   minReadySeconds: 10
   ordinals:
-    start: 1                        # pod api-1 -> NODE_ID=1, api-2 -> NODE_ID=2 (legacy values)
+    start: ${API_NODE_ID_START}     # Snowflake 10-bit NODE_ID base (default 1 -> api-1, api-2, ...; range validated <= 1023)
   updateStrategy:
     type: RollingUpdate             # one pod at a time, each must be Ready before the next
   selector:
@@ -77,6 +77,10 @@ spec:
       app.kubernetes.io/name: api
   template:
     metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
       labels:
         app.kubernetes.io/name: api
         app.kubernetes.io/part-of: numan
@@ -101,6 +105,26 @@ spec:
         runAsUser: 10001
         runAsGroup: 10001
         seccompProfile: {type: RuntimeDefault}
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["api"]
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["all-in-one"]
+      tolerations:
+        - key: numan.io/dedicated
+          operator: Equal
+          value: api
+          effect: NoSchedule
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
@@ -114,7 +138,7 @@ spec:
           command: ["sh", "-c"]
           args:
             - |
-              for hp in "postgres 5432" "mongo 27017" "redis 6379" "minio-hot 9000"; do
+              for hp in "${DB_POSTGRES_HOST} 5432" "mongo 27017" "redis 6379" "minio-hot 9000"; do
                 set -- $hp
                 until nc -z -w 2 "$1" "$2"; do echo "waiting for $1:$2"; sleep 3; done
               done
@@ -134,10 +158,13 @@ spec:
           imagePullPolicy: IfNotPresent
           ports:
             - {name: http, containerPort: 8080}
+            - {name: metrics, containerPort: 9090}
           envFrom:
             - configMapRef: {name: numan-config}
           env:
             # ---- identity: unique per pod, derived from the StatefulSet ordinal (no shell/wrapper needed) ----
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
             - name: NODE_ID
               valueFrom: {fieldRef: {fieldPath: "metadata.labels['apps.kubernetes.io/pod-index']"}}
             # ---- PostgreSQL: DB_DSN rebuilt from parts; Kubernetes expands $(VAR) only from vars defined ABOVE it ----
@@ -147,17 +174,19 @@ spec:
               valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_PORT}}
             - name: POSTGRES_DB
               valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_DB}}
+            - name: POSTGRES_SSLMODE
+              valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_SSLMODE}}
             - name: POSTGRES_USER
               valueFrom: {secretKeyRef: {name: postgres-credentials, key: POSTGRES_USER}}
             - name: POSTGRES_PASSWORD
               valueFrom: {secretKeyRef: {name: postgres-credentials, key: POSTGRES_PASSWORD}}
-            - name: DB_DSN             # same format as the legacy .env; sslmode=disable is a legacy value (see docs)
-              value: "host=$(POSTGRES_HOST) user=$(POSTGRES_USER) password=$(POSTGRES_PASSWORD) dbname=$(POSTGRES_DB) port=$(POSTGRES_PORT) sslmode=disable"
-            # ---- MongoDB (the legacy app is given the ROOT credentials; no app-specific user var exists) ----
-            - name: MONGO_ROOT_USER
-              valueFrom: {secretKeyRef: {name: mongo-credentials, key: MONGO_ROOT_USER}}
-            - name: MONGO_ROOT_PASSWORD
-              valueFrom: {secretKeyRef: {name: mongo-credentials, key: MONGO_ROOT_PASSWORD}}
+            - name: DB_DSN
+              value: "host=$(POSTGRES_HOST) user=$(POSTGRES_USER) password=$(POSTGRES_PASSWORD) dbname=$(POSTGRES_DB) port=$(POSTGRES_PORT) sslmode=$(POSTGRES_SSLMODE)"
+            # ---- MongoDB: least-privilege application user (readWrite on MONGO_DB only, provisioned by job/mongo-init) ----
+            - name: MONGO_APP_USER
+              valueFrom: {secretKeyRef: {name: mongo-app-credentials, key: MONGO_APP_USER}}
+            - name: MONGO_APP_PASSWORD
+              valueFrom: {secretKeyRef: {name: mongo-app-credentials, key: MONGO_APP_PASSWORD}}
             # ---- Redis ----
             - name: REDIS_PASSWORD
               valueFrom: {secretKeyRef: {name: redis-credentials, key: REDIS_PASSWORD}}
@@ -196,20 +225,19 @@ spec:
             # - name: <COLD_ACCESS_KEY_VAR>    valueFrom: {secretKeyRef: {name: minio-cold-users, key: S3_ACCESS_KEY}}
             # - name: <COLD_SECRET_KEY_VAR>    valueFrom: {secretKeyRef: {name: minio-cold-users, key: S3_SECRET_KEY}}
             # NetworkPolicy access to minio-cold is already granted by the numan.io/uses-minio-cold label below.
-          # Probes: the legacy files define NO health check and expose no /health evidence, so TCP probes
-          # are used. When /health is confirmed in the Go code, switch readiness to
-          #   httpGet: {path: /health, port: http}
+          # Real HTTP probes: /healthz checks process liveness; /readyz verifies Redis, Postgres, Mongo + shutdown state.
           startupProbe:
-            tcpSocket: {port: http}
+            httpGet: {path: /healthz, port: http}
             periodSeconds: 5
+            timeoutSeconds: 3
             failureThreshold: 60
           readinessProbe:
-            tcpSocket: {port: http}
+            httpGet: {path: /readyz, port: http}
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
           livenessProbe:
-            tcpSocket: {port: http}
+            httpGet: {path: /healthz, port: http}
             periodSeconds: 20
             timeoutSeconds: 3
             failureThreshold: 6

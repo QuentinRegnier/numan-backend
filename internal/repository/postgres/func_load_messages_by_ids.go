@@ -14,7 +14,7 @@ import (
 
 // FuncLoadMessagesByIDs est le fallback L3 d'hydratation
 func FuncLoadMessagesByIDs(ctx context.Context, messageIDs []int64) ([]message_models.MessagePayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -24,7 +24,7 @@ func FuncLoadMessagesByIDs(ctx context.Context, messageIDs []int64) ([]message_m
 	}
 
 	query := `SELECT id, conversation_id, sender_id, message_type, visibility, content, attachments, allow_new_reactions, created_at, updated_at FROM messaging.func_load_messages_by_ids($1)`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, pq.Array(messageIDs))
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, pq.Array(messageIDs))
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

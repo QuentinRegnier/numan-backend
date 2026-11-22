@@ -15,7 +15,7 @@ import (
 )
 
 func FuncLoadUser(ctx context.Context, ID int64, Username string, Email string, Phone string) (auth_models.UserPayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return auth_models.UserPayload{}, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -39,7 +39,7 @@ func FuncLoadUser(ctx context.Context, ID int64, Username string, Email string, 
 	}
 
 	sqlStatement := `SELECT * FROM auth.func_load_user($1, $2, $3, $4)`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, sqlStatement, args...)
+	rows, err := postgres.ReadDB().QueryContext(ctx, sqlStatement, args...)
 	if err != nil {
 		return auth_models.UserPayload{}, numan_error.NewAppError(
 			http.StatusInternalServerError,

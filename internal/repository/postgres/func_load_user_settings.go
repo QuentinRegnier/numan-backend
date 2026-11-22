@@ -15,7 +15,7 @@ import (
 
 // FuncLoadUserSettings charge les paramètres complets d'un utilisateur (incluant son ADN algorithmique)
 func FuncLoadUserSettings(ctx context.Context, userID int64) (user_settings_models.UserSettingsPayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return user_settings_models.UserSettingsPayload{}, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -30,7 +30,7 @@ func FuncLoadUserSettings(ctx context.Context, userID int64) (user_settings_mode
 	var s user_settings_models.UserSettingsPayload
 	var privacyBytes, notifBytes, displayBytes []byte
 
-	err := postgres.PostgresDB.QueryRowContext(ctx, query, userID).Scan(
+	err := postgres.ReadDB().QueryRowContext(ctx, query, userID).Scan(
 		&s.ID,
 		&s.UserID,
 		&privacyBytes,

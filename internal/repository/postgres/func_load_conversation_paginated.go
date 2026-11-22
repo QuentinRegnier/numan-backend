@@ -20,7 +20,7 @@ type fullInboxResult struct {
 }
 
 func FuncLoadConversationPaginated(ctx context.Context, userID int64, limit int64, offset int64) ([]fullInboxResult, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -30,7 +30,7 @@ func FuncLoadConversationPaginated(ctx context.Context, userID int64, limit int6
 	}
 
 	query := `SELECT conv_id, conv_type, conv_title, conv_description, conv_avatar_id, conv_last_msg_id, conv_state, conv_settings, external_link, conv_lang, conv_is_partner, conv_pin_slot, conv_created, conv_updated, mem_id, mem_conv_id, mem_user_id, mem_role, mem_settings, mem_joined, mem_unread, mem_frozen_id, mem_last_read_message_id, mem_created, mem_updated FROM messaging.func_load_conversation_paginated($1, $2, $3)`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, userID, limit, offset)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, userID, limit, offset)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

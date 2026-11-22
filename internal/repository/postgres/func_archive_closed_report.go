@@ -11,7 +11,7 @@ import (
 
 // FuncArchiveClosedReport persiste la décision finale et archive le ticket fermé dans la base froide PostgreSQL.
 func FuncArchiveClosedReport(ctx context.Context, reportID int64, state int, rationale string) error {
-	if postgres.PostgresDB == nil {
+	if postgres.WriteDB() == nil {
 		return numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -22,7 +22,7 @@ func FuncArchiveClosedReport(ctx context.Context, reportID int64, state int, rat
 
 	const query = `SELECT moderation.func_archive_closed_report($1, $2, $3)`
 	var archived bool
-	err := postgres.PostgresDB.QueryRowContext(ctx, query, reportID, state, rationale).Scan(&archived)
+	err := postgres.WriteDB().QueryRowContext(ctx, query, reportID, state, rationale).Scan(&archived)
 	if err != nil {
 		return numan_error.NewAppError(
 			http.StatusInternalServerError,

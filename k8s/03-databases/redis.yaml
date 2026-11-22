@@ -1,16 +1,15 @@
-# Redis - SINGLE INSTANCE with AOF persistence. NOT highly available.
-#   * Evidence from the legacy files: --appendonly yes, and .env calls Redis "Hot Storage & Message
-#     Broker". Eviction policy volatile-lfu only evicts keys WITH a TTL, so keys without TTL
-#     (probably queues/jobs) are expected to survive. => Treat Redis data as IMPORTANT, not as a
-#     disposable cache. Persistence stays ON and Redis is part of the backup plan.
-#   * Failure domain today: pod/node loss => unavailability until rescheduled (local-path: until that
-#     node returns) and up to ~1s of acknowledged writes lost (appendfsync everysec default).
-#   * Path to HA: Redis Sentinel (3 sentinels + 1 primary + >=1 replica) or Redis Cluster, ONLY after
-#     confirming the Go client supports it (docs/01-ARCHITECTURE.md). Not faked here.
-#   * Authentication: the legacy Compose command has NO --requirepass although .env defines
-#     REDIS_PASSWORD. This StatefulSet ENABLES requirepass using REDIS_PASSWORD. VERIFY the Go code
-#     reads REDIS_PASSWORD and sends AUTH; if it does not, pods will fail with NOAUTH errors.
-# Flags below are taken verbatim from the legacy command; --requirepass/--dir are added.
+# Redis 7.4 - Plastic Primary / Replica StatefulSet with AOF persistence & Sentinel-aware startup.
+#   * Scaling plasticity:
+#       - DB_REDIS_REPLICAS=1, DB_REDIS_SENTINEL_REPLICAS=0 (default): standalone Redis for Mac / small VPS.
+#       - DB_REDIS_REPLICAS=2, DB_REDIS_SENTINEL_REPLICAS=3: compact dev Primary + Replica + Sentinel failover drills.
+#       - DB_REDIS_REPLICAS=3, DB_REDIS_SENTINEL_REPLICAS=3: full production HA with automatic election.
+#   * Split-brain prevention on restart:
+#       - When Sentinel is enabled, every booting Redis pod queries `redis-sentinel:26379` for the
+#         CURRENT elected master (`SENTINEL get-master-addr-by-name`). If another node was promoted
+#         while this pod was down, it automatically rejoins as a Replica instead of starting as a second Primary.
+#   * Hardware plasticity:
+#       - podAntiAffinity is SOFT (preferred): spreads across physical servers when available, OR runs
+#         3 replicas on 1 server with 3 dedicated NVMe SSDs (STORAGE_CLASS_REDIS=nvme-redis).
 apiVersion: v1
 kind: Service
 metadata:
@@ -22,12 +21,13 @@ metadata:
     app.kubernetes.io/component: database
 spec:
   clusterIP: None
+  publishNotReadyAddresses: true
   selector:
     app.kubernetes.io/name: redis
   ports:
     - {name: redis, port: 6379, targetPort: redis}
 ---
-# Name "redis" + port 6379 == legacy REDIS_ADDR value.
+# Client-facing ClusterIP Service (used in standalone mode; HA clients connect via Redis Sentinel).
 apiVersion: v1
 kind: Service
 metadata:
@@ -44,6 +44,21 @@ spec:
   ports:
     - {name: redis, port: 6379, targetPort: redis}
 ---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: redis
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: database
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -55,7 +70,7 @@ metadata:
     app.kubernetes.io/component: database
 spec:
   serviceName: redis-headless
-  replicas: 1                      # DO NOT raise (independent, non-replicating instances).
+  replicas: ${DB_REDIS_REPLICAS}
   podManagementPolicy: OrderedReady
   updateStrategy:
     type: RollingUpdate
@@ -82,32 +97,120 @@ spec:
         fsGroup: 999
         fsGroupChangePolicy: OnRootMismatch
         seccompProfile: {type: RuntimeDefault}
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["db-redis"]
+            - weight: 80
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["db"]
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["all-in-one"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: redis
+                topologyKey: kubernetes.io/hostname
+      tolerations:
+        - key: numan.io/dedicated
+          operator: Equal
+          value: db-redis
+          effect: NoSchedule
+        - key: numan.io/dedicated
+          operator: Equal
+          value: db
+          effect: NoSchedule
       containers:
         - name: redis
           image: redis:7.4.2         # legacy line: redis:7. Pin the latest 7.x patch at deploy time.
           imagePullPolicy: IfNotPresent
-          # The password is read from the environment so it never appears in the manifest.
-          # (It is visible to processes inside this container only.)
-          command: ["sh", "-c"]
+          command: ["/bin/sh", "-c"]
           args:
-            - >-
-              exec redis-server
-              --requirepass "$REDIS_PASSWORD"
-              --maxmemory "$REDIS_MAXMEMORY"
-              --maxmemory-policy volatile-lfu
-              --lfu-log-factor 10
-              --lfu-decay-time 120
-              --appendonly yes
-              --dir /data
+            - |
+              set -eu
+              ORDINAL="$POD_INDEX"
+              SELF_FQDN="$POD_NAME.redis-headless.numan.svc.cluster.local"
+              PRIO="$REDIS_HA_REPLICA_PRIORITY"
+              if [ "$ORDINAL" = "0" ] && [ "$PRIO" -gt 10 ]; then
+                PRIO=$((PRIO - 10))
+              fi
+
+              CONF=/tmp/redis.conf
+              cat > "$CONF" <<EOF
+              port 6379
+              dir /data
+              appendonly yes
+              maxmemory $REDIS_MAXMEMORY
+              maxmemory-policy volatile-lfu
+              lfu-log-factor 10
+              lfu-decay-time 120
+              requirepass $REDIS_PASSWORD
+              masterauth $REDIS_PASSWORD
+              replica-announce-ip $SELF_FQDN
+              replica-announce-port 6379
+              replica-priority $PRIO
+              EOF
+
+              MASTER_HOST=""
+              MASTER_PORT="6379"
+              if [ "$REDIS_HA_SENTINEL_REPLICAS" -gt 0 ]; then
+                RES="$(redis-cli --no-auth-warning -h redis-sentinel -p 26379 SENTINEL get-master-addr-by-name "$REDIS_MASTER_NAME" 2>/dev/null || true)"
+                M_H="$(printf '%s\n' "$RES" | sed -n '1p')"
+                M_P="$(printf '%s\n' "$RES" | sed -n '2p')"
+                if [ -n "$M_H" ] && [ -n "$M_P" ] && [ "$M_H" != "$SELF_FQDN" ] && [ "$M_H" != "$POD_IP" ]; then
+                  MASTER_HOST="$M_H"
+                  MASTER_PORT="$M_P"
+                elif [ "$ORDINAL" != "0" ]; then
+                  MASTER_HOST="redis-0.redis-headless.numan.svc.cluster.local"
+                fi
+              elif [ "$ORDINAL" != "0" ]; then
+                MASTER_HOST="redis-0.redis-headless.numan.svc.cluster.local"
+              fi
+
+              if [ -n "$MASTER_HOST" ]; then
+                echo "Booting $POD_NAME as Replica of $MASTER_HOST:$MASTER_PORT (priority=$PRIO)"
+                printf 'replicaof %s %s\n' "$MASTER_HOST" "$MASTER_PORT" >> "$CONF"
+              else
+                echo "Booting $POD_NAME as Primary (priority=$PRIO)"
+              fi
+
+              exec redis-server "$CONF"
           ports:
             - {name: redis, containerPort: 6379}
           env:
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: POD_INDEX
+              valueFrom: {fieldRef: {fieldPath: "metadata.labels['apps.kubernetes.io/pod-index']"}}
+            - name: POD_IP
+              valueFrom: {fieldRef: {fieldPath: status.podIP}}
             - name: REDIS_PASSWORD
               valueFrom: {secretKeyRef: {name: redis-credentials, key: REDIS_PASSWORD}}
             - name: REDISCLI_AUTH      # lets redis-cli (probes) authenticate without -a
               valueFrom: {secretKeyRef: {name: redis-credentials, key: REDIS_PASSWORD}}
             - name: REDIS_MAXMEMORY
               valueFrom: {configMapKeyRef: {name: numan-config, key: REDIS_MAXMEMORY}}
+            - name: REDIS_MASTER_NAME
+              valueFrom: {configMapKeyRef: {name: numan-config, key: REDIS_MASTER_NAME}}
+            - name: REDIS_HA_SENTINEL_REPLICAS
+              value: "${DB_REDIS_SENTINEL_REPLICAS}"
+            - name: REDIS_HA_REPLICA_PRIORITY
+              value: "${DB_REDIS_REPLICA_PRIORITY}"
           readinessProbe:
             exec:
               command: ["sh", "-c", "redis-cli ping | grep -q PONG"]
@@ -128,8 +231,6 @@ spec:
           resources:
             # maxmemory is 4gb (=4GiB); the legacy REDIS_CONTAINER_LIMIT is 4.5gb => 4608Mi limit.
             # AOF rewrite forks the process (copy-on-write): keep headroom above maxmemory.
-            # requests < limits => Burstable QoS. Once node sizing is known, set requests == limits
-            # (Guaranteed QoS) so Redis is the last pod the kubelet evicts.
             requests: {cpu: "${REDIS_CPU_REQUEST}", memory: "${REDIS_MEMORY_REQUEST}"}
             limits: {cpu: "${REDIS_CPU_LIMIT}", memory: "${REDIS_MEMORY_LIMIT}"}
           securityContext:
@@ -149,6 +250,7 @@ spec:
           app.kubernetes.io/part-of: numan
       spec:
         accessModes: [ReadWriteOnce]
+        storageClassName: "${STORAGE_CLASS_REDIS}"
         resources:
           requests:
             storage: "${PVC_SIZE_REDIS}"            # size: see infrastructure.env.template (immutable once created)

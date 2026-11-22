@@ -14,7 +14,7 @@ import (
 // pour charger les identifiants de publications publiques (visibility = 0) triées selon orderMode
 // et optionnellement filtrées par langue.
 func FuncLoadRankedPostIDsPaginated(ctx context.Context, orderMode int, offset, limit int64, lang ...int) ([]int64, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -35,7 +35,7 @@ func FuncLoadRankedPostIDsPaginated(ctx context.Context, orderMode int, offset, 
 		args = []any{orderMode, offset, limit}
 	}
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, args...)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

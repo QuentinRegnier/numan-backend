@@ -2,8 +2,6 @@ package api
 
 import (
 	"net/http"
-	"os"
-	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/admin_handlers"
 	admin_article_handlers "github.com/QuentinRegnier/numan-backend/internal/api/handlers/admin_handlers/article_handlers"
@@ -34,14 +32,20 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/user_recommendation_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/user_settings_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/websocket"
-	"github.com/QuentinRegnier/numan-backend/internal/domain"
-	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/QuentinRegnier/numan-backend/internal/api/middleware"
 	"github.com/gin-gonic/gin"
 )
 
+// SetupRoutes configure l'ensemble complet des middlewares et routes (mode monolith).
 func SetupRoutes(r *gin.Engine) {
+	SetupCommonMiddlewares(r)
+	SetupWebSocketRoutes(r)
+	SetupRESTRoutes(r)
+}
+
+// SetupCommonMiddlewares applique les middlewares globaux partagés entre REST et WebSocket.
+func SetupCommonMiddlewares(r *gin.Engine) {
 	// =========================================================================
 	// 0. Middleware GLOBAL (S'applique à TOUTES les routes)
 	// =========================================================================
@@ -57,7 +61,20 @@ func SetupRoutes(r *gin.Engine) {
 
 	// 4. RECOVERY : Récupération automatique des panics (évite que le serveur crash totalement)
 	r.Use(gin.Recovery())
+}
 
+// SetupWebSocketRoutes monte uniquement le point d'entrée WebSocket sécurisé (mode ws_node ou monolith).
+func SetupWebSocketRoutes(r *gin.Engine) {
+	wsGroup := r.Group("/")
+	wsGroup.Use(middleware.JWTMiddleware())
+	wsGroup.Use(middleware.HMACMiddleware())
+
+	// --- Websocket ---
+	wsGroup.GET("/ws", websocket.ServeWS)
+}
+
+// SetupRESTRoutes monte les routes publiques, sécurisées, admin et modération (mode api_node ou monolith).
+func SetupRESTRoutes(r *gin.Engine) {
 	// =========================================================================
 	// 1. ROUTES PUBLIQUES (Aucune sécu ou sécu spécifique interne)
 	// =========================================================================
@@ -76,26 +93,6 @@ func SetupRoutes(r *gin.Engine) {
 	r.POST("/refresh/jwt", security_handlers.RefreshJWT)
 	r.POST("/refresh/master", security_handlers.RefreshMaster)
 
-	// WebSocket
-	r.GET("/token", func(c *gin.Context) {
-		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-			"sub": 1234,
-			"dev": "device-token-sample",
-			"exp": domain.TimeToSeconds(domain.NowTime().Add(time.Hour * 24)), // expire dans 24h
-			"iat": domain.TimeToSeconds(domain.NowTime()),
-		})
-		secret := os.Getenv("JWT_SECRET")
-		if secret == "" {
-			panic("JWT_SECRET manquant dans .env")
-		}
-		tokenString, err := token.SignedString([]byte(secret))
-		if err != nil {
-			c.JSON(500, gin.H{"error": "Erreur lors de la génération du token"})
-			return
-		}
-		c.JSON(200, gin.H{"token": tokenString})
-	})
-
 	// =========================================================================
 	// 2. ROUTES SÉCURISÉES (JWT + HMAC + RATCHET)
 	// Toutes les routes ci-dessous nécessitent :
@@ -107,9 +104,6 @@ func SetupRoutes(r *gin.Engine) {
 	secured := r.Group("/")
 	secured.Use(middleware.JWTMiddleware())  // 1. Qui est-ce ? (Populate context with UserID & FirebaseInstallationIDs)
 	secured.Use(middleware.HMACMiddleware()) // 2. Est-ce authentique ? (Check Signature with Redis Secret)
-
-	// --- Websocket ---
-	secured.GET("/ws", websocket.ServeWS) //
 
 	// --- User ---
 	secured.POST("/logout", auth_handlers.LogoutHandler)                  //
@@ -287,6 +281,9 @@ func SetupRoutes(r *gin.Engine) {
 	adminGroup.POST("/communities/pin", community_recommendation_handlers.PinCommunityHandler)
 	adminGroup.POST("/communities/unpin", community_recommendation_handlers.UnpinCommunityHandler)
 	adminGroup.POST("/communities/partner", community_recommendation_handlers.SetPartnerHandler)
+
+	// --- Admin Topologie Cluster & Auto-Discovery par Datacenter ---
+	adminGroup.GET("/cluster/topology", admin_handlers.GetClusterTopologyHandler)
 
 	// =========================================================================
 	// 4. ROUTES MODÉRATION (JWT + HMAC + Rôle Modérateur Grade >= 3 ou Admin)

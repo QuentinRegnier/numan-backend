@@ -30,7 +30,7 @@ type timeDecayPost struct {
 }
 
 func FuncLoadPostsForTimeDecay(ctx context.Context, minAge, maxAge string) ([]timeDecayPost, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -41,7 +41,7 @@ func FuncLoadPostsForTimeDecay(ctx context.Context, minAge, maxAge string) ([]ti
 
 	query := `SELECT id, like_count, comment_count, view_count, has_media, created_at, hashtags, indirect_hashtags, visibility, priority_level, report_count, lang, media_count, user_id FROM content.func_load_posts_for_time_decay($1::interval, $2::interval)`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, minAge, maxAge)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, minAge, maxAge)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

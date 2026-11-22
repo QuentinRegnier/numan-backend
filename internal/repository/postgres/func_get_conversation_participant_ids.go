@@ -12,7 +12,7 @@ import (
 
 // FuncGetConversationParticipantIDs récupère la liste brute des IDs pour réhydrater le Speed Cache (L1)
 func FuncGetConversationParticipantIDs(ctx context.Context, convID int64) ([]int64, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -22,7 +22,7 @@ func FuncGetConversationParticipantIDs(ctx context.Context, convID int64) ([]int
 	}
 
 	query := `SELECT user_id FROM messaging.func_get_conversation_participant_ids($1)`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, convID)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, convID)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

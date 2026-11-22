@@ -19,7 +19,7 @@ func FuncGetPOIsByIDs(ctx context.Context, poiIDs []int64) ([]map_models.POIPayl
 		return []map_models.POIPayload{}, nil
 	}
 
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -35,7 +35,7 @@ func FuncGetPOIsByIDs(ctx context.Context, poiIDs []int64) ([]map_models.POIPayl
 		FROM content.func_get_pois_by_ids($1)
 	`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, pq.Array(poiIDs))
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, pq.Array(poiIDs))
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

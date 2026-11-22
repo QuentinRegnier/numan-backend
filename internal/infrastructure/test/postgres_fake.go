@@ -150,10 +150,11 @@ func NewMockRowsWithErr(cols []string, rows [][]driver.Value, errOnNext error) *
 	}
 }
 
-// setupMockDB replaces infradb.PostgresDB with a mock database and returns a cleanup function.
+// SetupMockDB replaces infradb.PostgresDB and infradb.PostgresReadDB with a shared mock database and returns a cleanup function.
 func SetupMockDB(t *testing.T, onQuery queryHandler, onExec execHandler) (*sql.DB, func()) {
 	t.Helper()
 	origDB := infradb.PostgresDB
+	origReadDB := infradb.PostgresReadDB
 
 	conn := &mockDriverConn{
 		onQuery: onQuery,
@@ -161,15 +162,59 @@ func SetupMockDB(t *testing.T, onQuery queryHandler, onExec execHandler) (*sql.D
 	}
 	db := sql.OpenDB(&mockConnector{conn: conn})
 	infradb.PostgresDB = db
+	infradb.PostgresReadDB = nil
 
 	cleanup := func() {
 		if err := db.Close(); err != nil {
 			numan_log.Error(context.Background()).Err(err).Msg("Impossible de fermer le curseur SQL, risque de fuite de connexion au pool")
 		}
 		infradb.PostgresDB = origDB
+		infradb.PostgresReadDB = origReadDB
 	}
 	t.Cleanup(cleanup)
 	return db, cleanup
+}
+
+// SetupTestPostgresReadWrite remplace infradb.PostgresDB (Primary) et infradb.PostgresReadDB (Read Replica)
+// par deux pools mock distincts afin de vérifier strictement le routage Read/Write dans les tests unitaires.
+func SetupTestPostgresReadWrite(
+	t *testing.T,
+	writeOnQuery queryHandler,
+	writeOnExec execHandler,
+	readOnQuery queryHandler,
+	readOnExec execHandler,
+) (*sql.DB, *sql.DB, func()) {
+	t.Helper()
+	origDB := infradb.PostgresDB
+	origReadDB := infradb.PostgresReadDB
+
+	writeDB := sql.OpenDB(&mockConnector{
+		conn: &mockDriverConn{
+			onQuery: writeOnQuery,
+			onExec:  writeOnExec,
+		},
+	})
+	readDB := sql.OpenDB(&mockConnector{
+		conn: &mockDriverConn{
+			onQuery: readOnQuery,
+			onExec:  readOnExec,
+		},
+	})
+	infradb.PostgresDB = writeDB
+	infradb.PostgresReadDB = readDB
+
+	cleanup := func() {
+		if err := readDB.Close(); err != nil {
+			numan_log.Error(context.Background()).Err(err).Msg("Impossible de fermer le pool SQL Read Replica de test")
+		}
+		if err := writeDB.Close(); err != nil {
+			numan_log.Error(context.Background()).Err(err).Msg("Impossible de fermer le pool SQL Primary de test")
+		}
+		infradb.PostgresDB = origDB
+		infradb.PostgresReadDB = origReadDB
+	}
+	t.Cleanup(cleanup)
+	return writeDB, readDB, cleanup
 }
 
 func AssertDatabaseError_Postgres(t *testing.T, err error) {

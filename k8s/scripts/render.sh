@@ -78,14 +78,16 @@ sys.exit(1 if bad else 0)
 PY
 
 echo "==> 5/6 kustomize build of the RENDERED tree"
-kbuild "$OUT/rendered"                          > "$OUT/manifests/core.yaml"
-kbuild "$OUT/rendered/06-ingress/tls"           > "$OUT/manifests/tls.yaml"
-kbuild "$OUT/rendered/08-operations/admin-tools" > "$OUT/manifests/admin.yaml"
+kbuild "$OUT/rendered"                                         > "$OUT/manifests/core.yaml"
+kbuild "$OUT/rendered/03-databases-ha"                         > "$OUT/manifests/postgres-ha.yaml"
+kbuild "$OUT/rendered/06-ingress/tls"                          > "$OUT/manifests/tls.yaml"
+kbuild "$OUT/rendered/08-operations/admin-tools"               > "$OUT/manifests/admin.yaml"
+kbuild "$OUT/rendered/08-operations/admin-tools/wireguard-ingress" > "$OUT/manifests/admin-ingress.yaml"
 cp "$OUT/rendered/06-ingress/optional/traefik-helmchartconfig.yaml" "$OUT/manifests/traefik.yaml"
 python3 scripts/envtool.py resolved "$ENV_FILE" > "$OUT/resolved.env"; chmod 600 "$OUT/resolved.env"
 
 echo "==> 6/6 stamp"
 H="$(render_hash "$OUT")"
 { echo "hash=$H"; echo "strict=$STRICT"; echo "env_file=$ENV_FILE"; } > "$OUT/.render.meta"
-echo "rendered OK  hash=${H:0:16}  strict=$STRICT  ->  $OUT/manifests/{core,tls,admin,traefik}.yaml"
+echo "rendered OK  hash=${H:0:16}  strict=$STRICT  ->  $OUT/manifests/{core,postgres-ha,tls,admin,admin-ingress,traefik}.yaml"
 echo "Rendered files hold no secrets by construction, but are build artifacts: never commit them."

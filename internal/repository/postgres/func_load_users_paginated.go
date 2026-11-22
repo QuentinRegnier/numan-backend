@@ -14,7 +14,7 @@ import (
 
 // FuncLoadUsersPaginated appelle la fonction SQL auth.func_load_users_paginated pour le Seeding L1
 func FuncLoadUsersPaginated(ctx context.Context, limit, offset int) ([]lite_models.UserLiteRequest, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -25,7 +25,7 @@ func FuncLoadUsersPaginated(ctx context.Context, limit, offset int) ([]lite_mode
 
 	query := `SELECT id, username, first_name, last_name, profile_picture_id, bio, grade, trust_score, conversation_permission, add_group_permission FROM auth.func_load_users_paginated($1, $2)`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, limit, offset)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, limit, offset)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

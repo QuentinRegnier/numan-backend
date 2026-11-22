@@ -13,7 +13,7 @@ import (
 
 // FuncLoadSavedPostsKeyset charge les publications sauvegardées via content.func_load_saved_posts_keyset.
 func FuncLoadSavedPostsKeyset(ctx context.Context, userID int64, beforeCreatedAt *int64, beforeID *int64, limit int64) ([]saved_models.SavedPayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -23,7 +23,7 @@ func FuncLoadSavedPostsKeyset(ctx context.Context, userID int64, beforeCreatedAt
 	}
 
 	query := `SELECT id, user_id, post_id, created_at FROM content.func_load_saved_posts_keyset($1, $2, $3, $4)`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, userID, beforeCreatedAt, beforeID, limit)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, userID, beforeCreatedAt, beforeID, limit)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

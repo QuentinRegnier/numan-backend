@@ -52,9 +52,9 @@ func IsSteganoBanned(ctx context.Context, userID int64) bool {
 	if err == nil && isMember {
 		return true
 	}
-	if infraPostgres.PostgresDB != nil {
+	if infraPostgres.WriteDB() != nil {
 		var banned bool
-		errPg := infraPostgres.PostgresDB.QueryRowContext(ctx, "SELECT moderation.func_is_stegano_banned($1)", userID).Scan(&banned)
+		errPg := infraPostgres.WriteDB().QueryRowContext(ctx, "SELECT moderation.func_is_stegano_banned($1)", userID).Scan(&banned)
 		if errPg == nil && banned {
 			_ = redis.SteganoBanlist.SAdd(ctx, "global", member)
 			return true
@@ -131,12 +131,12 @@ func ProcessMonthlyCleanBonus(ctx context.Context) {
 }
 
 func processMonthlyCleanBonus(ctx context.Context) {
-	if infraPostgres.PostgresDB == nil || infraRedis.Rdb == nil {
+	if infraPostgres.ReadDB() == nil || infraRedis.Rdb == nil {
 		return
 	}
 	thirtyDaysAgoMs := domain.NowMillis() - int64(30*24*time.Hour/time.Millisecond)
 
-	rows, err := infraPostgres.PostgresDB.QueryContext(
+	rows, err := infraPostgres.ReadDB().QueryContext(
 		ctx,
 		`SELECT id FROM auth.users 
 		 WHERE (last_infraction_at IS NULL OR last_infraction_at < $1)
@@ -301,8 +301,8 @@ func processTrustScoreBatch(ctx context.Context, events []moderation_models.Trus
 		var isBanned bool = change.IsMajorBan
 
 		// 1. Mise à jour atomique dans PostgreSQL (L3 - Source de vérité)
-		if infraPostgres.PostgresDB != nil {
-			errPg := infraPostgres.PostgresDB.QueryRowContext(
+		if infraPostgres.WriteDB() != nil {
+			errPg := infraPostgres.WriteDB().QueryRowContext(
 				ctx,
 				"SELECT new_score, is_banned FROM auth.func_apply_trust_score_delta($1, $2, $3, $4, $5)",
 				userID, change.TotalDelta, change.IsInfraction, change.IsMajorBan, change.BanReason,
@@ -395,12 +395,12 @@ func enforceHardBanAndSteganoRevocation(ctx context.Context, userID int64, chang
 		if redis.SteganoBanlist != nil {
 			_ = redis.SteganoBanlist.SAdd(ctx, "global", fmt.Sprintf("%d", userID))
 		}
-		if infraPostgres.PostgresDB != nil {
+		if infraPostgres.WriteDB() != nil {
 			reason := change.BanReason
 			if reason == "" {
 				reason = "Infraction majeure confirmée (bannissement stéganographique)"
 			}
-			_, _ = infraPostgres.PostgresDB.ExecContext(
+			_, _ = infraPostgres.WriteDB().ExecContext(
 				ctx,
 				"SELECT moderation.func_register_stegano_ban($1, $2, $3, $4)",
 				userID, steganoID, reason, change.TargetID,
@@ -441,17 +441,17 @@ func startMonthlyTrustScoreCron(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				processMonthlyTrustBonus(ctx)
+				runWithDistributedCronLock(ctx, "cron:monthly_trust_score", 30*time.Minute, processMonthlyTrustBonus)
 			}
 		}
 	}()
 }
 
 func processMonthlyTrustBonus(ctx context.Context) {
-	if infraPostgres.PostgresDB == nil {
+	if infraPostgres.WriteDB() == nil {
 		return
 	}
-	rows, err := infraPostgres.PostgresDB.QueryContext(ctx, "SELECT user_id, new_trust_score FROM auth.func_increment_monthly_trust_scores()")
+	rows, err := infraPostgres.WriteDB().QueryContext(ctx, "SELECT user_id, new_trust_score FROM auth.func_increment_monthly_trust_scores()")
 	if err != nil {
 		numan_log.Error(ctx).Err(err).Msg("TrustScore Cron : Échec de l'incrémentation mensuelle sur PostgreSQL")
 		return

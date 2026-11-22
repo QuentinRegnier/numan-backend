@@ -13,7 +13,7 @@ import (
 // FuncDeleteOrphanSaved appelle la fonction SQL pour purger les favoris orphelins
 // et retourne la liste des post_ids concernés.
 func FuncDeleteOrphanSaved(ctx context.Context) ([]int64, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.WriteDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -24,7 +24,7 @@ func FuncDeleteOrphanSaved(ctx context.Context) ([]int64, error) {
 
 	query := `SELECT post_id FROM content.func_delete_orphan_saved()`
 
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query)
+	rows, err := postgres.WriteDB().QueryContext(ctx, query)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

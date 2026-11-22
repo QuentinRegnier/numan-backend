@@ -17,7 +17,7 @@ type relationAddable struct {
 
 // FuncLoadAddableRelations appelle la fonction SQL pure pour récupérer les abonnements et amis.
 func FuncLoadAddableRelations(ctx context.Context, callerID int64) ([]relationAddable, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -27,7 +27,7 @@ func FuncLoadAddableRelations(ctx context.Context, callerID int64) ([]relationAd
 	}
 
 	query := `SELECT target_id, state FROM auth.func_load_addable_relations($1)`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, callerID)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, callerID)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

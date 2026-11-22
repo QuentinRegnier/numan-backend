@@ -13,7 +13,7 @@ import (
 
 // FuncGetMessageReactionsPaginated lit la liste des réactions d'un message depuis le L3 via messaging.func_get_message_reactions_keyset.
 func FuncGetMessageReactionsPaginated(ctx context.Context, messageID int64, beforeCreatedAt *int64, beforeID *int64, limit int) ([]message_models.MessageReactionPayload, error) {
-	if postgres.PostgresDB == nil {
+	if postgres.ReadDB() == nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeDatabaseError,
@@ -23,7 +23,7 @@ func FuncGetMessageReactionsPaginated(ctx context.Context, messageID int64, befo
 	}
 
 	query := `SELECT id, message_id, user_id, reaction, created_at FROM messaging.func_get_message_reactions_keyset($1, $2, $3, $4)`
-	rows, err := postgres.PostgresDB.QueryContext(ctx, query, messageID, beforeCreatedAt, beforeID, limit)
+	rows, err := postgres.ReadDB().QueryContext(ctx, query, messageID, beforeCreatedAt, beforeID, limit)
 	if err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
