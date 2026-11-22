@@ -19,6 +19,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	repoMongo "github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
@@ -303,8 +304,11 @@ func TestMemberAndInboxOperations(t *testing.T) {
 		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
 			if strings.Contains(query, "func_load_active_conversations") {
 				return test.NewMockRows(
-					[]string{"id", "type", "title", "description", "avatar_id", "last_message_id", "settings", "external_link"},
-					[][]driver.Value{{int64(1), 0, "DM", "", int64(0), int64(10), `{}`, nil}},
+					[]string{"id", "type", "title", "description", "avatar_id", "last_message_id", "settings", "external_link", "lang", "is_partner", "pin_slot"},
+					[][]driver.Value{
+						{int64(1), 0, "DM", "", int64(0), int64(10), `{}`, nil, nil, false, nil},
+						{int64(2), variables.ConversationTypeCommunityPub, "Tech FR", "Desc", int64(99), int64(20), `{"write_permission":2}`, nil, "fr", true, int64(1)},
+					},
 				), nil
 			}
 			return test.NewMockRows(
@@ -314,6 +318,13 @@ func TestMemberAndInboxOperations(t *testing.T) {
 		}, nil)
 
 		require.NoError(t, seedMessagingSpeedCache(ctx))
+
+		var seededComm lite_models.ConvLiteRequest
+		require.NoError(t, redis.ConvMeta.GetObject(ctx, int64(2), &seededComm))
+		assert.Equal(t, "fr", seededComm.Lang)
+		assert.True(t, seededComm.IsPartner)
+		assert.Equal(t, 1, seededComm.PinSlot)
+		assert.Equal(t, "subreddit", string(seededComm.Mode))
 	})
 
 	t.Run("Error Paths for Member & Inbox Operations", func(t *testing.T) {

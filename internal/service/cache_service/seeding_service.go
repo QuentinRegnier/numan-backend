@@ -3,6 +3,7 @@ package cache_service
 import (
 	"context"
 	"net/http"
+	"sync"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
@@ -323,6 +324,113 @@ func SeedSpeedCache(ctx context.Context) error {
 
 	if errArt := seedArticles(backgroundCtx); errArt != nil {
 		numan_log.Warn(ctx).Err(errArt).Msg("Avertissement lors du seeding des articles")
+	}
+
+	// ── 6. RECOMMANDATION DE COMMUNAUTÉS PUBLIQUES (PINS + INDEX MEMBRES) ───
+
+	if errCommReco := SeedCommunityRecommendations(backgroundCtx); errCommReco != nil {
+		numan_log.Warn(ctx).Err(errCommReco).Msg("Avertissement lors du seeding des recommandations de communautés publiques")
+	}
+
+	return nil
+}
+
+var (
+	communityRecoHookMu   sync.RWMutex
+	communityRecoInitHook func(context.Context)
+)
+
+// RegisterCommunityRecoInitialComputeHook enregistre le callback asynchrone non-bloquant
+// invoqué en fin de SeedCommunityRecommendations pour calculer immédiatement les ZSETs de classement.
+func RegisterCommunityRecoInitialComputeHook(fn func(context.Context)) {
+	communityRecoHookMu.Lock()
+	defer communityRecoHookMu.Unlock()
+	communityRecoInitHook = fn
+}
+
+// SeedCommunityRecommendations reconstruit à froid les structures Redis L1 du système
+// de recommandation de communautés publiques :
+//  1. Pins administratifs par langue (community:reco:pins:{lang}) depuis PostgreSQL L3
+//  2. Index des appartenances publiques par utilisateur (user:public_comms:{user_id}) paginé par lots
+//  3. Déclenchement non-bloquant du premier cycle de scoring global si un hook est enregistré.
+func SeedCommunityRecommendations(ctx context.Context) error {
+	numan_log.Info(ctx).Msg("Amorçage Recommandation Communautés Publiques : chargement des pins et appartenances depuis PostgreSQL L3...")
+
+	// 1. Pins administratifs par langue (remplacement atomique sur toutes les langues supportées)
+	activePins, errPins := postgres.FuncLoadActiveCommunityPins(ctx)
+	if errPins != nil {
+		return errPins
+	}
+
+	pinsByLang := make(map[string]map[int]int64)
+	for _, lang := range variables.SupportedLanguageISOs() {
+		pinsByLang[lang] = make(map[int]int64)
+	}
+	for _, p := range activePins {
+		normLang, ok := variables.NormalizeCommunityLang(p.Lang)
+		if !ok {
+			numan_log.Warn(ctx).Int64("conv_id", p.ConversationID).Str("raw_lang", p.Lang).Msg("SeedCommunityRecommendations : pin ignoré (langue non supportée)")
+			continue
+		}
+		if _, exists := pinsByLang[normLang]; !exists {
+			pinsByLang[normLang] = make(map[int]int64)
+		}
+		pinsByLang[normLang][p.PinSlot] = p.ConversationID
+	}
+
+	for lang, slotMap := range pinsByLang {
+		if errReplace := ReplaceCommunityPinsByLang(ctx, lang, slotMap); errReplace != nil {
+			numan_log.Warn(ctx).Err(errReplace).Str("lang", lang).Msg("SeedCommunityRecommendations : échec de seeding des pins Redis pour la langue")
+		}
+	}
+
+	// 2. Index inversé user:public_comms:{user_id} (paginé par lots de 10 000)
+	batchSize := variables.CommunityRecoMembershipSeedBatchSz
+	if batchSize <= 0 {
+		batchSize = 10000
+	}
+	offset := 0
+	totalMemberships := 0
+
+	for {
+		batch, errBatch := postgres.FuncLoadActivePublicCommunityMemberships(ctx, batchSize, offset)
+		if errBatch != nil {
+			return errBatch
+		}
+		if len(batch) == 0 {
+			break
+		}
+
+		grouped := make(map[int64][]int64)
+		for _, rec := range batch {
+			if rec.UserID > 0 && rec.ConversationID > 0 {
+				grouped[rec.UserID] = append(grouped[rec.UserID], rec.ConversationID)
+			}
+		}
+		if errWrite := AddUserPublicCommunitiesBatch(ctx, grouped); errWrite != nil {
+			numan_log.Warn(ctx).Err(errWrite).Int("batch_size", len(batch)).Int("offset", offset).Msg("SeedCommunityRecommendations : échec partiel d'écriture batch user:public_comms")
+		}
+
+		totalMemberships += len(batch)
+		offset += len(batch)
+		if len(batch) < batchSize {
+			break
+		}
+	}
+
+	numan_log.Info(ctx).
+		Int("pins_seeded", len(activePins)).
+		Int("memberships_seeded", totalMemberships).
+		Msg("Amorçage Recommandation Communautés Publiques terminé.")
+
+	// 3. Déclenchement non-bloquant du premier calcul global des scores
+	communityRecoHookMu.RLock()
+	hook := communityRecoInitHook
+	communityRecoHookMu.RUnlock()
+	if hook != nil {
+		go func() {
+			hook(context.Background())
+		}()
 	}
 
 	return nil

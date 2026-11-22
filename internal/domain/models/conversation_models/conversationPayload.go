@@ -44,8 +44,19 @@ type ConversationPayload struct {
 	State         int                  `json:"state" bson:"state"`       // -2, -1, 0=active, 1=archived
 	Settings      ConversationSettings `json:"settings" bson:"settings"` // Remplacement de Laws []int
 	ExternalLink  models.ExternalLinks `json:"external_link" bson:"external_link"`
+	Lang          string               `json:"lang,omitempty" bson:"lang,omitempty"`
+	IsPartner     bool                 `json:"is_partner" bson:"is_partner"`
+	PinSlot       int                  `json:"pin_slot,omitempty" bson:"pin_slot,omitempty"`
 	CreatedAt     int64                `json:"created_at" bson:"created_at"`
 	UpdatedAt     int64                `json:"updated_at" bson:"updated_at"`
+}
+
+// ResolveCommunityMode dérive le mode d'interaction canonique à partir des settings de la conversation.
+func (p *ConversationPayload) ResolveCommunityMode() models.CommunityMode {
+	if p == nil {
+		return models.CommunityModeSubreddit
+	}
+	return models.ResolveCommunityModeFromWritePermission(p.Settings.WritePermission)
 }
 
 // Validate vérifie l'intégrité complète d'un ConversationPayload avant mise en cache ou persistance.
@@ -74,6 +85,24 @@ func (p *ConversationPayload) Validate() error {
 	}
 	if p.LastMessageID < 0 {
 		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant du dernier message ne peut pas être négatif.", nil)
+	}
+	if p.Type != variables.ConversationTypeCommunityPub {
+		if strings.TrimSpace(p.Lang) != "" {
+			return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "La langue n'est autorisée que pour les communautés publiques.", nil)
+		}
+		if p.PinSlot != 0 {
+			return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le slot d'épinglage n'est autorisé que pour les communautés publiques.", nil)
+		}
+		if p.IsPartner {
+			return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le statut partenaire n'est autorisé que pour les communautés publiques.", nil)
+		}
+	} else {
+		if strings.TrimSpace(p.Lang) != "" && !variables.IsSupportedCommunityLang(p.Lang) {
+			return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "La langue de la communauté n'est pas supportée.", nil)
+		}
+		if p.PinSlot != 0 && (p.PinSlot < variables.CommunityRecoMinPinSlot || p.PinSlot > variables.CommunityRecoMaxPinSlot) {
+			return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le slot d'épinglage doit être compris entre 1 et 100.", nil)
+		}
 	}
 	if err := p.Settings.Validate(); err != nil {
 		return err

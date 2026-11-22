@@ -201,3 +201,36 @@ func GetLanguageFallbackChain(primaryLang int) []int {
 	}
 	return chain
 }
+
+// SupportedLanguageISOs retourne la liste canonique des codes ISO 639-1 supportés
+// par la plateforme (dérivée de SupportedLanguageCodes).
+func SupportedLanguageISOs() []string {
+	isos := make([]string, 0, len(SupportedLanguageCodes))
+	for _, code := range SupportedLanguageCodes {
+		isos = append(isos, LangToISO(code))
+	}
+	return isos
+}
+
+// NormalizeCommunityLang valide et normalise un code langue ISO 639-1 contre la whitelist
+// centrale de la plateforme. Rejette les chaînes vides, "un", les locales non canoniques
+// et toute langue non supportée.
+func NormalizeCommunityLang(lang string) (string, bool) {
+	cleaned := strings.ToLower(strings.TrimSpace(lang))
+	if cleaned == "" || len(cleaned) > 8 || cleaned == LegacyUnknownISO {
+		return "", false
+	}
+	for _, code := range SupportedLanguageCodes {
+		if LangToISO(code) == cleaned {
+			return cleaned, true
+		}
+	}
+	return "", false
+}
+
+// IsSupportedCommunityLang retourne true si la chaîne correspond à un code ISO supporté
+// pour les communautés publiques.
+func IsSupportedCommunityLang(lang string) bool {
+	_, ok := NormalizeCommunityLang(lang)
+	return ok
+}

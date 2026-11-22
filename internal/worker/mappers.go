@@ -681,7 +681,7 @@ type conversationMapper struct{}
 func (m *conversationMapper) TableName() string { return "messaging.conversations" }
 
 func (m *conversationMapper) Columns() []string {
-	return []string{"id", "type", "title", "description", "avatar_id", "last_message_id", "state", "settings", "external_link", "created_at", "updated_at"}
+	return []string{"id", "type", "title", "description", "avatar_id", "last_message_id", "state", "settings", "external_link", "lang", "is_partner", "pin_slot", "created_at", "updated_at"}
 }
 
 func (m *conversationMapper) ToRow(data any) ([]any, error) {
@@ -717,6 +717,16 @@ func (m *conversationMapper) ToRow(data any) ([]any, error) {
 		avatarDB = nil
 	}
 
+	var langDB any = c.Lang
+	if c.Lang == "" {
+		langDB = nil
+	}
+
+	var pinSlotDB any
+	if c.PinSlot > 0 {
+		pinSlotDB = c.PinSlot
+	}
+
 	settingsJSON, _ := json.Marshal(c.Settings)
 	var settingsDB any = string(settingsJSON)
 
@@ -724,7 +734,7 @@ func (m *conversationMapper) ToRow(data any) ([]any, error) {
 	var linkDB any = string(linkJSON)
 
 	// ── ÉTAPE 3 : FORMATAGE DE LA LIGNE SQL ─────────────────────────────────
-	return []any{c.ID, c.Type, titleDB, descDB, avatarDB, lastMsgDB, c.State, settingsDB, linkDB, c.CreatedAt, c.UpdatedAt}, nil
+	return []any{c.ID, c.Type, titleDB, descDB, avatarDB, lastMsgDB, c.State, settingsDB, linkDB, langDB, c.IsPartner, pinSlotDB, c.CreatedAt, c.UpdatedAt}, nil
 }
 
 func (m *conversationMapper) BuildUpdateQuery(t string) string {

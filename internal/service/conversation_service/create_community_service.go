@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/conversation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/member_models"
@@ -13,6 +14,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
+	"github.com/QuentinRegnier/numan-backend/internal/service/community_recommendation_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
 
@@ -28,6 +30,11 @@ func CreateCommunity(ctx context.Context, callerID int64, input conversation_mod
 	}
 	if err := input.Validate(); err != nil {
 		return conversation_models.CreateCommunityOutput{}, err
+	}
+
+	normalizedLang, okLang := variables.NormalizeCommunityLang(input.Lang)
+	if !okLang {
+		return conversation_models.CreateCommunityOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "La langue spécifiée n'est pas supportée.", nil)
 	}
 
 	// ── ÉTAPE 1 : CONTRÔLE DE RANG ET DE QUOTA ──────────────────────────────
@@ -58,13 +65,16 @@ func CreateCommunity(ctx context.Context, callerID int64, input conversation_mod
 
 	// ── ÉTAPE 2 : DÉFINITION DU PROPRIÉTAIRE INITIAL ────────────────────────
 	designatedOwnerID := callerID
+	ownerTrustScore := callerLite.TrustScore
 
 	if input.OwnerID != 0 && input.OwnerID != callerID {
 		if callerLite.Grade >= variables.UserGradeModerator {
-			if targetOwnerLite, errTarget := cache_service.GetUserLite(ctx, input.OwnerID); errTarget != nil || targetOwnerLite.ID == 0 {
+			targetOwnerLite, errTarget := cache_service.GetUserLite(ctx, input.OwnerID)
+			if errTarget != nil || targetOwnerLite.ID == 0 {
 				return conversation_models.CreateCommunityOutput{}, numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'utilisateur désigné comme propriétaire n'existe pas.", errTarget)
 			}
 			designatedOwnerID = input.OwnerID
+			ownerTrustScore = targetOwnerLite.TrustScore
 		} else {
 			return conversation_models.CreateCommunityOutput{}, numan_error.NewForbidden(numan_error.CodeForbidden, "Seuls les modérateurs et administrateurs peuvent attribuer la propriété à un tiers.", nil)
 		}
@@ -89,6 +99,7 @@ func CreateCommunity(ctx context.Context, callerID int64, input conversation_mod
 		State:         0,
 		Settings:      conversationSettings,
 		ExternalLink:  input.ExternalLink,
+		Lang:          normalizedLang,
 		CreatedAt:     domain.TimeToMillis(currentTime),
 		UpdatedAt:     domain.TimeToMillis(currentTime),
 	}
@@ -141,7 +152,9 @@ func CreateCommunity(ctx context.Context, callerID int64, input conversation_mod
 	_ = object_cache_service.SetMemberInObjectCache(ctx, ownerMemberPayload)
 	cache_service.RehydrateConversationItemInSpeedCache(ctx, communityPayload, ownerMemberPayload, 0)
 
+	initialMembers := 1
 	if adminCreatorPayload != nil {
+		initialMembers = 2
 		_ = object_cache_service.SetMemberInObjectCache(ctx, *adminCreatorPayload)
 		cache_service.RehydrateConversationItemInSpeedCache(ctx, communityPayload, *adminCreatorPayload, 0)
 	}
@@ -151,9 +164,32 @@ func CreateCommunity(ctx context.Context, callerID int64, input conversation_mod
 		Name:             input.Title,
 		ProfilePictureID: 0,
 		Description:      "",
-		MemberCount:      1,
+		MemberCount:      initialMembers,
 	}
 	_ = cache_service.StoreCommunityLiteInSpeedCache(ctx, communitySearchRecord)
+
+	// ── ÉTAPE 4B : INDEXATION RECOMMANDATION COMMUNAUTÉS PUBLIQUES (L1) ─────
+	if _, errIdx := cache_service.AddUserPublicCommunity(ctx, designatedOwnerID, newConversationID); errIdx != nil {
+		numan_log.Warn(ctx).Err(errIdx).Int64("conv_id", newConversationID).Int64("user_id", designatedOwnerID).Msg("Échec d'ajout du propriétaire dans user:public_comms")
+	}
+	if adminCreatorPayload != nil {
+		if _, errIdx := cache_service.AddUserPublicCommunity(ctx, callerID, newConversationID); errIdx != nil {
+			numan_log.Warn(ctx).Err(errIdx).Int64("conv_id", newConversationID).Int64("user_id", callerID).Msg("Échec d'ajout du créateur dans user:public_comms")
+		}
+	}
+
+	initialScore := community_recommendation_service.ComputeInitialCreationScore(
+		models.ResolveCommunityModeFromWritePermission(communityPayload.Settings.WritePermission),
+		communityPayload.IsPartner,
+		ownerTrustScore > 0,
+		ownerTrustScore,
+		initialMembers,
+		currentTime,
+		community_recommendation_service.LoadScoringConfig(),
+	)
+	if errRank := cache_service.UpsertRankedCommunityScore(ctx, normalizedLang, newConversationID, initialScore); errRank != nil {
+		numan_log.Warn(ctx).Err(errRank).Int64("conv_id", newConversationID).Str("lang", normalizedLang).Msg("Échec d'initialisation du score dans le ZSET de recommandation")
+	}
 
 	// ── ÉTAPE 5 : PERSISTANCE ASYNCHRONE WRITE-BEHIND ───────────────────────
 	if errQueue := redis.EnqueueDB(ctx, communityPayload.ID, communityPayload.ID, redis.EntityConversation, redis.ActionCreate, communityPayload, redis.TargetAll); errQueue != nil {

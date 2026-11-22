@@ -29,6 +29,7 @@ type FakeRedisServer struct {
 	strings   map[string]string
 	hashes    map[string]map[string]string
 	sets      map[string]map[string]struct{}
+	hlls      map[string]map[string]struct{}
 	zsets     map[string]map[string]float64
 	geos      map[string]map[string]geoPoint
 	lists     map[string][]string
@@ -51,6 +52,7 @@ func newFakeRedisServer(t *testing.T) (*FakeRedisServer, *goredis.Client) {
 		strings:   make(map[string]string),
 		hashes:    make(map[string]map[string]string),
 		sets:      make(map[string]map[string]struct{}),
+		hlls:      make(map[string]map[string]struct{}),
 		zsets:     make(map[string]map[string]float64),
 		geos:      make(map[string]map[string]geoPoint),
 		lists:     make(map[string][]string),
@@ -132,6 +134,9 @@ func (s *FakeRedisServer) acceptLoop() {
 func (s *FakeRedisServer) handleConn(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 	reader := bufio.NewReader(conn)
+	var inMulti bool
+	var queued [][]string
+
 	for {
 		args, err := readRESPCommand(reader)
 		if err != nil {
@@ -140,7 +145,60 @@ func (s *FakeRedisServer) handleConn(conn net.Conn) {
 		if len(args) == 0 {
 			continue
 		}
-		if strings.ToUpper(args[0]) == "SUBSCRIBE" && len(args) >= 2 {
+		upperCmd := strings.ToUpper(args[0])
+
+		if upperCmd == "MULTI" {
+			s.mu.RLock()
+			failErr, failed := s.failCmds["MULTI"]
+			s.mu.RUnlock()
+			if failed {
+				_, _ = conn.Write([]byte(respErr(failErr.Error())))
+				continue
+			}
+			inMulti = true
+			queued = nil
+			_, _ = conn.Write([]byte(respSimple("OK")))
+			continue
+		}
+
+		if upperCmd == "DISCARD" {
+			inMulti = false
+			queued = nil
+			_, _ = conn.Write([]byte(respSimple("OK")))
+			continue
+		}
+
+		if upperCmd == "EXEC" {
+			if !inMulti {
+				_, _ = conn.Write([]byte(respErr("EXEC without MULTI")))
+				continue
+			}
+			inMulti = false
+			batch := queued
+			queued = nil
+
+			s.mu.Lock()
+			if failErr, failed := s.failCmds["EXEC"]; failed {
+				s.mu.Unlock()
+				_, _ = conn.Write([]byte(respErr(failErr.Error())))
+				continue
+			}
+			results := make([]string, 0, len(batch))
+			for _, cmdArgs := range batch {
+				results = append(results, s.execCommandLocked(cmdArgs))
+			}
+			s.mu.Unlock()
+			_, _ = conn.Write([]byte(respArray(results)))
+			continue
+		}
+
+		if inMulti {
+			queued = append(queued, args)
+			_, _ = conn.Write([]byte(respSimple("QUEUED")))
+			continue
+		}
+
+		if upperCmd == "SUBSCRIBE" && len(args) >= 2 {
 			ch := args[1]
 			s.pubsubMu.Lock()
 			s.pubsubSub[ch] = append(s.pubsubSub[ch], conn)
@@ -209,10 +267,13 @@ func respArray(items []string) string {
 }
 
 func (s *FakeRedisServer) execCommand(args []string) string {
-	cmd := strings.ToUpper(args[0])
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.execCommandLocked(args)
+}
+
+func (s *FakeRedisServer) execCommandLocked(args []string) string {
+	cmd := strings.ToUpper(args[0])
 
 	if err, exists := s.failCmds[cmd]; exists {
 		return respErr(err.Error())
@@ -236,6 +297,7 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 		s.strings = make(map[string]string)
 		s.hashes = make(map[string]map[string]string)
 		s.sets = make(map[string]map[string]struct{})
+		s.hlls = make(map[string]map[string]struct{})
 		s.zsets = make(map[string]map[string]float64)
 		s.geos = make(map[string]map[string]geoPoint)
 		s.lists = make(map[string][]string)
@@ -332,6 +394,10 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 				delete(s.sets, k)
 				found = true
 			}
+			if _, ok := s.hlls[k]; ok {
+				delete(s.hlls, k)
+				found = true
+			}
 			if _, ok := s.zsets[k]; ok {
 				delete(s.zsets, k)
 				found = true
@@ -359,7 +425,8 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 			_, ok3 := s.sets[k]
 			_, ok4 := s.zsets[k]
 			_, ok5 := s.lists[k]
-			if ok1 || ok2 || ok3 || ok4 || ok5 {
+			_, ok6 := s.hlls[k]
+			if ok1 || ok2 || ok3 || ok4 || ok5 || ok6 {
 				count++
 			}
 		}
@@ -371,6 +438,11 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 		}
 		key := args[1]
 		sec, _ := strconv.ParseInt(args[2], 10, 64)
+		if len(args) >= 4 && strings.ToUpper(args[3]) == "NX" {
+			if existingTTL, hasTTL := s.ttls[key]; hasTTL && existingTTL > 0 {
+				return respInt(0)
+			}
+		}
 		s.ttls[key] = time.Duration(sec) * time.Second
 		return respInt(1)
 
@@ -394,7 +466,8 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 		_, ok4 := s.zsets[key]
 		_, ok5 := s.lists[key]
 		_, ok6 := s.geos[key]
-		if !ok1 && !ok2 && !ok3 && !ok4 && !ok5 && !ok6 {
+		_, ok7 := s.hlls[key]
+		if !ok1 && !ok2 && !ok3 && !ok4 && !ok5 && !ok6 && !ok7 {
 			return respInt(-2)
 		}
 		ttl, hasTTL := s.ttls[key]
@@ -414,7 +487,8 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 		_, ok4 := s.zsets[key]
 		_, ok5 := s.lists[key]
 		_, ok6 := s.geos[key]
-		if !ok1 && !ok2 && !ok3 && !ok4 && !ok5 && !ok6 {
+		_, ok7 := s.hlls[key]
+		if !ok1 && !ok2 && !ok3 && !ok4 && !ok5 && !ok6 && !ok7 {
 			return respInt(-2)
 		}
 		ttl, hasTTL := s.ttls[key]
@@ -450,6 +524,11 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 			}
 		}
 		for k := range s.sets {
+			if strings.HasPrefix(k, prefix) {
+				seen[k] = struct{}{}
+			}
+		}
+		for k := range s.hlls {
 			if strings.HasPrefix(k, prefix) {
 				seen[k] = struct{}{}
 			}
@@ -496,6 +575,11 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 			}
 		}
 		for k := range s.sets {
+			if strings.HasPrefix(k, prefix) {
+				seen[k] = struct{}{}
+			}
+		}
+		for k := range s.hlls {
 			if strings.HasPrefix(k, prefix) {
 				seen[k] = struct{}{}
 			}
@@ -628,6 +712,38 @@ func (s *FakeRedisServer) execCommand(args []string) string {
 		cur += delta
 		s.hashes[key][f] = strconv.FormatInt(cur, 10)
 		return respInt(cur)
+
+	case "PFADD":
+		if len(args) < 2 {
+			return respErr("wrong number of arguments for PFADD")
+		}
+		key := args[1]
+		if s.hlls[key] == nil {
+			s.hlls[key] = make(map[string]struct{})
+		}
+		var modified int64
+		for _, el := range args[2:] {
+			if _, exists := s.hlls[key][el]; !exists {
+				s.hlls[key][el] = struct{}{}
+				modified = 1
+			}
+		}
+		return respInt(modified)
+
+	case "PFCOUNT":
+		if len(args) < 2 {
+			return respErr("wrong number of arguments for PFCOUNT")
+		}
+		union := make(map[string]struct{})
+		for _, k := range args[1:] {
+			if err, fail := s.failKeys[k]; fail {
+				return respErr(err.Error())
+			}
+			for el := range s.hlls[k] {
+				union[el] = struct{}{}
+			}
+		}
+		return respInt(int64(len(union)))
 
 	case "SADD":
 		key := args[1]

@@ -149,6 +149,14 @@ var (
 	UsersLang           *Collection // SET users:lang:{lang}
 	CuckooUserRecoSkips *Collection // CUCKOO FILTER cuckoo:user_reco:skips:{user_id}
 	LockUserRecoCompute *Collection // LOCK lock:user_reco:compute:{user_id}
+
+	// --- PUBLIC COMMUNITY RECOMMENDATION SYSTEM (L1 Speed Cache & Telemetry) ---
+	CommunityRecoRanked   *Collection // ZSET community:reco:ranked:{lang}
+	CommunityRecoPins     *Collection // HASH community:reco:pins:{lang}
+	CommunityRecoMsgCount *Collection // HASH community:reco:msg_count:{YYYY-MM-DD}
+	CommunityRecoAuthors  *Collection // HLL  community:reco:authors:{conv_id}:{YYYY-MM-DD}
+	CommunityRecoGrowth   *Collection // HASH community:reco:growth:{YYYY-MM-DD}
+	UserPublicComms       *Collection // SET  user:public_comms:{user_id}
 )
 
 // ============================================================================
@@ -284,6 +292,14 @@ func InitCacheDatabase() {
 	UsersLang = newCollection(variables.RedisKeyUsersLang, 0)
 	CuckooUserRecoSkips = newCollection(variables.RedisKeyCuckooUserRecoSkips, time.Duration(variables.UserRecoSkipTTLSeconds)*time.Second)
 	LockUserRecoCompute = newCollection(variables.RedisKeyLockUserRecoCompute, variables.UserRecoComputeLockTTL)
+
+	// --- PUBLIC COMMUNITY RECOMMENDATION SYSTEM (L1 Speed Cache & Telemetry) ---
+	CommunityRecoRanked = newCollection(variables.RedisKeyCommunityRecoRanked, 0)
+	CommunityRecoPins = newCollection(variables.RedisKeyCommunityRecoPins, 0)
+	CommunityRecoMsgCount = newCollection(variables.RedisKeyCommunityRecoMsgCount, variables.CommunityRecoTelemetryTTL)
+	CommunityRecoAuthors = newCollection(variables.RedisKeyCommunityRecoAuthors, variables.CommunityRecoTelemetryTTL)
+	CommunityRecoGrowth = newCollection(variables.RedisKeyCommunityRecoGrowth, variables.CommunityRecoTelemetryTTL)
+	UserPublicComms = newCollection(variables.RedisKeyUserPublicComms, 0)
 }
 
 // ============================================================================
@@ -399,7 +415,7 @@ func (c *Collection) SetNX(ctx context.Context, id any, val any, ttl time.Durati
 }
 
 // ============================================================================
-// 7. PRIMITIVES HASH
+// 7. PRIMITIVES HASH & HYPERLOGLOG
 // ============================================================================
 
 func (c *Collection) HGet(ctx context.Context, id any, field string) *redis.StringCmd {
@@ -414,8 +430,81 @@ func (c *Collection) HGetAll(ctx context.Context, id any) *redis.StringStringMap
 	return c.Client.HGetAll(ctx, c.Key(id))
 }
 
+func (c *Collection) HMGet(ctx context.Context, id any, fields ...string) ([]any, error) {
+	if len(fields) == 0 {
+		return []any{}, nil
+	}
+	return c.Client.HMGet(ctx, c.Key(id), fields...).Result()
+}
+
+func (c *Collection) HIncrBy(ctx context.Context, id any, field string, incr int64) (int64, error) {
+	return c.Client.HIncrBy(ctx, c.Key(id), field, incr).Result()
+}
+
 func (c *Collection) HDel(ctx context.Context, id any, fields ...string) error {
 	return c.Client.HDel(ctx, c.Key(id), fields...).Err()
+}
+
+// PFAdd ajoute un ou plusieurs éléments dans un HyperLogLog Redis.
+func (c *Collection) PFAdd(ctx context.Context, id any, els ...any) (int64, error) {
+	if len(els) == 0 {
+		return 0, nil
+	}
+	return c.Client.PFAdd(ctx, c.Key(id), els...).Result()
+}
+
+// PFCount calcule la cardinalité union d'un ou plusieurs HyperLogLog de la collection.
+func (c *Collection) PFCount(ctx context.Context, ids ...any) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	keys := make([]string, len(ids))
+	for i, id := range ids {
+		keys[i] = c.Key(id)
+	}
+	return c.Client.PFCount(ctx, keys...).Result()
+}
+
+// ExpireNX applique un TTL uniquement si la clé ne possède pas encore d'expiration (Redis 7+ EXPIRE ... NX).
+func (c *Collection) ExpireNX(ctx context.Context, id any, ttl time.Duration) (bool, error) {
+	if ttl <= 0 {
+		ttl = c.DefaultTTL
+	}
+	if ttl <= 0 {
+		return false, nil
+	}
+	seconds := int64(ttl / time.Second)
+	if seconds <= 0 {
+		seconds = 1
+	}
+	ok, err := c.Client.Do(ctx, "EXPIRE", c.Key(id), seconds, "NX").Bool()
+	if err != nil {
+		// Compatibilité descendante si Redis < 7 rejette l'option NX
+		return c.Client.Expire(ctx, c.Key(id), ttl).Result()
+	}
+	return ok, nil
+}
+
+// HashReplaceAtomic remplace atomiquement un HASH (DEL + HSET + EXPIRE dans MULTI/EXEC).
+func (c *Collection) HashReplaceAtomic(ctx context.Context, id any, fields map[string]any, ttl time.Duration) error {
+	key := c.Key(id)
+	if ttl <= 0 {
+		ttl = c.DefaultTTL
+	}
+	pipe := c.Client.TxPipeline()
+	pipe.Del(ctx, key)
+	if len(fields) > 0 {
+		args := make([]any, 0, len(fields)*2)
+		for k, v := range fields {
+			args = append(args, k, v)
+		}
+		pipe.HSet(ctx, key, args...)
+		if ttl > 0 {
+			pipe.Expire(ctx, key, ttl)
+		}
+	}
+	_, err := pipe.Exec(ctx)
+	return err
 }
 
 // ============================================================================
@@ -575,14 +664,14 @@ func (c *Collection) DeleteMany(ctx context.Context, ids []int64) error {
 	return c.Client.Del(ctx, keys...).Err()
 }
 
-// ZSetReplaceAtomic remplace atomiquement le contenu d'un ZSET (DEL + ZADD + EXPIRE via Pipeline)
+// ZSetReplaceAtomic remplace atomiquement le contenu d'un ZSET (DEL + ZADD + EXPIRE via MULTI/EXEC)
 // sans jamais exposer de liste partiellement écrite aux lecteurs concurrents.
 func (c *Collection) ZSetReplaceAtomic(ctx context.Context, id any, members []*redis.Z, ttl time.Duration) error {
 	key := c.Key(id)
 	if ttl <= 0 {
 		ttl = c.DefaultTTL
 	}
-	pipe := c.Client.Pipeline()
+	pipe := c.Client.TxPipeline()
 	pipe.Del(ctx, key)
 	if len(members) > 0 {
 		pipe.ZAdd(ctx, key, members...)

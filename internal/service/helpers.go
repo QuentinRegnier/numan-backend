@@ -1,9 +1,11 @@
 package service
 
 import (
+	"github.com/QuentinRegnier/numan-backend/internal/domain/models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/conversation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/member_models"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
 
 // ############################################################################
@@ -55,5 +57,29 @@ func ToDomainConversationSettings(liteSettings lite_models.ConversationSettings)
 		HideSystemMessages:   liteSettings.HideSystemMessages,
 		JoinWithLinkDuration: liteSettings.JoinWithLinkDuration,
 		SendSurveyPermission: liteSettings.SendSurveyPermission,
+	}
+}
+
+// ToConvLiteRequest mappe intégralement un ConversationPayload vers sa représentation
+// ConvMeta en cache Redis (ConvLiteRequest), en préservant Lang, IsPartner, PinSlot
+// et en dérivant le Mode canonique pour les communautés publiques.
+func ToConvLiteRequest(conv conversation_models.ConversationPayload) lite_models.ConvLiteRequest {
+	mode := ""
+	if conv.Type == variables.ConversationTypeCommunityPub {
+		mode = string(models.ResolveCommunityModeFromWritePermission(conv.Settings.WritePermission))
+	}
+	return lite_models.ConvLiteRequest{
+		ID:            conv.ID,
+		Type:          conv.Type,
+		Title:         conv.Title,
+		Description:   conv.Description,
+		AvatarID:      conv.AvatarID,
+		LastMessageID: conv.LastMessageID,
+		Settings:      ToConversationSettingsLite(conv.Settings),
+		ExternalLink:  conv.ExternalLink,
+		Lang:          conv.Lang,
+		IsPartner:     conv.IsPartner,
+		PinSlot:       conv.PinSlot,
+		Mode:          mode,
 	}
 }

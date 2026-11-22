@@ -116,6 +116,10 @@ func BanMember(ctx context.Context, callerID int64, input member_models.BanMembe
 	}
 	_ = cache_service.UpdateMemberSpeedCache(ctx, liteMemberRequest)
 
+	if errIdx := cache_service.RemoveUserPublicCommunity(ctx, targetMemberPayload.UserID, input.ConversationID); errIdx != nil {
+		numan_log.Warn(ctx).Err(errIdx).Int64("conv_id", input.ConversationID).Int64("user_id", targetMemberPayload.UserID).Msg("Échec de retrait de user:public_comms lors du bannissement")
+	}
+
 	// ── ÉTAPE 5 : PERSISTANCE ASYNCHRONE (WRITE-BEHIND) ─────────────────────
 	errQueue := redis.EnqueueDB(ctx, targetMemberPayload.ID, input.ConversationID, redis.EntityMembers, redis.ActionUpdate, targetMemberPayload, redis.TargetAll)
 	if errQueue != nil {

@@ -163,6 +163,17 @@ func AddMembersToConversation(ctx context.Context, callerID int64, input convers
 					Msg("Échec du Write-Behind lors de l'ajout d'un membre")
 			}
 
+			if conversationPayload.Type == variables.ConversationTypeCommunityPub {
+				added, errIdx := cache_service.AddUserPublicCommunity(ctx, targetUserID, conversationPayload.ID)
+				if errIdx != nil {
+					numan_log.Warn(ctx).Err(errIdx).Int64("conv_id", conversationPayload.ID).Int64("user_id", targetUserID).Msg("Échec d'indexation user:public_comms lors de AddMembersToConversation")
+				} else if added {
+					if errGrowth := cache_service.RecordCommunityMemberJoin(ctx, conversationPayload.ID); errGrowth != nil {
+						numan_log.Warn(ctx).Err(errGrowth).Int64("conv_id", conversationPayload.ID).Msg("Échec d'enregistrement de croissance communauté publique lors de AddMembersToConversation")
+					}
+				}
+			}
+
 			// Message système d'intégration
 			callerLite, _ := cache_service.GetUserLite(ctx, callerID)
 

@@ -37,4 +37,8 @@ func TestUpdateConversationInput_Validate(t *testing.T) {
 		ConversationID: 1,
 		ExternalLink:   models.ExternalLinks{URL: "ftp://bad"},
 	}).Validate())
+	require.NoError(t, (&conversation_models.UpdateConversationInput{ConversationID: 1, Lang: "fr"}).Validate())
+	require.NoError(t, (&conversation_models.UpdateConversationInput{ConversationID: 1, Lang: " EN "}).Validate())
+	assertBadRequest(t, (&conversation_models.UpdateConversationInput{ConversationID: 1, Lang: "xx"}).Validate())
+	assertBadRequest(t, (&conversation_models.UpdateConversationInput{ConversationID: 1, Lang: "fr-FR"}).Validate())
 }

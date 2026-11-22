@@ -9,6 +9,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/member_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/message_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
@@ -212,6 +213,18 @@ func JoinGroup(ctx context.Context, callerID int64, input conversation_models.Jo
 	errQueue := redis.EnqueueDB(ctx, memberPayload.ID, input.ConversationID, redis.EntityMembers, dbAction, memberPayload, redis.TargetAll)
 	if errQueue != nil {
 		return conversation_models.JoinGroupOutput{}, numan_error.NewInternal()
+	}
+
+	// ── ÉTAPE 8B : INDEX & CROISSANCE RECOMMANDATION COMMUNAUTÉS PUBLIQUES ──
+	if conversationPayload.Type == variables.ConversationTypeCommunityPub && assignedRole == variables.MemberRoleNormal {
+		added, errIdx := cache_service.AddUserPublicCommunity(ctx, callerID, conversationPayload.ID)
+		if errIdx != nil {
+			numan_log.Warn(ctx).Err(errIdx).Int64("conv_id", conversationPayload.ID).Int64("user_id", callerID).Msg("Échec d'indexation user:public_comms lors de JoinGroup")
+		} else if added {
+			if errGrowth := cache_service.RecordCommunityMemberJoin(ctx, conversationPayload.ID); errGrowth != nil {
+				numan_log.Warn(ctx).Err(errGrowth).Int64("conv_id", conversationPayload.ID).Msg("Échec d'enregistrement de croissance communauté publique lors de JoinGroup")
+			}
+		}
 	}
 
 	// ── ÉTAPE 9 : ÉVÉNEMENTS SYSTÈMES ET WEBSOCKETS (ENTRÉE DIRECTE ONLY) ──

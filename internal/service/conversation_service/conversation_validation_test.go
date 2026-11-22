@@ -70,11 +70,25 @@ func TestConversationServices_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 	// 2. CreateCommunity invalid inputs
 	_, err = conversation_service.CreateCommunity(ctx, 1, conversation_models.CreateCommunityInput{
 		Title: "ab",
+		Lang:  "fr",
+	})
+	assertConvServiceError(t, err, http.StatusBadRequest, numan_error.CodeInvalidPayload)
+
+	_, err = conversation_service.CreateCommunity(ctx, 1, conversation_models.CreateCommunityInput{
+		Title: "Valid Comm",
+		Lang:  "",
+	})
+	assertConvServiceError(t, err, http.StatusBadRequest, numan_error.CodeInvalidPayload)
+
+	_, err = conversation_service.CreateCommunity(ctx, 1, conversation_models.CreateCommunityInput{
+		Title: "Valid Comm",
+		Lang:  "xx",
 	})
 	assertConvServiceError(t, err, http.StatusBadRequest, numan_error.CodeInvalidPayload)
 
 	_, err = conversation_service.CreateCommunity(ctx, 1, conversation_models.CreateCommunityInput{
 		Title:        "Valid Comm",
+		Lang:         "fr",
 		ExternalLink: models.ExternalLinks{URL: "javascript:alert(1)"},
 	})
 	assertConvServiceError(t, err, http.StatusBadRequest, numan_error.CodeInvalidPayload)

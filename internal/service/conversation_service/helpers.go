@@ -80,16 +80,7 @@ func hydrateConversationCascade(ctx context.Context, conversationPayload convers
 	_ = object_cache_service.SetConversationInObjectCache(ctx, conversationPayload)
 
 	// Guérison des Métadonnées (Speed Cache L1)
-	liteConversationRequest := lite_models.ConvLiteRequest{
-		ID:            conversationPayload.ID,
-		Type:          conversationPayload.Type,
-		Title:         conversationPayload.Title,
-		Description:   conversationPayload.Description,
-		AvatarID:      conversationPayload.AvatarID,
-		LastMessageID: conversationPayload.LastMessageID,
-		Settings:      service.ToConversationSettingsLite(conversationPayload.Settings),
-		ExternalLink:  conversationPayload.ExternalLink,
-	}
+	liteConversationRequest := service.ToConvLiteRequest(conversationPayload)
 	_ = redis.ConvMeta.SetObject(ctx, conversationPayload.ID, liteConversationRequest)
 
 	// Guérison asynchrone/synchrone des membres de la conversation
@@ -340,6 +331,16 @@ func acceptAllPendingMembers(ctx context.Context, conversationID int64, callerAd
 			errQueue := redis.EnqueueDB(ctx, targetMemberPayload.ID, conversationID, redis.EntityMembers, redis.ActionUpdate, targetMemberPayload, redis.TargetAll)
 			if errQueue != nil {
 				numan_log.Error(ctx).Err(errQueue).Int64("member_id", targetMemberPayload.ID).Msg("Échec file d'attente pour l'intégration de membre en masse")
+			}
+
+			// 2B. INDEX & CROISSANCE RECOMMANDATION COMMUNAUTÉS PUBLIQUES
+			added, errIdx := cache_service.AddUserPublicCommunity(ctx, targetMemberPayload.UserID, conversationID)
+			if errIdx != nil {
+				numan_log.Warn(ctx).Err(errIdx).Int64("conv_id", conversationID).Int64("user_id", targetMemberPayload.UserID).Msg("Échec d'indexation user:public_comms lors de acceptAllPendingMembers")
+			} else if added {
+				if errGrowth := cache_service.RecordCommunityMemberJoin(ctx, conversationID); errGrowth != nil {
+					numan_log.Warn(ctx).Err(errGrowth).Int64("conv_id", conversationID).Msg("Échec d'enregistrement de croissance communauté publique lors de acceptAllPendingMembers")
+				}
 			}
 
 			// 3. MESSAGES SYSTÈMES ET DIFFUSION WEBSOCKET (Mode Twitch Communauté)

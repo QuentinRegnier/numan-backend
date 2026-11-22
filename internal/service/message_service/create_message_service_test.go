@@ -4,7 +4,9 @@ import (
 	"context"
 	"strconv"
 	"testing"
+	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/conversation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/media_models"
@@ -13,6 +15,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
+	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/moderation_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
@@ -24,6 +27,7 @@ func TestCreateMessage_MediaWithHighIAScore_TriggersAutoReportWithoutBlockingMes
 	_ = test.SetupTestRedis(t)
 	_ = pkg.InitSnowflake(1)
 	ctx := context.Background()
+	defer time.Sleep(40 * time.Millisecond)
 
 	senderID := int64(15)
 	convID := int64(900)
@@ -75,4 +79,98 @@ func TestCreateMessage_MediaWithHighIAScore_TriggersAutoReportWithoutBlockingMes
 	require.NoError(t, redis.ReportAggregators.GetObject(ctx, "3:"+strconv.FormatInt(out.MessageID, 10), &agg))
 	assert.Equal(t, variables.ReportOriginAutoAI, agg.ReportOrigin)
 	assert.Equal(t, 0.80, agg.IAScoreMax)
+}
+
+func TestCreateMessage_CommunityRecommendationTelemetryHook(t *testing.T) {
+	test.SetupTestRedis(t)
+	_ = pkg.InitSnowflake(1)
+	ctx := context.Background()
+	defer time.Sleep(40 * time.Millisecond)
+
+	pubConv := conversation_models.ConversationPayload{
+		ID:        7001,
+		Type:      variables.ConversationTypeCommunityPub,
+		Title:     "Public Community",
+		State:     variables.ConversationStateActive,
+		Lang:      "fr",
+		Settings:  conversation_models.ConversationSettings{WritePermission: 0},
+		CreatedAt: domain.NowMillis(),
+		UpdatedAt: domain.NowMillis(),
+	}
+	groupConv := conversation_models.ConversationPayload{
+		ID:        7002,
+		Type:      variables.ConversationTypeGroup,
+		Title:     "Private Group",
+		State:     variables.ConversationStateActive,
+		Settings:  conversation_models.DefaultConversationSettings(variables.ConversationTypeGroup),
+		CreatedAt: domain.NowMillis(),
+		UpdatedAt: domain.NowMillis(),
+	}
+	require.NoError(t, object_cache_service.SetConversationInObjectCache(ctx, pubConv))
+	require.NoError(t, object_cache_service.SetConversationInObjectCache(ctx, groupConv))
+
+	for _, uid := range []int64{401, 402} {
+		for _, c := range []conversation_models.ConversationPayload{pubConv, groupConv} {
+			m := member_models.MemberPayload{
+				ID:             c.ID*10 + uid,
+				ConversationID: c.ID,
+				UserID:         uid,
+				Role:           variables.MemberRoleNormal,
+				Settings:       member_models.DefaultMemberSettings(c.Type),
+				JoinedAt:       domain.NowMillis(),
+				CreatedAt:      domain.NowMillis(),
+				UpdatedAt:      domain.NowMillis(),
+			}
+			require.NoError(t, object_cache_service.SetMemberInObjectCache(ctx, m))
+		}
+	}
+
+	_, err := CreateMessage(ctx, 401, pubConv.ID, message_models.CreateMessageInput{
+		ConversationID: pubConv.ID,
+		MessageType:    variables.MessageTypeText,
+		Content:        "Bonjour communauté !",
+	}, false)
+	require.NoError(t, err)
+
+	_, err = CreateMessage(ctx, 401, pubConv.ID, message_models.CreateMessageInput{
+		ConversationID: pubConv.ID,
+		MessageType:    variables.MessageTypeText,
+		Content:        "Deuxième message du même auteur",
+	}, false)
+	require.NoError(t, err)
+
+	_, err = CreateMessage(ctx, 402, pubConv.ID, message_models.CreateMessageInput{
+		ConversationID: pubConv.ID,
+		MessageType:    variables.MessageTypeText,
+		Content:        "Salut de l'auteur 2",
+	}, false)
+	require.NoError(t, err)
+
+	// Internal system message in public community must NOT increment telemetry
+	_, err = CreateMessage(ctx, 401, pubConv.ID, message_models.CreateMessageInput{
+		ConversationID: pubConv.ID,
+		MessageType:    variables.MessageTypeSystem,
+		Content:        "",
+		Attachments:    map[string]any{"sys_action": variables.SysActionMemberJoined},
+	}, true)
+	require.NoError(t, err)
+
+	// Message in standard group must NOT increment community telemetry
+	_, err = CreateMessage(ctx, 401, groupConv.ID, message_models.CreateMessageInput{
+		ConversationID: groupConv.ID,
+		MessageType:    variables.MessageTypeText,
+		Content:        "Message de groupe privé",
+	}, false)
+	require.NoError(t, err)
+
+	dates := cache_service.CommunityRecoTrailingDates(domain.NowTime(), 7)
+	msgCounts, err := cache_service.GetCommunity7DayMessageCounts(ctx, []int64{pubConv.ID, groupConv.ID}, dates)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), msgCounts[pubConv.ID])
+	assert.Equal(t, int64(0), msgCounts[groupConv.ID])
+
+	authorCounts, err := cache_service.GetCommunity7DayUniqueAuthors(ctx, []int64{pubConv.ID, groupConv.ID}, dates)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), authorCounts[pubConv.ID])
+	assert.Equal(t, int64(0), authorCounts[groupConv.ID])
 }

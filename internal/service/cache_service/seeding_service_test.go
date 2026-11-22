@@ -133,13 +133,23 @@ func TestSeedingService(t *testing.T) {
 				), nil
 			case strings.Contains(query, "func_load_active_conversations"):
 				return test.NewMockRows(
-					[]string{"id", "type", "title", "description", "avatar_id", "last_message_id", "settings", "external_link"},
+					[]string{"id", "type", "title", "description", "avatar_id", "last_message_id", "settings", "external_link", "lang", "is_partner", "pin_slot"},
 					nil,
 				), nil
 			case strings.Contains(query, "func_load_active_members"):
 				return test.NewMockRows(
 					[]string{"conversation_id", "user_id", "role", "settings", "unread_count", "frozen_message_id", "last_read_message_id", "last_message_id", "joined_at"},
 					nil,
+				), nil
+			case strings.Contains(query, "func_load_active_community_pins"):
+				return test.NewMockRows(
+					[]string{"conversation_id", "lang", "pin_slot"},
+					[][]driver.Value{{int64(50), "fr", int64(1)}},
+				), nil
+			case strings.Contains(query, "func_load_active_public_community_memberships"):
+				return test.NewMockRows(
+					[]string{"user_id", "conversation_id"},
+					[][]driver.Value{{int64(1), int64(50)}},
 				), nil
 			case strings.Contains(query, "func_load_timeline_seed_paginated"):
 				return test.NewMockRows(
@@ -154,6 +164,15 @@ func TestSeedingService(t *testing.T) {
 		require.NoError(t, SeedSpeedCache(ctx))
 		require.NoError(t, SeedUserCache(ctx))
 
+		// Verify community recommendation pins & memberships were seeded by SeedSpeedCache
+		pinsFR, errPins := GetCommunityPinsByLang(ctx, "fr")
+		require.NoError(t, errPins)
+		assert.Equal(t, int64(50), pinsFR[1])
+
+		userComms, errComms := GetUserPublicCommunities(ctx, 1)
+		require.NoError(t, errComms)
+		assert.Contains(t, userComms, int64(50))
+
 		// Verify user timeline was populated by SeedUserCache
 		ids, err := GetTopUserPostIDs(ctx, 1, 0, 10)
 		require.NoError(t, err)
@@ -165,6 +184,63 @@ func TestSeedingService(t *testing.T) {
 		}, nil)
 		require.NoError(t, SeedSpeedCache(ctx))
 		require.NoError(t, SeedUserCache(ctx))
+	})
+
+	t.Run("SeedCommunityRecommendations seeds pins, memberships, purges stale pins, and fires compute hook", func(t *testing.T) {
+		_ = test.SetupTestRedis(t)
+
+		// Stale pin in EN should be cleared during seeding
+		require.NoError(t, SetCommunityPinInCache(ctx, "en", 3, 999))
+
+		hookCh := make(chan struct{}, 1)
+		RegisterCommunityRecoInitialComputeHook(func(_ context.Context) {
+			hookCh <- struct{}{}
+		})
+		t.Cleanup(func() { RegisterCommunityRecoInitialComputeHook(nil) })
+
+		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
+			switch {
+			case strings.Contains(query, "func_load_active_community_pins"):
+				return test.NewMockRows(
+					[]string{"conversation_id", "lang", "pin_slot"},
+					[][]driver.Value{
+						{int64(301), "fr", int64(1)},
+						{int64(302), "fr", int64(4)},
+					},
+				), nil
+			case strings.Contains(query, "func_load_active_public_community_memberships"):
+				return test.NewMockRows(
+					[]string{"user_id", "conversation_id"},
+					[][]driver.Value{
+						{int64(10), int64(301)},
+						{int64(10), int64(302)},
+						{int64(20), int64(301)},
+					},
+				), nil
+			default:
+				return test.NewMockRows([]string{"id"}, nil), nil
+			}
+		}, nil)
+
+		require.NoError(t, SeedCommunityRecommendations(ctx))
+
+		frPins, err := GetCommunityPinsByLang(ctx, "fr")
+		require.NoError(t, err)
+		assert.Equal(t, map[int]int64{1: 301, 4: 302}, frPins)
+
+		enPins, err := GetCommunityPinsByLang(ctx, "en")
+		require.NoError(t, err)
+		assert.Empty(t, enPins)
+
+		u10Comms, err := GetUserPublicCommunities(ctx, 10)
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []int64{301, 302}, u10Comms)
+
+		u20Comms, err := GetUserPublicCommunities(ctx, 20)
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []int64{301}, u20Comms)
+
+		<-hookCh
 	})
 
 	t.Run("SeedArticles populates non-evictable Redis index and L2 Mongo", func(t *testing.T) {

@@ -24,13 +24,18 @@ func TestCreateCommunityInput_Validate(t *testing.T) {
 
 	var nilIn *conversation_models.CreateCommunityInput
 	assertBadRequest(t, nilIn.Validate())
-	require.NoError(t, (&conversation_models.CreateCommunityInput{Title: "Numan Dev"}).Validate())
-	assertBadRequest(t, (&conversation_models.CreateCommunityInput{Title: "ab"}).Validate())
-	assertBadRequest(t, (&conversation_models.CreateCommunityInput{Title: strings.Repeat("é", 101)}).Validate())
-	assertBadRequest(t, (&conversation_models.CreateCommunityInput{Title: "Numan", OwnerID: -1}).Validate())
+	require.NoError(t, (&conversation_models.CreateCommunityInput{Title: "Numan Dev", Lang: "fr"}).Validate())
+	require.NoError(t, (&conversation_models.CreateCommunityInput{Title: "Numan Dev", Lang: " EN "}).Validate())
+	assertBadRequest(t, (&conversation_models.CreateCommunityInput{Title: "Numan Dev"}).Validate())
+	assertBadRequest(t, (&conversation_models.CreateCommunityInput{Title: "Numan Dev", Lang: "xx"}).Validate())
+	assertBadRequest(t, (&conversation_models.CreateCommunityInput{Title: "Numan Dev", Lang: "un"}).Validate())
+	assertBadRequest(t, (&conversation_models.CreateCommunityInput{Title: "ab", Lang: "fr"}).Validate())
+	assertBadRequest(t, (&conversation_models.CreateCommunityInput{Title: strings.Repeat("é", 101), Lang: "fr"}).Validate())
+	assertBadRequest(t, (&conversation_models.CreateCommunityInput{Title: "Numan", Lang: "fr", OwnerID: -1}).Validate())
 	assertBadRequest(t, (&conversation_models.CreateCommunityInput{
 		Title:    "Numan",
+		Lang:     "fr",
 		Settings: conversation_models.ConversationSettings{WritePermission: -1},
 	}).Validate())
-	assertBadRequest(t, (&conversation_models.CreateCommunityInput{Title: "Numan", ExternalLink: models.ExternalLinks{URL: "bad"}}).Validate())
+	assertBadRequest(t, (&conversation_models.CreateCommunityInput{Title: "Numan", Lang: "fr", ExternalLink: models.ExternalLinks{URL: "bad"}}).Validate())
 }

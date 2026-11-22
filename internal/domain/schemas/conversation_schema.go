@@ -13,6 +13,9 @@ var ConversationsSchema = map[string]reflect.Kind{
 	"state":           reflect.Int,
 	"settings":        reflect.Map, // Remplacement de "laws": reflect.Slice
 	"external_link":   reflect.Map,
+	"lang":            reflect.String,
+	"is_partner":      reflect.Bool,
+	"pin_slot":        reflect.Int,
 	"created_at":      reflect.Struct,
 	"updated_at":      reflect.Struct,
 }

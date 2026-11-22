@@ -88,3 +88,84 @@ func TestUserRecommendationRedisCollectionsAndPrimitives(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, acquiredAgain)
 }
+
+func TestCommunityRecommendationRedisCollectionsAndPrimitives(t *testing.T) {
+	test.SetupTestRedis(t)
+	ctx := context.Background()
+
+	// 1. Key formatting verification
+	assert.Equal(t, "community:reco:ranked:fr", redis.CommunityRecoRanked.Key("fr"))
+	assert.Equal(t, "community:reco:pins:fr", redis.CommunityRecoPins.Key("fr"))
+	assert.Equal(t, "community:reco:msg_count:2026-11-21", redis.CommunityRecoMsgCount.Key("2026-11-21"))
+	assert.Equal(t, "community:reco:authors:1001:2026-11-21", redis.CommunityRecoAuthors.Key("1001:2026-11-21"))
+	assert.Equal(t, "community:reco:growth:2026-11-21", redis.CommunityRecoGrowth.Key("2026-11-21"))
+	assert.Equal(t, "user:public_comms:42", redis.UserPublicComms.Key(42))
+
+	// 2. HIncrBy & HMGet
+	c1, err := redis.CommunityRecoMsgCount.HIncrBy(ctx, "2026-11-21", "1001", 3)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), c1)
+
+	c2, err := redis.CommunityRecoMsgCount.HIncrBy(ctx, "2026-11-21", "1001", 2)
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), c2)
+
+	vals, err := redis.CommunityRecoMsgCount.HMGet(ctx, "2026-11-21", "1001", "9999")
+	require.NoError(t, err)
+	require.Len(t, vals, 2)
+	assert.Equal(t, "5", vals[0])
+	assert.Nil(t, vals[1])
+
+	// 3. ExpireNX preserves existing TTL
+	ok1, err := redis.CommunityRecoMsgCount.ExpireNX(ctx, "2026-11-21", 8*24*time.Hour)
+	require.NoError(t, err)
+	assert.True(t, ok1)
+
+	ok2, err := redis.CommunityRecoMsgCount.ExpireNX(ctx, "2026-11-21", 10*time.Second)
+	require.NoError(t, err)
+	assert.False(t, ok2)
+
+	// 4. PFAdd & multi-key PFCount union
+	added, err := redis.CommunityRecoAuthors.PFAdd(ctx, "1001:2026-11-20", "10", "20")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), added)
+
+	addedDup, err := redis.CommunityRecoAuthors.PFAdd(ctx, "1001:2026-11-20", "10")
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), addedDup)
+
+	_, err = redis.CommunityRecoAuthors.PFAdd(ctx, "1001:2026-11-21", "20", "30")
+	require.NoError(t, err)
+
+	unionCount, err := redis.CommunityRecoAuthors.PFCount(ctx, "1001:2026-11-20", "1001:2026-11-21")
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), unionCount) // {10, 20, 30}
+
+	// 5. HashReplaceAtomic (MULTI/EXEC)
+	require.NoError(t, redis.CommunityRecoPins.HashReplaceAtomic(ctx, "fr", map[string]any{
+		"1": "1001",
+		"3": "1003",
+	}, 0))
+	rawPins, err := redis.CommunityRecoPins.HGetAll(ctx, "fr").Result()
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"1": "1001", "3": "1003"}, rawPins)
+
+	// Atomic replacement clears old slots
+	require.NoError(t, redis.CommunityRecoPins.HashReplaceAtomic(ctx, "fr", map[string]any{
+		"2": "1002",
+	}, 0))
+	rawPinsAfter, err := redis.CommunityRecoPins.HGetAll(ctx, "fr").Result()
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"2": "1002"}, rawPinsAfter)
+
+	// 6. ZSetReplaceAtomic (MULTI/EXEC)
+	require.NoError(t, redis.CommunityRecoRanked.ZSetReplaceAtomic(ctx, "fr", []*goredis.Z{
+		{Score: 5.5, Member: "1001"},
+		{Score: 9.2, Member: "1002"},
+	}, 0))
+	ranked, err := redis.CommunityRecoRanked.ZRevRangeWithScores(ctx, "fr", 0, -1)
+	require.NoError(t, err)
+	require.Len(t, ranked, 2)
+	assert.Equal(t, "1002", ranked[0].Member)
+	assert.Equal(t, 9.2, ranked[0].Score)
+}

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 
@@ -42,5 +43,31 @@ func TestSetupRoutes_ArticlesEndpointsAndNoPathParams(t *testing.T) {
 
 	for routeKey, found := range expectedArticleRoutes {
 		assert.True(t, found, "expected article route %s to be registered in SetupRoutes", routeKey)
+	}
+}
+
+func TestSetupRoutes_CommunityRecommendationEndpointsAndNoPathParams(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	SetupRoutes(r)
+
+	expected := map[string]bool{
+		http.MethodPost + " /communities/recommendations": false,
+		http.MethodPost + " /admin/communities/pin":       false,
+		http.MethodPost + " /admin/communities/unpin":     false,
+		http.MethodPost + " /admin/communities/partner":   false,
+	}
+
+	for _, route := range r.Routes() {
+		key := route.Method + " " + route.Path
+		if _, ok := expected[key]; ok {
+			expected[key] = true
+			assert.False(t, strings.Contains(route.Path, ":"), "route %s must not contain URL path params", route.Path)
+			assert.False(t, strings.Contains(route.Path, "*"), "route %s must not contain wildcard params", route.Path)
+		}
+	}
+
+	for routeKey, found := range expected {
+		assert.True(t, found, "expected route %s to be registered", routeKey)
 	}
 }

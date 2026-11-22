@@ -2,6 +2,7 @@ package variables
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -302,4 +303,55 @@ func init() {
 	registerDuration("UserRecoCronInterval", "user_recommendation", &UserRecoCronInterval, positiveDuration, nil)
 	registerInt("UserRecoActiveWindowDays", "user_recommendation", &UserRecoActiveWindowDays, positiveInt)
 	registerInt("UserRecoCronBatchSize", "user_recommendation", &UserRecoCronBatchSize, positiveInt)
+
+	// 23. community_reco_constants.go (18 variables hot-reloadables)
+	boundedFloat := func(minVal, maxVal float64) func(float64) error {
+		return func(v float64) error {
+			if v < minVal || v > maxVal {
+				return fmt.Errorf("doit être compris entre %g et %g", minVal, maxVal)
+			}
+			return nil
+		}
+	}
+	boundedPositiveFloat := func(maxVal float64) func(float64) error {
+		return func(v float64) error {
+			if v <= 0 || v > maxVal {
+				return fmt.Errorf("doit être strictement positif et <= %g", maxVal)
+			}
+			return nil
+		}
+	}
+	boundedInt := func(minVal, maxVal int) func(int) error {
+		return func(v int) error {
+			if v < minVal || v > maxVal {
+				return fmt.Errorf("doit être compris entre %d et %d", minVal, maxVal)
+			}
+			return nil
+		}
+	}
+	boundedCronDuration := func(v time.Duration) error {
+		if v < CommunityRecoMinCronInterval || v > CommunityRecoMaxCronInterval {
+			return fmt.Errorf("doit être compris entre %s et %s", CommunityRecoMinCronInterval, CommunityRecoMaxCronInterval)
+		}
+		return nil
+	}
+
+	registerFloat64("CommunityRecoWeightMembers", "community_recommendation", &CommunityRecoWeightMembers, boundedFloat(0, CommunityRecoMaxMultiplier))
+	registerFloat64("CommunityRecoWeightDynamism", "community_recommendation", &CommunityRecoWeightDynamism, boundedFloat(0, CommunityRecoMaxMultiplier))
+	registerFloat64("CommunityRecoWeightGrowth", "community_recommendation", &CommunityRecoWeightGrowth, boundedFloat(0, CommunityRecoMaxMultiplier))
+	registerFloat64("CommunityRecoTrustAlphaOwner", "community_recommendation", &CommunityRecoTrustAlphaOwner, unitRatioFloat)
+	registerFloat64("CommunityRecoTrustAlphaAdmin", "community_recommendation", &CommunityRecoTrustAlphaAdmin, unitRatioFloat)
+	registerFloat64("CommunityRecoTrustAlphaMember", "community_recommendation", &CommunityRecoTrustAlphaMember, unitRatioFloat)
+	registerFloat64("CommunityRecoTrustPriorMean", "community_recommendation", &CommunityRecoTrustPriorMean, unitRatioFloat)
+	registerFloat64("CommunityRecoTrustPriorStrength", "community_recommendation", &CommunityRecoTrustPriorStrength, boundedFloat(0, CommunityRecoMaxPriorStrength))
+	registerInt("CommunityRecoTrustMemberSampleCap", "community_recommendation", &CommunityRecoTrustMemberSampleCap, boundedInt(1, CommunityRecoMaxMemberSampleCap))
+	registerFloat64("CommunityRecoModeMultFreeChat", "community_recommendation", &CommunityRecoModeMultFreeChat, boundedPositiveFloat(CommunityRecoMaxMultiplier))
+	registerFloat64("CommunityRecoModeMultSubreddit", "community_recommendation", &CommunityRecoModeMultSubreddit, boundedPositiveFloat(CommunityRecoMaxMultiplier))
+	registerFloat64("CommunityRecoModeMultAnnouncement", "community_recommendation", &CommunityRecoModeMultAnnouncement, boundedPositiveFloat(CommunityRecoMaxMultiplier))
+	registerFloat64("CommunityRecoPartnerMultiplier", "community_recommendation", &CommunityRecoPartnerMultiplier, boundedPositiveFloat(CommunityRecoMaxMultiplier))
+	registerFloat64("CommunityRecoFreshnessBoost", "community_recommendation", &CommunityRecoFreshnessBoost, boundedFloat(0, CommunityRecoMaxMultiplier))
+	registerInt("CommunityRecoFreshnessDays", "community_recommendation", &CommunityRecoFreshnessDays, boundedInt(1, CommunityRecoMaxFreshnessDays))
+	registerFloat64("CommunityRecoFriendBoostGamma", "community_recommendation", &CommunityRecoFriendBoostGamma, boundedFloat(0, CommunityRecoMaxMultiplier))
+	registerInt("CommunityRecoFriendEvalCap", "community_recommendation", &CommunityRecoFriendEvalCap, boundedInt(1, CommunityRecoMaxFriendEvalCap))
+	registerDuration("CommunityRecoCronInterval", "community_recommendation", &CommunityRecoCronInterval, boundedCronDuration, nil)
 }

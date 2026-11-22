@@ -139,15 +139,9 @@ func GetInboxView(ctx context.Context, userID int64, paginationLimit int64, pagi
 		if errPgFallback == nil {
 			for _, fallbackRecord := range fallbackResultsFromPg {
 
-				convLiteRequest := lite_models.ConvLiteRequest{
-					ID:            fallbackRecord.Conversation.ID,
-					Type:          fallbackRecord.Conversation.Type,
-					Title:         fallbackRecord.Conversation.Title,
-					Description:   fallbackRecord.Conversation.Description,
-					AvatarID:      fallbackRecord.Conversation.AvatarID,
-					LastMessageID: fallbackRecord.Conversation.LastMessageID,
-					Settings:      fallbackRecord.Conversation.Settings,
-					ExternalLink:  fallbackRecord.Conversation.ExternalLink,
+				convLiteRequest := fallbackRecord.Conversation
+				if convLiteRequest.Type == variables.ConversationTypeCommunityPub && convLiteRequest.Mode == "" {
+					convLiteRequest.Mode = string(lite_models.ResolveCommunityMode(convLiteRequest))
 				}
 
 				memberLiteRequest := lite_models.MemberLiteRequest{
@@ -241,16 +235,8 @@ func ProcessNewMessageInSpeedCache(ctx context.Context, messageID int64, convers
 		if errMongo != nil {
 			numan_log.Warn(ctx).Err(errMongo).Int64("conversation_id", conversationID).Msg("Échec L2 lors de la récupération de la conversation pour ProcessNewMessageInSpeedCache")
 		} else if mongoConv.ID != 0 {
-			convLiteRequest = lite_models.ConvLiteRequest{
-				ID:            mongoConv.ID,
-				Type:          mongoConv.Type,
-				Title:         mongoConv.Title,
-				Description:   mongoConv.Description,
-				AvatarID:      mongoConv.AvatarID,
-				LastMessageID: messageID,
-				Settings:      service.ToConversationSettingsLite(mongoConv.Settings),
-				ExternalLink:  mongoConv.ExternalLink,
-			}
+			convLiteRequest = service.ToConvLiteRequest(mongoConv)
+			convLiteRequest.LastMessageID = messageID
 			err := redis.ConvMeta.SetObject(ctx, conversationID, convLiteRequest)
 			if err != nil {
 				numan_log.Warn(ctx).Err(err).Msg("Échec SetObject lors de la reconstruction SpeedConversation")
@@ -530,16 +516,7 @@ func RehydrateConversationItemInSpeedCache(ctx context.Context, fullConversation
 		return
 	}
 
-	convLiteRequest := lite_models.ConvLiteRequest{
-		ID:            fullConversation.ID,
-		Type:          fullConversation.Type,
-		Title:         fullConversation.Title,
-		Description:   fullConversation.Description,
-		AvatarID:      fullConversation.AvatarID,
-		LastMessageID: fullConversation.LastMessageID,
-		Settings:      service.ToConversationSettingsLite(fullConversation.Settings),
-		ExternalLink:  fullConversation.ExternalLink,
-	}
+	convLiteRequest := service.ToConvLiteRequest(fullConversation)
 
 	memberLiteRequest := lite_models.MemberLiteRequest{
 		ConversationID:    fullMember.ConversationID,
@@ -595,15 +572,9 @@ func seedMessagingSpeedCache(ctx context.Context) error {
 	}
 
 	for _, conversationRecord := range activeConversationsList {
-		convLiteRequest := lite_models.ConvLiteRequest{
-			ID:            conversationRecord.ID,
-			Type:          conversationRecord.Type,
-			Title:         conversationRecord.Title,
-			Description:   conversationRecord.Description,
-			AvatarID:      conversationRecord.AvatarID,
-			LastMessageID: conversationRecord.LastMessageID,
-			Settings:      conversationRecord.Settings,
-			ExternalLink:  conversationRecord.ExternalLink,
+		convLiteRequest := conversationRecord
+		if convLiteRequest.Type == variables.ConversationTypeCommunityPub && convLiteRequest.Mode == "" {
+			convLiteRequest.Mode = string(lite_models.ResolveCommunityMode(convLiteRequest))
 		}
 		err := redis.ConvMeta.SetObject(ctx, convLiteRequest.ID, convLiteRequest)
 		if err != nil {

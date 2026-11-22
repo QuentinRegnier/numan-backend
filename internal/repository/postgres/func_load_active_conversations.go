@@ -7,10 +7,12 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain/models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
 
 func FuncLoadActiveConversations(ctx context.Context) ([]lite_models.ConvLiteRequest, error) {
@@ -23,7 +25,7 @@ func FuncLoadActiveConversations(ctx context.Context) ([]lite_models.ConvLiteReq
 		)
 	}
 
-	query := `SELECT id, type, title, description, avatar_id, last_message_id, settings, external_link FROM messaging.func_load_active_conversations()`
+	query := `SELECT id, type, title, description, avatar_id, last_message_id, settings, external_link, lang, is_partner, pin_slot FROM messaging.func_load_active_conversations()`
 	rows, err := postgres.PostgresDB.QueryContext(ctx, query)
 	if err != nil {
 		return nil, numan_error.NewAppError(
@@ -49,9 +51,12 @@ func FuncLoadActiveConversations(ctx context.Context) ([]lite_models.ConvLiteReq
 		var avatarID sql.NullInt64
 		var settingsRaw sql.NullString
 		var externalLinksRaw sql.NullString
+		var lang sql.NullString
+		var isPartner bool
+		var pinSlot sql.NullInt64
 
-		if err := rows.Scan(&cid, &cType, &title, &description, &avatarID, &lastMsgID, &settingsRaw, &externalLinksRaw); err == nil {
-			meta := lite_models.ConvLiteRequest{ID: cid, Type: cType}
+		if err := rows.Scan(&cid, &cType, &title, &description, &avatarID, &lastMsgID, &settingsRaw, &externalLinksRaw, &lang, &isPartner, &pinSlot); err == nil {
+			meta := lite_models.ConvLiteRequest{ID: cid, Type: cType, IsPartner: isPartner}
 			if title.Valid {
 				meta.Title = title.String
 			}
@@ -63,6 +68,12 @@ func FuncLoadActiveConversations(ctx context.Context) ([]lite_models.ConvLiteReq
 			}
 			if lastMsgID.Valid {
 				meta.LastMessageID = lastMsgID.Int64
+			}
+			if lang.Valid {
+				meta.Lang = lang.String
+			}
+			if pinSlot.Valid {
+				meta.PinSlot = int(pinSlot.Int64)
 			}
 			if settingsRaw.Valid && settingsRaw.String != "" && settingsRaw.String != "{}" {
 				if err := json.Unmarshal([]byte(settingsRaw.String), &meta.Settings); err != nil {
@@ -83,6 +94,9 @@ func FuncLoadActiveConversations(ctx context.Context) ([]lite_models.ConvLiteReq
 						err,
 					)
 				}
+			}
+			if meta.Type == variables.ConversationTypeCommunityPub {
+				meta.Mode = string(models.ResolveCommunityModeFromWritePermission(meta.Settings.WritePermission))
 			}
 			results = append(results, meta)
 		}

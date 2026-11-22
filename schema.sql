@@ -261,17 +261,20 @@ CREATE TABLE content.tags (
 
 /* messaging.conversations — type 0 DM, 1 group, 2 private community, 3 public community. state 0 active, 1 archived. */
 CREATE TABLE messaging.conversations (
-    id              bigint   NOT NULL,
-    type            smallint NOT NULL,
+    id              bigint     NOT NULL,
+    type            smallint   NOT NULL,
     title           text,
     description     text,
     avatar_id       bigint,
     last_message_id bigint,
-    state           smallint NOT NULL DEFAULT 0,
-    settings        jsonb    NOT NULL DEFAULT '{}'::jsonb,
-    external_link   jsonb    NOT NULL DEFAULT '{}'::jsonb,
-    created_at      bigint   NOT NULL DEFAULT util.now_ms(),
-    updated_at      bigint   NOT NULL DEFAULT util.now_ms()
+    state           smallint   NOT NULL DEFAULT 0,
+    settings        jsonb      NOT NULL DEFAULT '{}'::jsonb,
+    external_link   jsonb      NOT NULL DEFAULT '{}'::jsonb,
+    lang            varchar(8),
+    is_partner      boolean    NOT NULL DEFAULT false,
+    pin_slot        integer,
+    created_at      bigint     NOT NULL DEFAULT util.now_ms(),
+    updated_at      bigint     NOT NULL DEFAULT util.now_ms()
 );
 
 /* messaging.messages — hyper-growth table (see review §9 for the partitioning decision).
@@ -407,6 +410,9 @@ ALTER TABLE ONLY content.saved       ADD CONSTRAINT saved_post_id_fkey FOREIGN K
 -- messaging
 ALTER TABLE ONLY messaging.conversations ADD CONSTRAINT conversations_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY messaging.conversations ADD CONSTRAINT conversations_last_message_id_key UNIQUE (last_message_id);
+ALTER TABLE ONLY messaging.conversations ADD CONSTRAINT conversations_pin_slot_positive CHECK (pin_slot IS NULL OR (pin_slot > 0 AND pin_slot <= 100));
+ALTER TABLE ONLY messaging.conversations ADD CONSTRAINT conversations_community_fields_type_chk CHECK (type = 3 OR (lang IS NULL AND is_partner = false AND pin_slot IS NULL));
+ALTER TABLE ONLY messaging.conversations ADD CONSTRAINT conversations_pin_requires_lang_chk CHECK (pin_slot IS NULL OR (lang IS NOT NULL AND btrim(lang) <> ''));
 ALTER TABLE ONLY messaging.messages  ADD CONSTRAINT messages_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY messaging.messages  ADD CONSTRAINT messages_conversation_id_fkey FOREIGN KEY (conversation_id) REFERENCES messaging.conversations(id);
 ALTER TABLE ONLY messaging.message_reactions ADD CONSTRAINT message_reactions_pkey PRIMARY KEY (id);
@@ -477,6 +483,9 @@ CREATE INDEX idx_media_quarantine ON content.media (created_at ASC, id ASC) WHER
 -- ---- messaging --------------------------------------------------------------
 CREATE INDEX idx_conversations_created      ON messaging.conversations (created_at DESC);
 CREATE INDEX idx_conversations_communities  ON messaging.conversations (id) WHERE type = 3 AND state = 0;
+CREATE INDEX idx_conversations_active_pub_lang ON messaging.conversations (lang, id) WHERE type = 3 AND state = 0;
+CREATE UNIQUE INDEX idx_conversations_active_pub_lang_pin ON messaging.conversations (lang, pin_slot)
+    WHERE type = 3 AND state = 0 AND pin_slot IS NOT NULL;
 -- history pagination is keyed on the Snowflake id (func_load_message_ids_paginated)
 CREATE INDEX idx_messages_conv_id_live  ON messaging.messages (conversation_id, id DESC) WHERE visibility = true;
 -- chronological access (unread recount, conversation_summary view)
@@ -1318,6 +1327,7 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
         'id', c.id, 'type', c.type, 'title', COALESCE(c.title, ''), 'description', COALESCE(c.description, ''),
         'avatar_id', COALESCE(c.avatar_id, 0), 'last_message_id', COALESCE(c.last_message_id, 0), 'state', c.state,
         'settings', c.settings, 'external_link', c.external_link,
+        'lang', COALESCE(c.lang, ''), 'is_partner', c.is_partner, 'pin_slot', c.pin_slot,
         'created_at', c.created_at, 'updated_at', c.updated_at)
 $$;
 
@@ -1326,7 +1336,17 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT jsonb_build_object(
         'id', c.id, 'type', c.type, 'title', COALESCE(c.title, ''), 'description', COALESCE(c.description, ''),
         'avatar_id', COALESCE(c.avatar_id, 0), 'last_message_id', COALESCE(c.last_message_id, 0),
-        'settings', c.settings, 'external_links', c.external_link)
+        'settings', c.settings, 'external_links', c.external_link,
+        'lang', COALESCE(c.lang, ''), 'is_partner', c.is_partner, 'pin_slot', c.pin_slot,
+        'mode', CASE
+            WHEN c.type = 3 THEN
+                CASE COALESCE((c.settings ->> 'write_permission')::int, 2)
+                    WHEN 0 THEN 'free_chat'
+                    WHEN 1 THEN 'announcement'
+                    ELSE 'subreddit'
+                END
+            ELSE ''
+        END)
 $$;
 
 CREATE FUNCTION messaging.member_lite_json(m messaging.members) RETURNS jsonb
@@ -1532,9 +1552,10 @@ $$;
 -- Cold-start seeders. v1 func_load_active_conversations had an untyped `external_link` column => schema failed to load.
 CREATE FUNCTION messaging.func_load_active_conversations()
 RETURNS TABLE(id bigint, type smallint, title text, description text, avatar_id bigint, last_message_id bigint,
-              settings jsonb, external_link jsonb)
+              settings jsonb, external_link jsonb, lang text, is_partner boolean, pin_slot integer)
 LANGUAGE sql STABLE AS $$
-    SELECT c.id, c.type, c.title, c.description, c.avatar_id, c.last_message_id, c.settings, c.external_link
+    SELECT c.id, c.type, c.title, c.description, c.avatar_id, c.last_message_id, c.settings, c.external_link,
+           c.lang::text, c.is_partner, c.pin_slot
     FROM messaging.conversations c WHERE c.state = 0
 $$;
 
@@ -1544,6 +1565,243 @@ LANGUAGE sql STABLE AS $$
     SELECT c.id, COALESCE(c.title, ''), COALESCE(c.description, ''), COALESCE(c.avatar_id, 0),
            (SELECT count(*)::integer FROM messaging.members m WHERE m.conversation_id = c.id AND m.role >= 0)
     FROM messaging.conversations c WHERE c.type = 3 AND c.state = 0
+$$;
+
+-- Public Community Recommendation System: full active public community snapshot for scoring worker.
+CREATE FUNCTION messaging.func_load_active_communities_for_reco()
+RETURNS TABLE(id bigint, title text, description text, avatar_id bigint, lang text, is_partner boolean,
+              pin_slot integer, settings jsonb, created_at bigint, member_count integer)
+LANGUAGE sql STABLE AS $$
+    SELECT c.id, COALESCE(c.title, ''), COALESCE(c.description, ''), COALESCE(c.avatar_id, 0),
+           COALESCE(c.lang, '')::text, c.is_partner, c.pin_slot, c.settings, c.created_at,
+           (SELECT count(*)::integer FROM messaging.members m WHERE m.conversation_id = c.id AND m.role >= 0)
+    FROM messaging.conversations c
+    WHERE c.type = 3 AND c.state = 0
+    ORDER BY c.id ASC
+$$;
+
+-- Batched member role loader for hierarchical trust computation (all owners/admins + bounded sample of normal members).
+CREATE FUNCTION messaging.func_load_community_members_for_trust(p_conv_ids bigint[], p_member_cap integer DEFAULT 200)
+RETURNS TABLE(conversation_id bigint, user_id bigint, role smallint)
+LANGUAGE sql STABLE AS $$
+    WITH leadership AS (
+        SELECT m.conversation_id, m.user_id, m.role
+        FROM messaging.members m
+        WHERE m.conversation_id = ANY(p_conv_ids)
+          AND m.role IN (1, 2)
+    ),
+    sampled_members AS (
+        SELECT m.conversation_id, m.user_id, m.role
+        FROM (
+            SELECT m.conversation_id, m.user_id, m.role,
+                   ROW_NUMBER() OVER (PARTITION BY m.conversation_id ORDER BY m.joined_at DESC, m.user_id ASC) AS rn
+            FROM messaging.members m
+            WHERE m.conversation_id = ANY(p_conv_ids)
+              AND m.role = 0
+        ) m
+        WHERE m.rn <= GREATEST(p_member_cap, 1)
+    )
+    SELECT conversation_id, user_id, role FROM leadership
+    UNION ALL
+    SELECT conversation_id, user_id, role FROM sampled_members
+$$;
+
+-- Cold-start seeder: active pinned public communities by language.
+CREATE FUNCTION messaging.func_load_active_community_pins()
+RETURNS TABLE(conversation_id bigint, lang text, pin_slot integer)
+LANGUAGE sql STABLE AS $$
+    SELECT c.id, c.lang::text, c.pin_slot
+    FROM messaging.conversations c
+    WHERE c.type = 3 AND c.state = 0 AND c.pin_slot IS NOT NULL AND c.lang IS NOT NULL AND btrim(c.lang) <> ''
+    ORDER BY c.lang ASC, c.pin_slot ASC, c.id ASC
+$$;
+
+-- Cold-start seeder: paginated active public community memberships for user:public_comms:{user_id}.
+CREATE FUNCTION messaging.func_load_active_public_community_memberships(p_limit integer, p_offset integer)
+RETURNS TABLE(user_id bigint, conversation_id bigint)
+LANGUAGE sql STABLE AS $$
+    SELECT m.user_id, m.conversation_id
+    FROM messaging.members m
+    JOIN messaging.conversations c ON c.id = m.conversation_id
+    WHERE c.type = 3 AND c.state = 0 AND m.role >= 0
+    ORDER BY m.id ASC
+    LIMIT LEAST(GREATEST(p_limit, 1), 50000) OFFSET GREATEST(p_offset, 0)
+$$;
+
+-- Atomic admin pin with collision check and optional force replacement.
+CREATE FUNCTION messaging.func_set_community_pin(p_conv_id bigint, p_slot integer, p_force_replace boolean DEFAULT false)
+RETURNS TABLE(status_code text, conv_lang text, old_pin_slot integer, displaced_conv_id bigint)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_type        smallint;
+    v_state       smallint;
+    v_lang        text;
+    v_old_slot    integer;
+    v_displaced   bigint;
+    v_now_ms      bigint := util.now_ms();
+BEGIN
+    IF p_slot IS NULL OR p_slot < 1 OR p_slot > 100 THEN
+        RETURN QUERY SELECT 'INVALID_SLOT'::text, ''::text, NULL::integer, NULL::bigint;
+        RETURN;
+    END IF;
+
+    SELECT c.type, c.state, c.lang::text, c.pin_slot
+      INTO v_type, v_state, v_lang, v_old_slot
+    FROM messaging.conversations c
+    WHERE c.id = p_conv_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT 'NOT_FOUND'::text, ''::text, NULL::integer, NULL::bigint;
+        RETURN;
+    END IF;
+
+    IF v_type <> 3 OR v_state <> 0 THEN
+        RETURN QUERY SELECT 'NOT_ACTIVE_PUBLIC_COMMUNITY'::text, COALESCE(v_lang, ''), v_old_slot, NULL::bigint;
+        RETURN;
+    END IF;
+
+    IF v_lang IS NULL OR btrim(v_lang) = '' THEN
+        RETURN QUERY SELECT 'MISSING_LANG'::text, ''::text, v_old_slot, NULL::bigint;
+        RETURN;
+    END IF;
+
+    IF v_old_slot = p_slot THEN
+        RETURN QUERY SELECT 'OK'::text, v_lang, v_old_slot, NULL::bigint;
+        RETURN;
+    END IF;
+
+    SELECT c.id INTO v_displaced
+    FROM messaging.conversations c
+    WHERE c.type = 3 AND c.state = 0 AND c.lang = v_lang AND c.pin_slot = p_slot AND c.id <> p_conv_id
+    FOR UPDATE;
+
+    IF v_displaced IS NOT NULL THEN
+        IF NOT p_force_replace THEN
+            RETURN QUERY SELECT 'CONFLICT'::text, v_lang, v_old_slot, v_displaced;
+            RETURN;
+        END IF;
+
+        UPDATE messaging.conversations
+        SET pin_slot = NULL, updated_at = v_now_ms
+        WHERE id = v_displaced;
+    END IF;
+
+    UPDATE messaging.conversations
+    SET pin_slot = p_slot, updated_at = v_now_ms
+    WHERE id = p_conv_id;
+
+    RETURN QUERY SELECT 'OK'::text, v_lang, v_old_slot, v_displaced;
+END;
+$$;
+
+-- Atomic idempotent admin unpin.
+CREATE FUNCTION messaging.func_unset_community_pin(p_conv_id bigint)
+RETURNS TABLE(status_code text, conv_lang text, old_pin_slot integer)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_type     smallint;
+    v_lang     text;
+    v_old_slot integer;
+BEGIN
+    SELECT c.type, c.lang::text, c.pin_slot
+      INTO v_type, v_lang, v_old_slot
+    FROM messaging.conversations c
+    WHERE c.id = p_conv_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT 'NOT_FOUND'::text, ''::text, NULL::integer;
+        RETURN;
+    END IF;
+
+    IF v_type <> 3 THEN
+        RETURN QUERY SELECT 'NOT_PUBLIC_COMMUNITY'::text, COALESCE(v_lang, ''), v_old_slot;
+        RETURN;
+    END IF;
+
+    IF v_old_slot IS NOT NULL THEN
+        UPDATE messaging.conversations
+        SET pin_slot = NULL, updated_at = util.now_ms()
+        WHERE id = p_conv_id;
+    END IF;
+
+    RETURN QUERY SELECT 'OK'::text, COALESCE(v_lang, ''), v_old_slot;
+END;
+$$;
+
+-- Atomic admin partner toggle.
+CREATE FUNCTION messaging.func_set_community_partner(p_conv_id bigint, p_is_partner boolean)
+RETURNS TABLE(status_code text, conv_lang text, is_partner boolean)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_type  smallint;
+    v_state smallint;
+    v_lang  text;
+BEGIN
+    SELECT c.type, c.state, c.lang::text
+      INTO v_type, v_state, v_lang
+    FROM messaging.conversations c
+    WHERE c.id = p_conv_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT 'NOT_FOUND'::text, ''::text, false;
+        RETURN;
+    END IF;
+
+    IF v_type <> 3 OR v_state <> 0 THEN
+        RETURN QUERY SELECT 'NOT_ACTIVE_PUBLIC_COMMUNITY'::text, COALESCE(v_lang, ''), false;
+        RETURN;
+    END IF;
+
+    UPDATE messaging.conversations
+    SET is_partner = p_is_partner, updated_at = util.now_ms()
+    WHERE id = p_conv_id;
+
+    RETURN QUERY SELECT 'OK'::text, COALESCE(v_lang, ''), p_is_partner;
+END;
+$$;
+
+-- Atomic community language update: persists new language and clears any active pin_slot.
+CREATE FUNCTION messaging.func_update_community_lang(p_conv_id bigint, p_new_lang text)
+RETURNS TABLE(status_code text, old_lang text, new_lang text, old_pin_slot integer)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_type     smallint;
+    v_state    smallint;
+    v_old_lang text;
+    v_old_slot integer;
+BEGIN
+    SELECT c.type, c.state, c.lang::text, c.pin_slot
+      INTO v_type, v_state, v_old_lang, v_old_slot
+    FROM messaging.conversations c
+    WHERE c.id = p_conv_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT 'NOT_FOUND'::text, ''::text, ''::text, NULL::integer;
+        RETURN;
+    END IF;
+
+    IF v_type <> 3 OR v_state <> 0 THEN
+        RETURN QUERY SELECT 'NOT_ACTIVE_PUBLIC_COMMUNITY'::text, COALESCE(v_old_lang, ''), COALESCE(p_new_lang, ''), v_old_slot;
+        RETURN;
+    END IF;
+
+    IF COALESCE(v_old_lang, '') = p_new_lang THEN
+        RETURN QUERY SELECT 'OK'::text, COALESCE(v_old_lang, ''), p_new_lang, NULL::integer;
+        RETURN;
+    END IF;
+
+    UPDATE messaging.conversations
+    SET lang = p_new_lang,
+        pin_slot = NULL,
+        updated_at = util.now_ms()
+    WHERE id = p_conv_id;
+
+    RETURN QUERY SELECT 'OK'::text, COALESCE(v_old_lang, ''), p_new_lang, v_old_slot;
+END;
 $$;
 
 -- joined_at is timestamptz on output: func_load_active_members.go scans it into time.Time
@@ -1561,12 +1819,14 @@ $$;
 CREATE FUNCTION messaging.func_load_conversation_paginated(p_user_id bigint, p_limit integer, p_offset integer)
 RETURNS TABLE(conv_id bigint, conv_type smallint, conv_title text, conv_description text, conv_avatar_id bigint,
               conv_last_msg_id bigint, conv_state smallint, conv_settings jsonb, external_link jsonb,
+              conv_lang text, conv_is_partner boolean, conv_pin_slot integer,
               conv_created bigint, conv_updated bigint,
               mem_id bigint, mem_conv_id bigint, mem_user_id bigint, mem_role smallint, mem_settings jsonb,
               mem_joined bigint, mem_frozen_id bigint, mem_last_read_message_id bigint, mem_unread integer,
               mem_created bigint, mem_updated bigint)
 LANGUAGE sql STABLE AS $$
     SELECT c.id, c.type, c.title, c.description, c.avatar_id, c.last_message_id, c.state, c.settings, c.external_link,
+           c.lang::text, c.is_partner, c.pin_slot,
            c.created_at, c.updated_at,
            m.id, m.conversation_id, m.user_id, m.role, m.settings, m.joined_at, m.frozen_message_id,
            m.last_read_message_id, m.unread_count, m.created_at, m.updated_at
@@ -1581,12 +1841,14 @@ CREATE FUNCTION messaging.func_load_conversation_keyset(
     p_user_id bigint, p_before_key bigint DEFAULT NULL, p_before_conv_id bigint DEFAULT NULL, p_limit integer DEFAULT 50)
 RETURNS TABLE(conv_id bigint, conv_type smallint, conv_title text, conv_description text, conv_avatar_id bigint,
               conv_last_msg_id bigint, conv_state smallint, conv_settings jsonb, external_link jsonb,
+              conv_lang text, conv_is_partner boolean, conv_pin_slot integer,
               conv_created bigint, conv_updated bigint,
               mem_id bigint, mem_conv_id bigint, mem_user_id bigint, mem_role smallint, mem_settings jsonb,
               mem_joined bigint, mem_frozen_id bigint, mem_last_read_message_id bigint, mem_unread integer,
               mem_created bigint, mem_updated bigint)
 LANGUAGE sql STABLE AS $$
     SELECT c.id, c.type, c.title, c.description, c.avatar_id, c.last_message_id, c.state, c.settings, c.external_link,
+           c.lang::text, c.is_partner, c.pin_slot,
            c.created_at, c.updated_at,
            m.id, m.conversation_id, m.user_id, m.role, m.settings, m.joined_at, m.frozen_message_id,
            m.last_read_message_id, m.unread_count, m.created_at, m.updated_at

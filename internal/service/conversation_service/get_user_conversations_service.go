@@ -56,16 +56,7 @@ func GetUserConversationsPaginated(ctx context.Context, callerID int64, input co
 		if errMongo == nil && len(mongoConversations) > 0 {
 			for _, record := range mongoConversations {
 				rawInboxItems = append(rawInboxItems, cache_service.InboxItemView{
-					Conversation: lite_models.ConvLiteRequest{
-						ID:            record.Conversation.ID,
-						Type:          record.Conversation.Type,
-						Title:         record.Conversation.Title,
-						Description:   record.Conversation.Description,
-						AvatarID:      record.Conversation.AvatarID,
-						LastMessageID: record.Conversation.LastMessageID,
-						Settings:      service.ToConversationSettingsLite(record.Conversation.Settings),
-						ExternalLink:  record.Conversation.ExternalLink,
-					},
+					Conversation: service.ToConvLiteRequest(record.Conversation),
 					Member: lite_models.MemberLiteRequest{
 						ConversationID:    record.Member.ConversationID,
 						UserID:            record.Member.UserID,
@@ -99,16 +90,7 @@ func GetUserConversationsPaginated(ctx context.Context, callerID int64, input co
 
 		for _, record := range postgresConversations {
 			rawInboxItems = append(rawInboxItems, cache_service.InboxItemView{
-				Conversation: lite_models.ConvLiteRequest{
-					ID:            record.Conversation.ID,
-					Type:          record.Conversation.Type,
-					Title:         record.Conversation.Title,
-					Description:   record.Conversation.Description,
-					AvatarID:      record.Conversation.AvatarID,
-					LastMessageID: record.Conversation.LastMessageID,
-					Settings:      service.ToConversationSettingsLite(record.Conversation.Settings),
-					ExternalLink:  record.Conversation.ExternalLink,
-				},
+				Conversation: service.ToConvLiteRequest(record.Conversation),
 				Member: lite_models.MemberLiteRequest{
 					ConversationID:    record.Member.ConversationID,
 					UserID:            record.Member.UserID,

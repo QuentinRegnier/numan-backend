@@ -11,6 +11,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/article_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/auth_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/comment_handlers"
+	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/community_recommendation_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/conversation_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/feed_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/like_handlers"
@@ -126,6 +127,9 @@ func SetupRoutes(r *gin.Engine) {
 	secured.POST("/users/recommendations", user_recommendation_handlers.GetUserRecommendationsHandler)
 	secured.POST("/users/recommendations/force", user_recommendation_handlers.ForceUserRecommendationsHandler)
 	secured.POST("/users/recommendations/skips", user_recommendation_handlers.SkipUserRecommendationHandler)
+
+	// --- Recommandations de Communautés Publiques ---
+	secured.POST("/communities/recommendations", community_recommendation_handlers.GetCommunityRecommendationsHandler)
 
 	// --- Posts ---
 	secured.POST("/feed/get", feed_handlers.GetFeedHandler)       //
@@ -278,6 +282,11 @@ func SetupRoutes(r *gin.Engine) {
 	adminGroup.DELETE("/articles/delete", admin_article_handlers.DeleteArticleHandler)
 	adminGroup.POST("/articles/list", article_handlers.ListArticlesHandler)
 	adminGroup.POST("/articles/get", article_handlers.GetArticleHandler)
+
+	// --- Admin Recommandations de Communautés Publiques ---
+	adminGroup.POST("/communities/pin", community_recommendation_handlers.PinCommunityHandler)
+	adminGroup.POST("/communities/unpin", community_recommendation_handlers.UnpinCommunityHandler)
+	adminGroup.POST("/communities/partner", community_recommendation_handlers.SetPartnerHandler)
 
 	// =========================================================================
 	// 4. ROUTES MODÉRATION (JWT + HMAC + Rôle Modérateur Grade >= 3 ou Admin)

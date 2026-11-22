@@ -42,6 +42,16 @@ type ConvLiteRequest struct {
 	LastMessageID int64                `bson:"last_message_id" json:"last_message_id"`
 	Settings      ConversationSettings `bson:"settings" json:"settings"` // Remplacement de Laws
 	ExternalLink  models.ExternalLinks `bson:"external_links" json:"external_links"`
+	Lang          string               `bson:"lang,omitempty" json:"lang,omitempty"`
+	IsPartner     bool                 `bson:"is_partner" json:"is_partner"`
+	PinSlot       int                  `bson:"pin_slot,omitempty" json:"pin_slot,omitempty"`
+	Mode          string               `bson:"mode,omitempty" json:"mode,omitempty"`
+}
+
+// ResolveCommunityMode dérive le mode d'interaction canonique d'une communauté publique
+// à partir de sa représentation en cache ConvMeta (ConvLiteRequest).
+func ResolveCommunityMode(meta ConvLiteRequest) models.CommunityMode {
+	return models.ResolveCommunityModeFromWritePermission(meta.Settings.WritePermission)
 }
 
 // Validate vérifie les invariants métier d'une conversation allégée en cache.
@@ -66,6 +76,15 @@ func (p *ConvLiteRequest) Validate() error {
 	}
 	if p.LastMessageID < 0 {
 		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "L'identifiant du dernier message ne peut pas être négatif.", nil)
+	}
+	if strings.TrimSpace(p.Lang) != "" && !variables.IsSupportedCommunityLang(p.Lang) {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "La langue de la conversation n'est pas supportée.", nil)
+	}
+	if p.PinSlot != 0 && (p.PinSlot < variables.CommunityRecoMinPinSlot || p.PinSlot > variables.CommunityRecoMaxPinSlot) {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le slot d'épinglage doit être compris entre 1 et 100.", nil)
+	}
+	if p.Mode != "" && !models.CommunityMode(p.Mode).IsValid() {
+		return numan_error.NewBadRequest(numan_error.CodeInvalidPayload, "Le mode d'interaction de la communauté est invalide.", nil)
 	}
 	if err := p.Settings.Validate(); err != nil {
 		return err

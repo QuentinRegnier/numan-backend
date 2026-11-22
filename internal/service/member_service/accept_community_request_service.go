@@ -105,6 +105,27 @@ func AcceptCommunityRequest(ctx context.Context, callerID int64, input member_mo
 		return member_models.AcceptCommunityRequestOutput{}, numan_error.NewInternal()
 	}
 
+	// ── ÉTAPE 5B : INDEX & CROISSANCE RECOMMANDATION COMMUNAUTÉS PUBLIQUES ──
+	isPublicCommunity := false
+	if convObj, errConv := object_cache_service.GetConversationFromObjectCache(ctx, input.ConversationID); errConv == nil && convObj.ID != 0 {
+		isPublicCommunity = convObj.Type == variables.ConversationTypeCommunityPub
+	} else {
+		var convMeta lite_models.ConvLiteRequest
+		if errMeta := redis.ConvMeta.GetObject(ctx, input.ConversationID, &convMeta); errMeta == nil && convMeta.ID != 0 {
+			isPublicCommunity = convMeta.Type == variables.ConversationTypeCommunityPub
+		}
+	}
+	if isPublicCommunity {
+		added, errIdx := cache_service.AddUserPublicCommunity(ctx, targetMemberPayload.UserID, input.ConversationID)
+		if errIdx != nil {
+			numan_log.Warn(ctx).Err(errIdx).Int64("conv_id", input.ConversationID).Int64("user_id", targetMemberPayload.UserID).Msg("Échec d'indexation user:public_comms lors de AcceptCommunityRequest")
+		} else if added {
+			if errGrowth := cache_service.RecordCommunityMemberJoin(ctx, input.ConversationID); errGrowth != nil {
+				numan_log.Warn(ctx).Err(errGrowth).Int64("conv_id", input.ConversationID).Msg("Échec d'enregistrement de croissance communauté publique lors de AcceptCommunityRequest")
+			}
+		}
+	}
+
 	// ── ÉTAPE 6 : MESSAGE SYSTÈME ET DIFFUSION WEBSOCKET ────────────────────
 	go func() {
 		backgroundContext := context.Background()

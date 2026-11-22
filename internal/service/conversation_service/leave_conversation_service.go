@@ -74,6 +74,12 @@ func LeaveConversation(ctx context.Context, callerID int64, input conversation_m
 	_ = object_cache_service.SetMemberInObjectCache(ctx, memberPayload)
 	_ = cache_service.RemoveMemberFromSpeedCache(ctx, memberPayload.ConversationID, memberPayload.UserID)
 
+	if conversationPayload.Type == variables.ConversationTypeCommunityPub {
+		if errIdx := cache_service.RemoveUserPublicCommunity(ctx, memberPayload.UserID, memberPayload.ConversationID); errIdx != nil {
+			numan_log.Warn(ctx).Err(errIdx).Int64("conv_id", memberPayload.ConversationID).Int64("user_id", memberPayload.UserID).Msg("Échec de retrait de user:public_comms lors du départ de la communauté")
+		}
+	}
+
 	errQueueLeave := redis.EnqueueDB(ctx, memberPayload.ID, input.ConversationID, redis.EntityMembers, redis.ActionUpdate, memberPayload, redis.TargetAll)
 	if errQueueLeave != nil {
 		numan_log.Error(ctx).Err(errQueueLeave).Int64("user_id", memberPayload.UserID).Msg("Échec d'enqueue du départ de l'utilisateur")
@@ -105,6 +111,23 @@ func LeaveConversation(ctx context.Context, callerID int64, input conversation_m
 			conversationPayload.State = variables.ConversationStatePrivateDelete
 		} else {
 			conversationPayload.State = variables.ConversationStateGroupDelete
+		}
+		if conversationPayload.Type == variables.ConversationTypeCommunityPub {
+			oldPinSlot := conversationPayload.PinSlot
+			conversationPayload.PinSlot = 0
+			if conversationPayload.Lang != "" {
+				if errRemRank := cache_service.RemoveRankedCommunity(ctx, conversationPayload.Lang, conversationPayload.ID); errRemRank != nil {
+					numan_log.Warn(ctx).Err(errRemRank).Int64("conv_id", conversationPayload.ID).Str("lang", conversationPayload.Lang).Msg("Échec de retrait du ZSET de recommandation à l'extinction de la communauté")
+				}
+				if oldPinSlot > 0 {
+					if errDelPin := cache_service.DeleteCommunityPinInCache(ctx, conversationPayload.Lang, oldPinSlot); errDelPin != nil {
+						numan_log.Warn(ctx).Err(errDelPin).Int64("conv_id", conversationPayload.ID).Str("lang", conversationPayload.Lang).Int("pin_slot", oldPinSlot).Msg("Échec de suppression du pin Redis à l'extinction de la communauté")
+					}
+				}
+				if errRemPin := cache_service.RemoveCommunityPinByConversationID(ctx, conversationPayload.Lang, conversationPayload.ID); errRemPin != nil {
+					numan_log.Warn(ctx).Err(errRemPin).Int64("conv_id", conversationPayload.ID).Str("lang", conversationPayload.Lang).Msg("Échec de nettoyage du pin Redis à l'extinction de la communauté")
+				}
+			}
 		}
 		conversationPayload.UpdatedAt = domain.NowMillis()
 

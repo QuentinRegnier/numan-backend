@@ -328,6 +328,13 @@ func CreateMessage(ctx context.Context, senderID int64, conversationID int64, in
 		return message_models.CreateMessageOutput{}, numan_error.NewInternal()
 	}
 
+	// ── ÉTAPE 7B : TÉLÉMÉTRIE RECOMMANDATION COMMUNAUTÉS PUBLIQUES (NON-BLOQUANT)
+	if !isInternalCall && conversationPayload.Type == variables.ConversationTypeCommunityPub {
+		if errTelemetry := cache_service.RecordCommunityMessageActivity(ctx, conversationID, senderID); errTelemetry != nil {
+			numan_log.Warn(ctx).Err(errTelemetry).Int64("conv_id", conversationID).Int64("sender_id", senderID).Msg("Échec d'enregistrement de télémétrie message pour la recommandation de communautés")
+		}
+	}
+
 	// ── ÉTAPE 8 : MARQUAGE D'ACTIVITÉ (DIRTY FLAG) ──────────────────────────
 
 	latestActivityTimestampMs := cache_service.TouchInboxActivity(ctx, senderID)

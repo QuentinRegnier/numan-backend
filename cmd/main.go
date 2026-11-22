@@ -105,6 +105,11 @@ func main() {
 	// Initialiser le Cuckoo Filter
 	service.WarmUpCuckooFilter(context.Background())
 
+	// Enregistrement du callback non-bloquant de calcul initial des recommandations de communautés publiques
+	cache_service.RegisterCommunityRecoInitialComputeHook(func(bgCtx context.Context) {
+		_, _ = worker.RunCommunityRecommendationCronCycle(bgCtx)
+	})
+
 	// --- SMART SEEDING DU MOST CACHE ---
 	count, err := redisgo.RankedPosts.ZCard(context.Background(), variables.StrictRankSubKey(variables.StrictTypeRecent, variables.DefaultContentLanguage))
 	if err != nil {
@@ -131,6 +136,13 @@ func main() {
 		}
 	} else {
 		log.Printf("✅ Cache Redis déjà peuplé (%d éléments). Seeding ignoré, démarrage éclair !", count)
+
+		// Amorçage dédié des recommandations de communautés publiques si le ZSET n'existe pas encore
+		if commRankedCount, errComm := redisgo.CommunityRecoRanked.ZCard(context.Background(), variables.DefaultContentLanguage); errComm != nil || commRankedCount == 0 {
+			if errSeedComm := cache_service.SeedCommunityRecommendations(context.Background()); errSeedComm != nil {
+				log.Printf("⚠️ Avertissement lors du seeding des recommandations de communautés: %v", errSeedComm)
+			}
+		}
 	}
 
 	// Amorçage dédié de l'index Redis L1 persistant des articles s'il n'est pas encore initialisé

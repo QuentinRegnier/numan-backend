@@ -28,15 +28,15 @@ func TestFuncLoadConversationPaginated(t *testing.T) {
 
 	cols := []string{
 		"conv_id", "conv_type", "conv_title", "conv_description", "conv_avatar_id", "conv_last_msg_id",
-		"conv_state", "conv_settings", "external_link", "conv_created", "conv_updated",
+		"conv_state", "conv_settings", "external_link", "conv_lang", "conv_is_partner", "conv_pin_slot", "conv_created", "conv_updated",
 		"mem_id", "mem_conv_id", "mem_user_id", "mem_role", "mem_settings", "mem_joined",
 		"mem_unread", "mem_frozen_id", "mem_last_read_message_id", "mem_created", "mem_updated",
 	}
 	now := domain.NowMillis()
 
 	t.Run("returns_conversations_paginated_successfully", func(t *testing.T) {
-		convSettings := `{"theme":"dark"}`
-		extLink := `{"website":"https://numan.app"}`
+		convSettings := `{"write_permission":0}`
+		extLink := `{"title":"Site","url":"https://numan.app"}`
 		memSettings := `{"pinned":1}`
 
 		test.SetupMockDB(t, func(query string, args []driver.NamedValue) (driver.Rows, error) {
@@ -47,8 +47,8 @@ func TestFuncLoadConversationPaginated(t *testing.T) {
 			assert.Equal(t, int64(0), args[2].Value)
 			return test.NewMockRows(cols, [][]driver.Value{
 				{
-					int64(100), 1, "Conv Title", "Conv Desc", int64(5), int64(50),
-					0, convSettings, extLink, now, now,
+					int64(100), 3, "Conv Title", "Conv Desc", int64(5), int64(50),
+					0, convSettings, extLink, "fr", true, int64(3), now, now,
 					int64(1), int64(100), int64(10), 1, memSettings, now,
 					2, int64(20), int64(30), now, now,
 				},
@@ -60,6 +60,9 @@ func TestFuncLoadConversationPaginated(t *testing.T) {
 		require.Len(t, results, 1)
 		assert.Equal(t, int64(100), results[0].Conversation.ID)
 		assert.Equal(t, "Conv Title", results[0].Conversation.Title)
+		assert.Equal(t, "fr", results[0].Conversation.Lang)
+		assert.True(t, results[0].Conversation.IsPartner)
+		assert.Equal(t, 3, results[0].Conversation.PinSlot)
 		assert.Equal(t, int64(1), results[0].Member.ID)
 		assert.Equal(t, int64(10), results[0].Member.UserID)
 		assert.Equal(t, 2, results[0].Member.UnreadCount)
@@ -72,7 +75,7 @@ func TestFuncLoadConversationPaginated(t *testing.T) {
 			return test.NewMockRows(cols, [][]driver.Value{
 				{
 					int64(100), 1, "Title", nil, nil, nil,
-					0, "invalid-json", nil, now, now,
+					0, "invalid-json", nil, nil, false, nil, now, now,
 					int64(1), int64(100), int64(10), 1, "{}", now,
 					0, nil, nil, now, now,
 				},
@@ -89,7 +92,7 @@ func TestFuncLoadConversationPaginated(t *testing.T) {
 			return test.NewMockRows(cols, [][]driver.Value{
 				{
 					int64(100), 1, "Title", nil, nil, nil,
-					0, "{}", "invalid-link-json", now, now,
+					0, "{}", "invalid-link-json", nil, false, nil, now, now,
 					int64(1), int64(100), int64(10), 1, "{}", now,
 					0, nil, nil, now, now,
 				},
@@ -106,7 +109,7 @@ func TestFuncLoadConversationPaginated(t *testing.T) {
 			return test.NewMockRows(cols, [][]driver.Value{
 				{
 					int64(100), 1, "Title", nil, nil, nil,
-					0, "{}", nil, now, now,
+					0, "{}", nil, nil, false, nil, now, now,
 					int64(1), int64(100), int64(10), 1, "invalid-mem-settings", now,
 					0, nil, nil, now, now,
 				},
@@ -144,7 +147,7 @@ func TestFuncLoadConversationPaginated(t *testing.T) {
 			return test.NewMockRowsWithErr(cols, [][]driver.Value{
 				{
 					int64(100), 1, "Title", nil, nil, nil,
-					0, "{}", nil, now, now,
+					0, "{}", nil, nil, false, nil, now, now,
 					int64(1), int64(100), int64(10), 1, "{}", now,
 					0, nil, nil, now, now,
 				},
