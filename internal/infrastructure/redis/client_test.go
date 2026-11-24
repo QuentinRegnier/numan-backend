@@ -135,7 +135,77 @@ func TestParseEvictedKeys_AndCollectNilSafe(t *testing.T) {
 
 func TestCloseRedis_NilSafe(t *testing.T) {
 	prev := Rdb
+	prevCore := RdbCore
+	prevObj := RdbObjects
+	prevPub := RdbPubSub
 	Rdb = nil
-	t.Cleanup(func() { Rdb = prev })
+	RdbCore = nil
+	RdbObjects = nil
+	RdbPubSub = nil
+	t.Cleanup(func() {
+		Rdb = prev
+		RdbCore = prevCore
+		RdbObjects = prevObj
+		RdbPubSub = prevPub
+	})
 	assert.NoError(t, CloseRedis())
+}
+
+func TestResolveTierConfig_ClusterAndZeroOverheadCollapse(t *testing.T) {
+	clearRedisEnv(t)
+	for _, key := range []string{
+		"REDIS_CLUSTER_ADDRS",
+		"REDIS_OBJECT_ADDR", "REDIS_OBJECT_CLUSTER_ADDRS", "REDIS_OBJECT_SENTINEL_ADDRS",
+		"REDIS_PUBSUB_ADDR", "REDIS_PUBSUB_CLUSTER_ADDRS", "REDIS_PUBSUB_SENTINEL_ADDRS",
+	} {
+		t.Setenv(key, "")
+	}
+
+	// Zero-overhead collapse: REDIS_OBJECT_* and REDIS_PUBSUB_* unset => not configured
+	objCfg := ResolveTierConfig("REDIS_OBJECT")
+	pubCfg := ResolveTierConfig("REDIS_PUBSUB")
+	assert.False(t, objCfg.IsConfigured())
+	assert.False(t, pubCfg.IsConfigured())
+
+	coreCfg := ResolveTierConfig("REDIS")
+	assert.True(t, coreCfg.IsConfigured())
+	assert.Equal(t, TopologyModeStandalone, coreCfg.Mode())
+
+	// Simulate collapsed tier wiring
+	coreClient := NewRedisClient(coreCfg)
+	t.Cleanup(func() { _ = coreClient.Close() })
+
+	prevRdb, prevCore, prevObj, prevPub := Rdb, RdbCore, RdbObjects, RdbPubSub
+	t.Cleanup(func() {
+		Rdb, RdbCore, RdbObjects, RdbPubSub = prevRdb, prevCore, prevObj, prevPub
+	})
+	Rdb = coreClient
+	RdbCore = coreClient
+	RdbObjects = coreClient
+	RdbPubSub = coreClient
+
+	assert.Equal(t, CoreClient(), ObjectClient(), "when REDIS_OBJECT_* is unset, ObjectClient must alias CoreClient")
+	assert.Equal(t, CoreClient(), PubSubClient(), "when REDIS_PUBSUB_* is unset, PubSubClient must alias CoreClient")
+	assert.False(t, HasDedicatedObjectPool())
+	assert.False(t, HasDedicatedPubSub())
+	assert.False(t, IsClusterClient(CoreClient()))
+	assert.Equal(t, TopologyModeStandalone, TierTopologyMode(CoreClient()))
+
+	// Cluster mode resolution for Tier 2 Object Pool
+	t.Setenv("REDIS_OBJECT_CLUSTER_ADDRS", "obj-0:6379, obj-1:6379, obj-2:6379")
+	t.Setenv("REDIS_OBJECT_ROUTE_BY_LATENCY", "true")
+	objClusterCfg := ResolveTierConfig("REDIS_OBJECT")
+	require.True(t, objClusterCfg.IsCluster())
+	assert.Equal(t, TopologyModeCluster, objClusterCfg.Mode())
+	assert.True(t, objClusterCfg.RouteByLatency)
+	assert.Equal(t, []string{"obj-0:6379", "obj-1:6379", "obj-2:6379"}, objClusterCfg.ClusterAddrs)
+
+	objClusterClient := NewRedisClient(objClusterCfg)
+	t.Cleanup(func() { _ = objClusterClient.Close() })
+	assert.True(t, IsClusterClient(objClusterClient))
+	assert.Equal(t, TopologyModeCluster, TierTopologyMode(objClusterClient))
+
+	RdbObjects = objClusterClient
+	assert.True(t, HasDedicatedObjectPool())
+	assert.NotEqual(t, CoreClient(), ObjectClient())
 }

@@ -13,7 +13,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
-	goredis "github.com/go-redis/redis/v8"
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -119,7 +119,7 @@ func TestArticleObjectCache_ListOrderingAndPartialSelfHealing(t *testing.T) {
 	// Simuler une corruption partielle : supprimer 1002 du HASH mais le laisser dans le ZSET,
 	// et ajouter un membre orphelin 9999 dans le ZSET qui n'existe ni en L2 ni en L3
 	require.NoError(t, infraRedis.Rdb.HDel(ctx, variables.RedisKeyArticlesIndexData, "1002").Err())
-	require.NoError(t, infraRedis.Rdb.ZAdd(ctx, variables.RedisKeyArticlesIndexOrder, &goredis.Z{Score: 1700000009000, Member: "9999"}).Err())
+	require.NoError(t, infraRedis.Rdb.ZAdd(ctx, variables.RedisKeyArticlesIndexOrder, goredis.Z{Score: 1700000009000, Member: "9999"}).Err())
 
 	list, err := object_cache_service.ListArticlesFromCache(ctx)
 	require.NoError(t, err)

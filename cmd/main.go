@@ -17,6 +17,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/health_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/api/middleware"
 	"github.com/QuentinRegnier/numan-backend/internal/api/websocket"
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/cuckoo"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/minio"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
@@ -29,6 +30,9 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cluster_service"
+	"github.com/QuentinRegnier/numan-backend/internal/service/health_service"
+	"github.com/QuentinRegnier/numan-backend/internal/service/infra_telemetry_service"
+	"github.com/QuentinRegnier/numan-backend/internal/service/scheduler_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/variables_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 	"github.com/QuentinRegnier/numan-backend/internal/worker"
@@ -80,7 +84,7 @@ func main() {
 		log.Fatalf("Impossible d'initialiser Snowflake: %v", err)
 	}
 
-	health_handlers.SetNodeIdentity(datacenter, string(role), nodeID)
+	health_service.SetNodeIdentity(datacenter, string(role), nodeID)
 	log.Printf("✅ Snowflake initialisé avec le Node ID : %d (datacenter=%s, role=%s)", nodeID, datacenter, role)
 
 	// Initialiser PostgreSQL
@@ -178,8 +182,8 @@ func main() {
 					}
 				}
 
-				// Amorçage dédié de l'index Redis L1 persistant des articles s'il n'est pas encore initialisé
-				if artInit, errInit := redisgo.Exists(seedCtx, variables.RedisKeyArticlesIndexInit); errInit != nil || !artInit {
+				// Amorçage dédié de l'index Redis L1 persistant des articles (Tier 2 Object Pool) s'il n'est pas encore initialisé
+				if artInit, errInit := redisgo.ExistsOnObjects(seedCtx, variables.RedisKeyArticlesIndexInit); errInit != nil || !artInit {
 					if err := cache_service.SeedArticles(seedCtx); err != nil {
 						log.Printf("⚠️ Avertissement lors du seeding des articles: %v", err)
 					}
@@ -194,17 +198,33 @@ func main() {
 			logger.Log.Info().Str("server_role", string(role)).Msg("⏳ Seeding initial déjà pris en charge par un autre pod du datacenter ; démarrage direct.")
 		}
 	} else {
-		logger.Log.Info().Str("server_role", string(role)).Msg("⚡ Rôle WS_NODE : Cuckoo Filter et Smart Seeding ignorés pour démarrage ultra-rapide.")
+		logger.Log.Info().Str("server_role", string(role)).Msg("⚡ Rôle léger (ws_node / scheduler_node) : Smart Seeding ignoré pour démarrage ultra-rapide.")
 	}
 
 	// Contexte dédié aux workers de fond pour contrôler précisément l'ordre d'arrêt sur SIGTERM
 	workerCtx, cancelWorkers := context.WithCancel(context.Background())
 
-	// On ne lance les workers internes que si le serveur est en mode monolith ou worker_node
-	if role.RunsWorkers() {
-		worker.StartBackgroundWorkers(workerCtx)
+	// 1. Workers temps réel Write-Behind (monolith / worker_node uniquement ; jamais sur scheduler_node/api_node/ws_node)
+	if role.RunsWriteBehind() {
+		worker.StartWriteBehindWorkers(workerCtx)
 	} else {
-		logger.Log.Info().Str("server_role", string(role)).Msg("Workers de fond désactivés sur cette instance.")
+		logger.Log.Info().Str("server_role", string(role)).Msg("Workers Write-Behind désactivés sur cette instance.")
+	}
+
+	// 2. Activity-Aware Job Scheduler & Agrégateur Télémétrie DC (monolith embarqué OU pod dédié scheduler_node)
+	var schedEngine *scheduler_service.Engine
+	var stopTelemetryAgg func()
+	if role.RunsScheduler() {
+		schedEngine = scheduler_service.NewEngine(datacenter, scheduler_service.ResolveRegimeConfigFromEnv(), time.Now)
+		scheduler_service.RegisterAllDefaultJobs(schedEngine)
+		scheduler_service.SetDefault(schedEngine)
+		schedEngine.Start(workerCtx)
+
+		stopTelemetryAgg = infra_telemetry_service.StartDatacenterTelemetryAggregator(workerCtx, infra_telemetry_service.AggregatorConfig{
+			DatacenterID: datacenter,
+			Scheduler:    schedEngine,
+		})
+		logger.Log.Info().Str("server_role", string(role)).Str("datacenter", datacenter).Msg("🌙 Activity-Aware Job Scheduler & DC Telemetry Aggregator démarrés.")
 	}
 
 	// Auto-discovery Redis L1 par datacenter (heartbeat périodique + désenregistrement propre sur shutdown)
@@ -218,6 +238,17 @@ func main() {
 		NodeID:     nodeID,
 		PodName:    os.Getenv("POD_NAME"),
 	}, wsStatsProvider)
+
+	// Bus de télémétrie inter-pods (10s -> Redis Core `infra:telemetry:dc:<dc_id>:pod:<pod_name>`, actif sur TOUS les rôles)
+	stopTelemetryHB := infra_telemetry_service.StartPodHeartbeatPublisher(context.Background(), infra_telemetry_service.HeartbeatConfig{
+		DatacenterID: datacenter,
+		PodName:      os.Getenv("POD_NAME"),
+		Hostname:     os.Getenv("NODE_NAME"),
+		Role:         string(role),
+		NodeID:       nodeID,
+		WSStatsFn:    wsStatsProvider,
+		CuckooFillFn: cuckoo.FillRatio,
+	})
 
 	// On passe de gin.Default() à gin.New() pour retirer les vieux middlewares
 	r := gin.New()
@@ -234,7 +265,8 @@ func main() {
 	// 2. On branche NOTRE Recovery Anti-Crash en second
 	r.Use(middleware.CustomRecoveryMiddleware())
 
-	// 3. Métriques Prometheus (compteurs HTTP normalisés par route Gin, sans explosion de cardinalité)
+	// 3. Métriques Prometheus (compteurs HTTP normalisés par route Gin + GeoIP privacy-safe, sans explosion de cardinalité)
+	metrics.Default().SetDatacenter(datacenter)
 	r.Use(metrics.GinMiddleware())
 	if role.RunsWebSocket() {
 		metrics.Default().SetWSStatsProvider(websocket.HubStats)
@@ -260,9 +292,38 @@ func main() {
 		}
 		return depth, true
 	})
+	metrics.Default().SetQueueOldestAgeProvider(func(ctx context.Context) (float64, bool) {
+		ageSec, err := redisgo.OldestQueueEventAgeSeconds(ctx)
+		if err != nil {
+			return 0, false
+		}
+		return ageSec, true
+	})
+	metrics.Default().SetDLQSizeProvider(func(ctx context.Context) (int64, bool) {
+		if redisgo.DLQ == nil {
+			return 0, false
+		}
+		n, err := redisgo.DLQ.LLen(ctx, "dead_events")
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	})
 	metrics.Default().SetRedisEvictedKeysProvider(redis.CollectEvictedKeys)
+	metrics.Default().SetRedis3TierProvider(infra_telemetry_service.CollectRedis3TierMetrics)
+	metrics.Default().SetCuckooFillProvider(cuckoo.FillRatio)
+	if schedEngine != nil {
+		metrics.Default().SetSchedulerMetricsProvider(schedEngine.MetricsSnapshot)
+	}
+	metrics.Default().SetDCSaturationProvider(func() (string, float64, bool) {
+		snap := infra_telemetry_service.LatestCachedSnapshot()
+		if snap == nil {
+			return datacenter, 0, false
+		}
+		return snap.Datacenter, snap.DCSaturationRatio, true
+	})
 
-	// Sondes Kubernetes actives sur tous les rôles (monolith, api_node, ws_node, worker_node), sans auth ni rate-limit
+	// Sondes Kubernetes actives sur tous les rôles (monolith, api_node, ws_node, worker_node, scheduler_node), sans auth ni rate-limit
 	r.GET("/healthz", health_handlers.LivenessHandler)
 	r.GET("/readyz", health_handlers.ReadinessHandler)
 
@@ -278,7 +339,7 @@ func main() {
 		docs.InitDocsRoutes(r)
 	}
 	if !role.RunsAPI() {
-		logger.Log.Info().Str("server_role", string(role)).Msg("Mode WORKER_NODE : Routes API publiques et WebSocket désactivées.")
+		logger.Log.Info().Str("server_role", string(role)).Msg("Mode Worker/Scheduler : Routes API publiques et WebSocket désactivées.")
 	}
 
 	port := os.Getenv("PORT")
@@ -304,9 +365,11 @@ func main() {
 		IdleTimeout:       httpTimeouts.IdleTimeout,
 	}
 
-	// Serveur Prometheus interne dédié (port 9090, jamais exposé par l'Ingress Traefik)
-	metricsMux := http.NewServeMux()
-	metricsMux.Handle("/metrics", metrics.Handler())
+	// Serveur interne dédié (port 9090, jamais exposé par l'Ingress Traefik) :
+	// - GET  /metrics (Prometheus)
+	// - GET  /internal/cli-telemetry (numan-cli via proxy K8s API sans JWT)
+	// - POST /internal/scheduler/pause, /resume & /jobs/trigger (contrôle SRE / préemption avant Node Drain)
+	metricsMux := buildInternalMetricsMux(datacenter)
 	metricsSrv := &http.Server{
 		Addr:              ":" + metricsPort,
 		Handler:           metricsMux,
@@ -336,12 +399,20 @@ func main() {
 	select {
 	case err := <-srvErrCh:
 		if err != nil {
+			stopTelemetryHB()
 			stopHeartbeat()
+			if stopTelemetryAgg != nil {
+				stopTelemetryAgg()
+			}
+			if schedEngine != nil {
+				schedEngine.Stop(5 * time.Second)
+			}
 			cancelWorkers()
 			log.Fatalf("❌ Erreur fatale du serveur HTTP: %v", err)
 		}
 	case <-sigCtx.Done():
-		health_handlers.SetShuttingDown(true)
+		health_service.SetShuttingDown(true)
+		stopTelemetryHB()
 		stopHeartbeat()
 		logger.Log.Info().Str("server_role", string(role)).Str("datacenter", datacenter).
 			Msg("🛑 Signal d'arrêt (SIGTERM/SIGINT) reçu : démarrage du Graceful Shutdown...")
@@ -355,9 +426,18 @@ func main() {
 	_ = metricsSrv.Shutdown(httpShutdownCtx)
 	cancelHTTP()
 
-	// 2. Arrêt et vidage propre des 64 workers Write-Behind (60s max pour les lots en cours)
+	// 2. Arrêt propre du Scheduler (sauvegarde checkpoints <200ms) et de l'agrégateur télémétrie
+	if stopTelemetryAgg != nil {
+		stopTelemetryAgg()
+	}
+	if schedEngine != nil {
+		schedEngine.Stop(5 * time.Second)
+		scheduler_service.SetDefault(nil)
+	}
+
+	// 3. Arrêt et vidage propre des 64 workers Write-Behind (60s max pour les lots en cours)
 	cancelWorkers()
-	if role.RunsWorkers() {
+	if role.RunsWriteBehind() {
 		workerShutdownCtx, cancelWorkerWait := context.WithTimeout(context.Background(), 60*time.Second)
 		if err := worker.WaitForShutdown(workerShutdownCtx); err != nil {
 			logger.Log.Warn().Err(err).Msg("Délai dépassé lors de l'attente des workers Write-Behind")
@@ -367,7 +447,7 @@ func main() {
 		cancelWorkerWait()
 	}
 
-	// 3. Fermeture propre du Hub WebSocket et des pools de bases de données
+	// 4. Fermeture propre du Hub WebSocket et des pools de bases de données
 	if role.RunsWebSocket() {
 		websocket.Shutdown()
 	}

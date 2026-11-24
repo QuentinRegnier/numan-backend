@@ -10,7 +10,7 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	redisgo "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 )
 
 // broadcastMessage est l'enveloppe interne pour transférer l'écoute Redis vers la boucle locale
@@ -39,7 +39,8 @@ type hub struct {
 	// SEULE voie autorisée pour ordonner l'envoi d'un message (Anti Race-Condition)
 	BroadcastRoute chan broadcastMessage
 
-	PubSub *redis.PubSub
+	PubSub        *redis.PubSub
+	shardedPubSub bool
 
 	stopCh       chan struct{}
 	doneCh       chan struct{}
@@ -54,6 +55,17 @@ var (
 )
 
 func InitHub() {
+	psClient := redisgo.PubSubClient()
+	var ps *redis.PubSub
+	isCluster := redisgo.IsClusterClient(psClient)
+	if psClient != nil {
+		if isCluster {
+			ps = psClient.SSubscribe(context.Background())
+		} else {
+			ps = psClient.Subscribe(context.Background())
+		}
+	}
+
 	h := &hub{
 		Clients:            make(map[int64]map[*client]bool),
 		Communities:        make(map[int64]map[*client]bool),
@@ -61,7 +73,8 @@ func InitHub() {
 		Unregister:         make(chan *client),
 		SubscribeCommunity: make(chan communitySubscription),
 		BroadcastRoute:     make(chan broadcastMessage, 2048), // Buffer haute capacité
-		PubSub:             redisgo.Rdb.Subscribe(context.Background()),
+		PubSub:             ps,
+		shardedPubSub:      isCluster,
 		stopCh:             make(chan struct{}),
 		doneCh:             make(chan struct{}),
 	}
@@ -72,6 +85,26 @@ func InitHub() {
 
 	go h.run()
 	go h.listenRedis()
+}
+
+func (h *hub) subscribeChannel(ctx context.Context, channel string) error {
+	if h.PubSub == nil {
+		return nil
+	}
+	if h.shardedPubSub {
+		return h.PubSub.SSubscribe(ctx, channel)
+	}
+	return h.PubSub.Subscribe(ctx, channel)
+}
+
+func (h *hub) unsubscribeChannel(ctx context.Context, channel string) error {
+	if h.PubSub == nil {
+		return nil
+	}
+	if h.shardedPubSub {
+		return h.PubSub.SUnsubscribe(ctx, channel)
+	}
+	return h.PubSub.Unsubscribe(ctx, channel)
 }
 
 // Shutdown ferme proprement le Hub WebSocket, déconnecte les clients actifs et libère Redis PubSub.
@@ -182,10 +215,9 @@ func (h *hub) run() {
 			if _, ok := h.Clients[c.UserID]; !ok {
 				h.Clients[c.UserID] = make(map[*client]bool)
 				if h.PubSub != nil {
-					// Abonnement dynamique au cluster
+					// Abonnement dynamique au cluster (SSUBSCRIBE en Cluster, SUBSCRIBE en Standalone)
 					channel := fmt.Sprintf("channel:user:%d", c.UserID)
-					err := h.PubSub.Subscribe(context.Background(), channel)
-					if err != nil {
+					if err := h.subscribeChannel(context.Background(), channel); err != nil {
 						numan_log.Warn(context.Background()).Err(err).Str("channel", channel).Msg("Impossible de s'abonner au canal")
 					}
 				}
@@ -202,10 +234,8 @@ func (h *hub) run() {
 					if len(connections) == 0 {
 						delete(h.Clients, c.UserID)
 						if h.PubSub != nil {
-							// Désabonnement réseau pour économiser le CPU Redis
 							channel := fmt.Sprintf("channel:user:%d", c.UserID)
-							err := h.PubSub.Unsubscribe(context.Background(), channel)
-							if err != nil {
+							if err := h.unsubscribeChannel(context.Background(), channel); err != nil {
 								numan_log.Warn(context.Background()).Err(err).Str("channel", channel).Msg("Impossible de se désabonner du canal")
 							}
 						}
@@ -219,8 +249,7 @@ func (h *hub) run() {
 				h.Communities[sub.CommunityID] = make(map[*client]bool)
 				if h.PubSub != nil {
 					channel := fmt.Sprintf("channel:community:%d", sub.CommunityID)
-					err := h.PubSub.Subscribe(context.Background(), channel)
-					if err != nil {
+					if err := h.subscribeChannel(context.Background(), channel); err != nil {
 						numan_log.Warn(context.Background()).Err(err).Str("channel", channel).Msg("Impossible de s'abonner au canal de communauté")
 					}
 				}

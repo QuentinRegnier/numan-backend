@@ -39,6 +39,8 @@ type Registry struct {
 	pgReadStatsFn  func() (sql.DBStats, bool)
 	queueDepthFn   func(ctx context.Context) (int64, bool)
 	redisEvictedFn func(ctx context.Context) (int64, bool)
+
+	ext *extendedState
 }
 
 var defaultRegistry = NewRegistry()
@@ -48,6 +50,7 @@ func NewRegistry() *Registry {
 	return &Registry{
 		startTime:    time.Now(),
 		httpCounters: make(map[httpMetricKey]*atomic.Uint64),
+		ext:          newExtendedState(),
 	}
 }
 
@@ -139,14 +142,26 @@ func GinMiddleware() gin.HandlerFunc {
 	return defaultRegistry.GinMiddleware()
 }
 
-// GinMiddleware instrumente les requêtes HTTP sur ce registre spécifique.
+// GinMiddleware instrumente les requêtes HTTP sur ce registre spécifique
+// (compteurs, latence p95, et agrégation GeoIP privacy-safe sans stockage d'IP).
 func (r *Registry) GinMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		start := time.Now()
 		r.httpInFlight.Add(1)
 		defer r.httpInFlight.Add(-1)
 
 		c.Next()
+		durMs := float64(time.Since(start).Microseconds()) / 1000.0
 		r.RecordHTTPRequest(c.Request.Method, c.FullPath(), c.Writer.Status())
+		r.RecordHTTPDuration(durMs)
+
+		country := c.GetHeader("CF-IPCountry")
+		if country == "" {
+			country = c.GetHeader("X-GeoIP-Country")
+		}
+		if country != "" {
+			r.RecordCountryRequest(country, durMs)
+		}
 	}
 }
 
@@ -305,6 +320,8 @@ func (r *Registry) Render(ctx context.Context) string {
 			fmt.Fprintf(&b, "numan_postgres_read_wait_count_total %d\n", stats.WaitCount)
 		}
 	}
+
+	r.renderExtendedMetrics(ctx, &b)
 
 	return b.String()
 }

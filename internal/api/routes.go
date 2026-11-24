@@ -285,6 +285,13 @@ func SetupRESTRoutes(r *gin.Engine) {
 	// --- Admin Topologie Cluster & Auto-Discovery par Datacenter ---
 	adminGroup.GET("/cluster/topology", admin_handlers.GetClusterTopologyHandler)
 
+	// --- Admin Télémétrie DC & Scheduler Sensible à l'Activité (POST JSON strict, zéro paramètre d'URL) ---
+	adminGroup.POST("/telemetry/overview", admin_handlers.GetTelemetryOverviewHandler)
+	adminGroup.POST("/scheduler/jobs", admin_handlers.GetSchedulerJobsHandler)
+	adminGroup.POST("/scheduler/jobs/trigger", admin_handlers.TriggerSchedulerJobHandler)
+	adminGroup.POST("/scheduler/pause", admin_handlers.PauseSchedulerHandler)
+	adminGroup.POST("/scheduler/resume", admin_handlers.ResumeSchedulerHandler)
+
 	// =========================================================================
 	// 4. ROUTES MODÉRATION (JWT + HMAC + Rôle Modérateur Grade >= 3 ou Admin)
 	// =========================================================================

@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -59,4 +60,26 @@ func TestHub_ShutdownAndStats(t *testing.T) {
 	assert.False(t, open1)
 	assert.False(t, open2)
 	assert.False(t, open3)
+}
+
+func TestHub_UsesShardedPubSubInClusterMode(t *testing.T) {
+	srv := test.SetupTestRedisCluster(t)
+	prevHub := globalHub
+	t.Cleanup(func() {
+		Shutdown()
+		globalHubMu.Lock()
+		globalHub = prevHub
+		globalHubMu.Unlock()
+	})
+
+	InitHub()
+	c := &client{UserID: 555, Send: make(chan []byte, 4)}
+	globalHub.Register <- c
+
+	assert.Eventually(t, func() bool {
+		return srv.SSubscribeCalls.Load() > 0
+	}, 2*time.Second, 20*time.Millisecond, "WebSocket hub must use SSubscribe in Redis Cluster mode")
+
+	globalHub.Unregister <- c
+	Shutdown()
 }

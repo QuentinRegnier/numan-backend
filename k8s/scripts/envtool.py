@@ -148,6 +148,19 @@ def _host_list(v):
             return f"invalid port {port!r} in host-list (must be 1..65535)"
 
 
+def _ratio(v):
+    if not re.match(r"^(0(\.[0-9]{1,4})?|1(\.0{1,4})?)$", v):
+        return "must be a decimal ratio between 0.01 and 1.00 (e.g. 0.30)"
+    fv = float(v)
+    if not (0.0 < fv <= 1.0):
+        return "must be strictly > 0.0 and <= 1.0"
+
+
+def _redis_memory(v):
+    if not re.match(r"^[1-9][0-9]*(mb|gb|m|g|kb|k)$", v):
+        return "must be a Redis maxmemory size (e.g. 512mb, 4gb, 16gb)"
+
+
 def check_type(t, v):
     """Return an error string or None."""
     if t.startswith("int:"):
@@ -173,7 +186,7 @@ def check_type(t, v):
         "kube-context": lambda x: None if re.match(r"^[A-Za-z0-9_.:@/-]+$", x) else "unexpected characters in context name",
         "semver": lambda x: None if re.match(r"^[0-9]+\.[0-9]+\.[0-9]+$", x) else "expected MAJOR.MINOR.PATCH",
         "bool": lambda x: None if x in ("true", "false") else "must be exactly true or false",
-        "cidr": _cidr, "host-list": _host_list,
+        "cidr": _cidr, "host-list": _host_list, "ratio": _ratio, "redis-memory": _redis_memory,
         "hostname": _hostname, "email": _email, "image-registry": _registry, "image-tag": _tag,
         "image-ref": _imageref, "cron": _cron, "timezone": _timezone,
     }
@@ -462,12 +475,13 @@ def resolve(path, strict=False):
     pg_storage_count = pg_standalone if pg_standalone > 0 else pg_cnpg
     mongo_replicas = int(R["DB_MONGO_REPLICAS"])
     redis_replicas = int(R["DB_REDIS_REPLICAS"])
+    redis_core_cluster_replicas = int(R["DB_REDIS_CORE_CLUSTER_REPLICAS"])
     sentinel_replicas = int(R["DB_REDIS_SENTINEL_REPLICAS"])
 
     total = (
         q("PVC_SIZE_POSTGRES") * pg_storage_count
         + q("PVC_SIZE_MONGODB") * mongo_replicas
-        + q("PVC_SIZE_REDIS") * redis_replicas
+        + q("PVC_SIZE_REDIS") * (redis_replicas + redis_core_cluster_replicas)
         + q("PVC_SIZE_MINIO_HOT")
         + q("PVC_SIZE_MINIO_COLD")
     )
@@ -553,6 +567,35 @@ def resolve(path, strict=False):
             notes.append(
                 "DB_REDIS_REPLICAS=2 with DB_REDIS_SENTINEL_REPLICAS=0 (dev/test mode): replication active without "
                 "automatic Sentinel election (enable 3 Sentinels for automatic failover)"
+            )
+    if redis_replicas == 0 and redis_core_cluster_replicas == 0 and not R["DB_REDIS_CORE_CLUSTER_ADDRS"]:
+        errs.append(
+            "Both DB_REDIS_REPLICAS=0 and DB_REDIS_CORE_CLUSTER_REPLICAS=0 with empty DB_REDIS_CORE_CLUSTER_ADDRS: "
+            "Tier 1 Redis Core must have either standalone/Sentinel (DB_REDIS_REPLICAS >= 1), in-cluster Redis Core "
+            "Cluster (DB_REDIS_CORE_CLUSTER_REPLICAS >= 6), or external DB_REDIS_CORE_CLUSTER_ADDRS"
+        )
+    if redis_core_cluster_replicas > 0:
+        if not R["DB_REDIS_CORE_CLUSTER_ADDRS"]:
+            errs.append(
+                "DB_REDIS_CORE_CLUSTER_REPLICAS > 0 requires DB_REDIS_CORE_CLUSTER_ADDRS "
+                "(e.g. redis-core-cluster-0.redis-core-cluster-headless:6379,...)"
+            )
+        if redis_core_cluster_replicas < 3:
+            errs.append(
+                f"DB_REDIS_CORE_CLUSTER_REPLICAS={redis_core_cluster_replicas} is invalid: Redis Cluster requires at least 3 masters (6+ with replicas for HA)"
+            )
+        elif redis_core_cluster_replicas < 6:
+            if strict:
+                errs.append(
+                    f"DB_REDIS_CORE_CLUSTER_REPLICAS={redis_core_cluster_replicas} has no Master/Replica HA (strict/prod requires >= 6: 3+ masters with 1 replica each)"
+                )
+            else:
+                notes.append(
+                    f"DB_REDIS_CORE_CLUSTER_REPLICAS={redis_core_cluster_replicas} (dev/test mode): Redis Cluster without full 1-replica HA (use >= 6 in production)"
+                )
+        if redis_replicas > 0:
+            notes.append(
+                "Both DB_REDIS_REPLICAS > 0 and DB_REDIS_CORE_CLUSTER_REPLICAS > 0 (migration overlap): set DB_REDIS_REPLICAS=0 after Redis Core Cluster cutover"
             )
 
     lock, mode, days = R["MINIO_COLD_OBJECT_LOCK"], R["MINIO_COLD_RETENTION_MODE"], R["MINIO_COLD_RETENTION_DAYS"]

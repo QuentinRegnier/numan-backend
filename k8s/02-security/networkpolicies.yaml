@@ -10,6 +10,7 @@
 #   numan.io/uses-postgres | uses-mongo | uses-redis | uses-minio-hot | uses-minio-cold  -> may reach that datastore
 #   numan.io/egress-internet                                                              -> may reach the Internet on TCP/443
 #   numan.io/exposed-via-traefik                                                           -> may receive traffic from Traefik
+#   numan.io/exposes-internal-metrics                                                      -> may receive TCP/9090 from K8s API proxy / private cluster monitoring
 #
 # NOT covered (add if you need them): scraping by a monitoring stack (needs an ingress rule from its
 # namespace), IPv6 egress, outbound ports other than 443 for api/worker (e.g. SMTP) - the legacy
@@ -276,6 +277,15 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: redis
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis-core-cluster
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis-object-pool
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis-pubsub
       ports:
         - {protocol: TCP, port: 6379}
     - to:
@@ -284,6 +294,42 @@ spec:
               app.kubernetes.io/name: redis-sentinel
       ports:
         - {protocol: TCP, port: 26379}
+---
+# 3-Tier Redis Cluster (Core Cluster, Object Pool, Pub/Sub): client access (6379) + strict intra-cluster gossip (16379)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-redis-3tier-and-cluster-bus
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      numan.io/redis-cluster-member: "true"
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              numan.io/uses-redis: "true"
+        - podSelector:
+            matchLabels:
+              numan.io/redis-cluster-member: "true"
+      ports:
+        - {protocol: TCP, port: 6379}
+    - from:
+        - podSelector:
+            matchLabels:
+              numan.io/redis-cluster-member: "true"
+      ports:
+        - {protocol: TCP, port: 16379}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              numan.io/redis-cluster-member: "true"
+      ports:
+        - {protocol: TCP, port: 6379}
+        - {protocol: TCP, port: 16379}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -584,3 +630,31 @@ spec:
       ports:
         - {protocol: TCP, port: 8080}
         - {protocol: TCP, port: 8081}
+---
+# Internal-only port 9090 (/metrics, /internal/cli-telemetry, /internal/scheduler/pause|resume|jobs/trigger).
+# NEVER routed by Traefik Ingress (which only forwards TCP/8080 to numan.io/exposed-via-traefik pods).
+# Allows multi-node K3s kube-apiserver Service/Pod Proxy (control-plane host IP over Flannel/WireGuard) for `numan-cli`
+# and in-cluster Prometheus scrapers while denying all public Internet sources.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-internal-telemetry-and-metrics-ingress
+  namespace: numan
+spec:
+  podSelector:
+    matchLabels:
+      numan.io/exposes-internal-metrics: "true"
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 10.0.0.0/8
+        - ipBlock:
+            cidr: 172.16.0.0/12
+        - ipBlock:
+            cidr: 192.168.0.0/16
+        - ipBlock:
+            cidr: 100.64.0.0/10
+        - namespaceSelector: {}
+      ports:
+        - {protocol: TCP, port: 9090}

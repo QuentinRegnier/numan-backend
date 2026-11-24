@@ -16,9 +16,10 @@ const (
 	clusterNodeEntryFmt   = "cluster:node:%s:%s"
 )
 
-// RegisterClusterNode enregistre ou renouvelle la fiche d'un nœud dans Redis L1 avec un TTL strict.
+// RegisterClusterNode enregistre ou renouvelle la fiche d'un nœud dans Redis Core L1 avec un TTL strict.
 func RegisterClusterNode(ctx context.Context, datacenter, memberID string, payload any, ttl time.Duration) error {
-	if redisgo.Rdb == nil {
+	client := redisgo.CoreClient()
+	if client == nil {
 		return errors.New("redis client not initialized")
 	}
 	raw, err := json.Marshal(payload)
@@ -29,7 +30,7 @@ func RegisterClusterNode(ctx context.Context, datacenter, memberID string, paylo
 	indexKey := fmt.Sprintf(clusterNodesIndexFmt, datacenter)
 	entryKey := fmt.Sprintf(clusterNodeEntryFmt, datacenter, memberID)
 
-	pipe := redisgo.Rdb.Pipeline()
+	pipe := client.Pipeline()
 	pipe.SAdd(ctx, clusterDatacentersKey, datacenter)
 	pipe.SAdd(ctx, indexKey, memberID)
 	pipe.Set(ctx, entryKey, raw, ttl)
@@ -39,26 +40,28 @@ func RegisterClusterNode(ctx context.Context, datacenter, memberID string, paylo
 
 // UnregisterClusterNode retire immédiatement un nœud du registre (appelé au Graceful Shutdown).
 func UnregisterClusterNode(ctx context.Context, datacenter, memberID string) error {
-	if redisgo.Rdb == nil {
+	client := redisgo.CoreClient()
+	if client == nil {
 		return nil
 	}
 	indexKey := fmt.Sprintf(clusterNodesIndexFmt, datacenter)
 	entryKey := fmt.Sprintf(clusterNodeEntryFmt, datacenter, memberID)
 
-	pipe := redisgo.Rdb.Pipeline()
+	pipe := client.Pipeline()
 	pipe.Del(ctx, entryKey)
 	pipe.SRem(ctx, indexKey, memberID)
 	_, err := pipe.Exec(ctx)
 	return err
 }
 
-// ListClusterNodePayloads retourne les fiches JSON actives d'un datacenter et purge automatiquement les entrées expirées.
+// ListClusterNodePayloads retourne les fiches JSON actives d'un datacenter et purge automatiquement les entrées expirées (Cluster-safe).
 func ListClusterNodePayloads(ctx context.Context, datacenter string) ([][]byte, error) {
-	if redisgo.Rdb == nil {
+	client := redisgo.CoreClient()
+	if client == nil {
 		return nil, errors.New("redis client not initialized")
 	}
 	indexKey := fmt.Sprintf(clusterNodesIndexFmt, datacenter)
-	members, err := redisgo.Rdb.SMembers(ctx, indexKey).Result()
+	members, err := client.SMembers(ctx, indexKey).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +74,7 @@ func ListClusterNodePayloads(ctx context.Context, datacenter string) ([][]byte, 
 		keys[i] = fmt.Sprintf(clusterNodeEntryFmt, datacenter, m)
 	}
 
-	values, err := redisgo.Rdb.MGet(ctx, keys...).Result()
+	values, err := mgetKeysClusterSafe(ctx, client, keys)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +92,7 @@ func ListClusterNodePayloads(ctx context.Context, datacenter string) ([][]byte, 
 	}
 
 	if len(stale) > 0 {
-		_ = redisgo.Rdb.SRem(ctx, indexKey, stale...).Err()
+		_ = client.SRem(ctx, indexKey, stale...).Err()
 	}
 
 	return payloads, nil
@@ -97,8 +100,9 @@ func ListClusterNodePayloads(ctx context.Context, datacenter string) ([][]byte, 
 
 // ListRegisteredDatacenters retourne les identifiants de datacenters enregistrés dans ce Redis.
 func ListRegisteredDatacenters(ctx context.Context) ([]string, error) {
-	if redisgo.Rdb == nil {
+	client := redisgo.CoreClient()
+	if client == nil {
 		return nil, errors.New("redis client not initialized")
 	}
-	return redisgo.Rdb.SMembers(ctx, clusterDatacentersKey).Result()
+	return client.SMembers(ctx, clusterDatacentersKey).Result()
 }

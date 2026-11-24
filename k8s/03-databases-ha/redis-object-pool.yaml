@@ -1,0 +1,278 @@
+# Tier 2 — Bulk Ephemeral L1 Object Cache Pool (100% Usable Unreplicated RAM, zero AOF, volatile-lfu).
+#
+# Harvests spare RAM across Worker, API, and DB-Redis servers with ZERO 50% replica tax:
+#   - `--cluster-enabled yes --cluster-require-full-coverage no`: if 1 shard is drained or restarts,
+#     all other shards keep serving L1 hits while missed keys transparently rehydrate from MongoDB L2.
+#   - `--appendonly no --save ""`: pure ephemeral in-memory RAM cache (no PVC needed!).
+#   - `DB_REDIS_OBJECT_REPLICAS=0` by default (collapses onto Tier 1 Core on single-server / Mac dev).
+#   - Includes idempotent `Job/redis-object-pool-init` that forms the cluster on initial deploy and
+#     auto-joins/rebalances new shards when scaling up `DB_REDIS_OBJECT_REPLICAS`.
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-object-pool-headless
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: redis-object-pool
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: database
+    numan.io/redis-tier: objects
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: redis-object-pool
+  ports:
+    - {name: redis, port: 6379, targetPort: redis}
+    - {name: cluster-bus, port: 16379, targetPort: cluster-bus}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-object-pool
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: redis-object-pool
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: database
+    numan.io/redis-tier: objects
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: redis-object-pool
+  ports:
+    - {name: redis, port: 6379, targetPort: redis}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-object-pool
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: redis-object-pool
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: database
+    numan.io/redis-tier: objects
+spec:
+  serviceName: redis-object-pool-headless
+  replicas: ${DB_REDIS_OBJECT_REPLICAS}
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis-object-pool
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis-object-pool
+        app.kubernetes.io/part-of: numan
+        app.kubernetes.io/component: database
+        numan.io/redis-tier: objects
+        numan.io/redis-cluster-member: "true"
+    spec:
+      serviceAccountName: redis
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 15
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: {type: RuntimeDefault}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis-object-pool
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["db-redis"]
+            - weight: 80
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["worker"]
+            - weight: 60
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["api"]
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["all-in-one"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: redis-object-pool
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: redis-object-pool
+          image: redis:7.4.2
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              SELF_FQDN="$POD_NAME.redis-object-pool-headless.numan.svc.cluster.local"
+              exec redis-server \
+                --port 6379 \
+                --dir /tmp \
+                --cluster-enabled yes \
+                --cluster-config-file /tmp/nodes.conf \
+                --cluster-node-timeout 5000 \
+                --cluster-require-full-coverage no \
+                --cluster-announce-hostname "$SELF_FQDN" \
+                --cluster-preferred-endpoint-type hostname \
+                --appendonly no \
+                --save "" \
+                --maxmemory "$OBJECT_POOL_MAXMEMORY" \
+                --maxmemory-policy volatile-lfu \
+                --lfu-log-factor 10 \
+                --lfu-decay-time 120 \
+                --requirepass "$REDIS_PASSWORD" \
+                --masterauth "$REDIS_PASSWORD"
+          ports:
+            - {name: redis, containerPort: 6379}
+            - {name: cluster-bus, containerPort: 16379}
+          env:
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: redis-credentials, key: REDIS_PASSWORD}}
+            - name: REDISCLI_AUTH
+              valueFrom: {secretKeyRef: {name: redis-credentials, key: REDIS_PASSWORD}}
+            - name: OBJECT_POOL_MAXMEMORY
+              value: "${DB_REDIS_OBJECT_MAXMEMORY}"
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli ping | grep -q PONG"]
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli ping | grep -q PONG"]
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            requests: {cpu: "100m", memory: "512Mi"}
+            limits: {cpu: "2", memory: "${REDIS_MEMORY_LIMIT}"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 256Mi}}
+---
+# Idempotent cluster bootstrap & scale-up auto-rebalancer Job for Tier 2 Object Pool.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: redis-object-pool-init
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: redis-object-pool-init
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: database
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis-object-pool-init
+        app.kubernetes.io/part-of: numan
+        app.kubernetes.io/component: database
+        numan.io/redis-cluster-member: "true"
+        numan.io/uses-redis: "true"
+    spec:
+      serviceAccountName: redis
+      automountServiceAccountToken: false
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: cluster-init
+          image: redis:7.4.2
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              COUNT="$OBJECT_POOL_REPLICAS"
+              if [ "$COUNT" -lt 3 ]; then
+                echo "DB_REDIS_OBJECT_REPLICAS=$COUNT (<3): skipping Redis Cluster slot creation."
+                exit 0
+              fi
+
+              SEED="redis-object-pool-0.redis-object-pool-headless.numan.svc.cluster.local:6379"
+              NODES=""
+              i=0
+              while [ "$i" -lt "$COUNT" ]; do
+                HOST="redis-object-pool-$i.redis-object-pool-headless.numan.svc.cluster.local"
+                until redis-cli --no-auth-warning -h "$HOST" -p 6379 ping | grep -q PONG; do
+                  echo "Waiting for $HOST:6379..."
+                  sleep 2
+                done
+                NODES="$NODES $HOST:6379"
+                i=$((i + 1))
+              done
+
+              STATE="$(redis-cli --no-auth-warning -h redis-object-pool-0.redis-object-pool-headless.numan.svc.cluster.local -p 6379 CLUSTER INFO | awk -F: '/cluster_state/{gsub(/\r/,"",$2); print $2}')"
+              if [ "$STATE" != "ok" ]; then
+                echo "Creating unreplicated Tier 2 Object Pool cluster across $COUNT shards..."
+                # shellcheck disable=SC2086
+                redis-cli --no-auth-warning --cluster create $NODES --cluster-replicas 0 --cluster-yes
+              else
+                echo "Cluster already active; checking for newly scaled shards..."
+                KNOWN="$(redis-cli --no-auth-warning -h redis-object-pool-0.redis-object-pool-headless.numan.svc.cluster.local -p 6379 CLUSTER NODES)"
+                ADDED=0
+                for NODE in $NODES; do
+                  HOST_ONLY="$(printf '%s' "$NODE" | cut -d: -f1)"
+                  if ! printf '%s\n' "$KNOWN" | grep -q "$HOST_ONLY"; then
+                    echo "Joining new shard $NODE into Object Pool cluster..."
+                    redis-cli --no-auth-warning --cluster add-node "$NODE" "$SEED"
+                    ADDED=1
+                  fi
+                done
+                if [ "$ADDED" = "1" ]; then
+                  echo "Rebalancing 16384 slots across all Object Pool masters..."
+                  redis-cli --no-auth-warning --cluster rebalance "$SEED" --cluster-use-empty-masters --cluster-yes
+                fi
+              fi
+              echo "Tier 2 Object Pool cluster initialization complete."
+          env:
+            - name: REDISCLI_AUTH
+              valueFrom: {secretKeyRef: {name: redis-credentials, key: REDIS_PASSWORD}}
+            - name: OBJECT_POOL_REPLICAS
+              value: "${DB_REDIS_OBJECT_REPLICAS}"
+          resources:
+            requests: {cpu: "50m", memory: "64Mi"}
+            limits: {cpu: "500m", memory: "256Mi"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}

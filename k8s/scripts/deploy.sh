@@ -2,16 +2,20 @@
 # Guarded deployment of RENDERED manifests. Always re-renders and re-validates in the same run, then applies
 # build/manifests/<stack>.yaml. Source templates are never applied.
 #
-#   scripts/deploy.sh [--env-file FILE] [--stack core|postgres-ha|tls|admin|admin-ingress|traefik] [--dry-run] [--yes]
-#     core          (default) the whole application stack
-#     postgres-ha   CloudNativePG PostgreSQL HA cluster     (needs CNPG operator: make install-cnpg)
-#     tls           ClusterIssuers + Certificate            (needs cert-manager installed)
-#     admin         optional admin UIs, still replicas 0    (needs their *-credentials Secrets)
-#     admin-ingress optional WireGuard-only Admin Ingresses (requires Traefik externalTrafficPolicy: Local)
-#     traefik       optional cluster-wide Traefik tuning    (kube-system)
-#     --dry-run     server-side dry run only, nothing changes
-#     --out DIR     build directory (default: ./build)
-#     --yes         skip the interactive confirmation (CI/CLI use; the context guard still applies)
+#   scripts/deploy.sh [--env-file FILE] [--stack core|postgres-ha|redis-core-cluster|redis-object-pool|redis-pubsub|redis-3tier|tls|admin|admin-ingress|traefik] [--dry-run] [--yes]
+#     core               (default) the whole application stack
+#     postgres-ha        CloudNativePG PostgreSQL HA cluster     (needs CNPG operator: make install-cnpg)
+#     redis-core-cluster optional Tier 1 Replicated Redis Cluster (DB_REDIS_CORE_CLUSTER_REPLICAS >= 6)
+#     redis-object-pool  optional Tier 2 Ephemeral Object Cache Pool (DB_REDIS_OBJECT_REPLICAS >= 3)
+#     redis-pubsub       optional Tier 3 Ephemeral Pub/Sub Bus   (DB_REDIS_PUBSUB_REPLICAS >= 1)
+#     redis-3tier        deploy all 3 optional Redis tiers together
+#     tls                ClusterIssuers + Certificate            (needs cert-manager installed)
+#     admin              optional admin UIs, still replicas 0    (needs their *-credentials Secrets)
+#     admin-ingress      optional WireGuard-only Admin Ingresses (requires Traefik externalTrafficPolicy: Local)
+#     traefik            optional cluster-wide Traefik tuning    (kube-system)
+#     --dry-run          server-side dry run only, nothing changes
+#     --out DIR          build directory (default: ./build)
+#     --yes              skip the interactive confirmation (CI/CLI use; the context guard still applies)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # shellcheck source=scripts/lib.sh
@@ -28,7 +32,7 @@ while [ $# -gt 0 ]; do
     *) die "unknown argument $1";;
   esac
 done
-case "$STACK" in core|postgres-ha|tls|admin|admin-ingress|traefik) ;; *) die "unknown stack $STACK";; esac
+case "$STACK" in core|postgres-ha|redis-core-cluster|redis-object-pool|redis-pubsub|redis-3tier|tls|admin|admin-ingress|traefik) ;; *) die "unknown stack $STACK";; esac
 need kubectl "cluster access"
 
 # 1. compile + validate (fails closed); strict mode rejects placeholder domains
@@ -71,6 +75,16 @@ case "$STACK" in
     if [ "$DRY" = 0 ]; then kubectl get namespace "$NS" >/dev/null 2>&1 || kubectl create namespace "$NS" >/dev/null; fi
     kubectl -n "$NS" get secret postgres-cnpg-credentials >/dev/null 2>&1 \
       || { [ "$DRY" = 1 ] && echo "NOTE: Secret postgres-cnpg-credentials missing (dry-run continues)" || die "missing Secret postgres-cnpg-credentials -> scripts/create-secrets.sh"; };;
+  redis-core-cluster|redis-3tier)
+    SC_REDIS="$(read_var STORAGE_CLASS_REDIS "$OUT")"
+    kubectl get storageclass "$SC_REDIS" >/dev/null || die "StorageClass '$SC_REDIS' (STORAGE_CLASS_REDIS) does not exist in this cluster"
+    if [ "$DRY" = 0 ]; then kubectl get namespace "$NS" >/dev/null 2>&1 || kubectl create namespace "$NS" >/dev/null; fi
+    kubectl -n "$NS" get secret redis-credentials >/dev/null 2>&1 \
+      || { [ "$DRY" = 1 ] && echo "NOTE: Secret redis-credentials missing (dry-run continues)" || die "missing Secret redis-credentials -> scripts/create-secrets.sh"; };;
+  redis-object-pool|redis-pubsub)
+    if [ "$DRY" = 0 ]; then kubectl get namespace "$NS" >/dev/null 2>&1 || kubectl create namespace "$NS" >/dev/null; fi
+    kubectl -n "$NS" get secret redis-credentials >/dev/null 2>&1 \
+      || { [ "$DRY" = 1 ] && echo "NOTE: Secret redis-credentials missing (dry-run continues)" || die "missing Secret redis-credentials -> scripts/create-secrets.sh"; };;
   tls)     kubectl get crd clusterissuers.cert-manager.io certificates.cert-manager.io >/dev/null || die "cert-manager CRDs missing: install cert-manager first (README)";;
   admin)   for s in pgadmin-credentials mongo-express-credentials redis-commander-credentials; do kubectl -n "$NS" get secret "$s" >/dev/null 2>&1 || die "missing Secret $s (fill the admin variables in secrets.env and run scripts/create-secrets.sh)"; done;;
   admin-ingress)
@@ -95,6 +109,10 @@ if [ "$STACK" = core ]; then
   echo "==> removing finished init Jobs (Jobs are immutable; bootstrap is idempotent)"
   kubectl -n "$NS" delete job -l numan.io/job-type=init --ignore-not-found --wait=true
 fi
+if [ "$STACK" = redis-object-pool ] || [ "$STACK" = redis-3tier ]; then
+  echo "==> removing previous redis-object-pool-init Job (Jobs are immutable; cluster init/rebalance is idempotent)"
+  kubectl -n "$NS" delete job redis-object-pool-init --ignore-not-found --wait=true
+fi
 kubectl apply -f "$MANIFEST"
 
 if [ "$STACK" = postgres-ha ]; then
@@ -103,14 +121,46 @@ if [ "$STACK" = postgres-ha ]; then
   echo "CloudNativePG PostgreSQL HA cluster is Ready (postgres-rw / postgres-ro / postgres-r)."
 fi
 
+if [ "$STACK" = redis-core-cluster ] || [ "$STACK" = redis-3tier ]; then
+  CORE_CLUSTER_REPLICAS="$(read_var DB_REDIS_CORE_CLUSTER_REPLICAS "$OUT")"
+  if [ "$CORE_CLUSTER_REPLICAS" -gt 0 ]; then
+    echo "==> waiting for Tier 1 Redis Core Cluster ($CORE_CLUSTER_REPLICAS pods)"
+    kubectl -n "$NS" rollout status statefulset/redis-core-cluster --timeout=600s
+  fi
+fi
+
+if [ "$STACK" = redis-object-pool ] || [ "$STACK" = redis-3tier ]; then
+  OBJECT_POOL_REPLICAS="$(read_var DB_REDIS_OBJECT_REPLICAS "$OUT")"
+  if [ "$OBJECT_POOL_REPLICAS" -gt 0 ]; then
+    echo "==> waiting for Tier 2 Redis Object Pool ($OBJECT_POOL_REPLICAS shards)"
+    kubectl -n "$NS" rollout status statefulset/redis-object-pool --timeout=600s
+    kubectl -n "$NS" wait --for=condition=complete job/redis-object-pool-init --timeout=600s
+  fi
+fi
+
+if [ "$STACK" = redis-pubsub ] || [ "$STACK" = redis-3tier ]; then
+  PUBSUB_REPLICAS="$(read_var DB_REDIS_PUBSUB_REPLICAS "$OUT")"
+  if [ "$PUBSUB_REPLICAS" -gt 0 ]; then
+    echo "==> waiting for Tier 3 Redis Pub/Sub Bus ($PUBSUB_REPLICAS pods)"
+    kubectl -n "$NS" rollout status statefulset/redis-pubsub --timeout=600s
+  fi
+fi
+
 if [ "$STACK" = core ]; then
   echo "==> waiting for datastores"
   PG_STANDALONE="$(read_var DB_POSTGRES_STANDALONE_REPLICAS "$OUT")"
+  REDIS_REPLICAS="$(read_var DB_REDIS_REPLICAS "$OUT")"
   SENTINEL_REPLICAS="$(read_var DB_REDIS_SENTINEL_REPLICAS "$OUT")"
+  WS_REPLICAS_VAL="$(read_var WS_REPLICAS "$OUT")"
+  WORKER_REPLICAS_VAL="$(read_var WORKER_REPLICAS "$OUT")"
+  SCHEDULER_REPLICAS_VAL="$(read_var SCHEDULER_REPLICAS "$OUT")"
   if [ "$PG_STANDALONE" -gt 0 ]; then
     kubectl -n "$NS" rollout status statefulset/postgres --timeout=600s
   fi
-  for r in mongo redis minio-hot minio-cold; do kubectl -n "$NS" rollout status statefulset/$r --timeout=600s; done
+  if [ "$REDIS_REPLICAS" -gt 0 ]; then
+    kubectl -n "$NS" rollout status statefulset/redis --timeout=600s
+  fi
+  for r in mongo minio-hot minio-cold; do kubectl -n "$NS" rollout status statefulset/$r --timeout=600s; done
   if [ "$SENTINEL_REPLICAS" -gt 0 ]; then
     kubectl -n "$NS" rollout status statefulset/redis-sentinel --timeout=300s
   fi
@@ -118,6 +168,15 @@ if [ "$STACK" = core ]; then
   kubectl -n "$NS" wait --for=condition=complete job/mongo-init job/minio-hot-init job/minio-cold-init --timeout=900s
   echo "==> waiting for applications"
   kubectl -n "$NS" rollout status statefulset/api --timeout=600s
+  if [ "$WS_REPLICAS_VAL" -gt 0 ]; then
+    kubectl -n "$NS" rollout status statefulset/websocket --timeout=600s
+  fi
+  if [ "$WORKER_REPLICAS_VAL" -gt 0 ]; then
+    kubectl -n "$NS" rollout status statefulset/worker --timeout=600s
+  fi
+  if [ "$SCHEDULER_REPLICAS_VAL" -gt 0 ]; then
+    kubectl -n "$NS" rollout status deployment/scheduler --timeout=600s
+  fi
   kubectl -n "$NS" rollout status deployment/watermark --timeout=600s
   echo "Deployed. Next: make verify   (HOST=<your domain> for the external checks)"
 fi

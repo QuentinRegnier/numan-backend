@@ -6,7 +6,7 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 )
 
 // GeoLocationItem représente un point géographique indexé dans une collection GEO Redis.

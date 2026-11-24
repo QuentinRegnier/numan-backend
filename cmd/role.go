@@ -9,10 +9,11 @@ import (
 type ServerRole string
 
 const (
-	RoleMonolith   ServerRole = "monolith"
-	RoleAPINode    ServerRole = "api_node"
-	RoleWSNode     ServerRole = "ws_node"
-	RoleWorkerNode ServerRole = "worker_node"
+	RoleMonolith      ServerRole = "monolith"
+	RoleAPINode       ServerRole = "api_node"
+	RoleWSNode        ServerRole = "ws_node"
+	RoleWorkerNode    ServerRole = "worker_node"
+	RoleSchedulerNode ServerRole = "scheduler_node"
 )
 
 // ResolveServerRole lit SERVER_ROLE et normalise le mode d'exécution.
@@ -25,6 +26,8 @@ func ResolveServerRole() ServerRole {
 		return RoleWSNode
 	case string(RoleWorkerNode):
 		return RoleWorkerNode
+	case string(RoleSchedulerNode):
+		return RoleSchedulerNode
 	default:
 		return RoleMonolith
 	}
@@ -54,17 +57,29 @@ func (r ServerRole) RunsAPI() bool {
 	return r.RunsREST() || r.RunsWebSocket()
 }
 
-// RunsWorkers indique si ce nœud exécute les 64 workers Write-Behind et les crons périodiques.
-func (r ServerRole) RunsWorkers() bool {
+// RunsWriteBehind indique si ce nœud exécute le pool Write-Behind 64 shards + consommateurs temps réel (Push, Email, Trust Queue, Moderation Expiration).
+func (r ServerRole) RunsWriteBehind() bool {
 	return r == RoleMonolith || r == RoleWorkerNode
 }
 
-// NeedsCuckooFilter indique si ce nœud a besoin du Cuckoo Filter en RAM (feeds REST & warmup worker).
+// RunsWorkers est un alias rétrocompatible de RunsWriteBehind.
+func (r ServerRole) RunsWorkers() bool {
+	return r.RunsWriteBehind()
+}
+
+// RunsScheduler indique si ce nœud exécute l'agrégateur télémétrie DC et l'Activity-Aware Job Scheduler.
+// En mode monolith, le scheduler tourne embarqué (0 pod supplémentaire).
+// En production distribuée/HA, il tourne dans son pod dédié (SERVER_ROLE=scheduler_node).
+func (r ServerRole) RunsScheduler() bool {
+	return r == RoleMonolith || r == RoleSchedulerNode
+}
+
+// NeedsCuckooFilter indique si ce nœud a besoin du Cuckoo Filter en RAM (REST, Worker ou Scheduler pour l'audit/rebuild).
 func (r ServerRole) NeedsCuckooFilter() bool {
-	return r.RunsREST() || r.RunsWorkers()
+	return r.RunsREST() || r.RunsWriteBehind() || r.RunsScheduler()
 }
 
 // NeedsStartupSeeding indique si ce nœud participe au Smart Seeding initial de Redis / index Mongo.
 func (r ServerRole) NeedsStartupSeeding() bool {
-	return r.RunsREST() || r.RunsWorkers()
+	return r.RunsREST() || r.RunsWriteBehind()
 }

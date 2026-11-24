@@ -10,12 +10,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
-	goredis "github.com/go-redis/redis/v8"
+	goredis "github.com/redis/go-redis/v9"
 )
 
 type geoPoint struct {
@@ -24,20 +25,27 @@ type geoPoint struct {
 }
 
 type FakeRedisServer struct {
-	listener  net.Listener
-	mu        sync.RWMutex
-	strings   map[string]string
-	hashes    map[string]map[string]string
-	sets      map[string]map[string]struct{}
-	hlls      map[string]map[string]struct{}
-	zsets     map[string]map[string]float64
-	geos      map[string]map[string]geoPoint
-	lists     map[string][]string
-	ttls      map[string]time.Duration
-	failCmds  map[string]error
-	failKeys  map[string]error
-	pubsubMu  sync.Mutex
-	pubsubSub map[string][]net.Conn
+	listener           net.Listener
+	mu                 sync.RWMutex
+	strings            map[string]string
+	hashes             map[string]map[string]string
+	sets               map[string]map[string]struct{}
+	hlls               map[string]map[string]struct{}
+	zsets              map[string]map[string]float64
+	geos               map[string]map[string]geoPoint
+	lists              map[string][]string
+	ttls               map[string]time.Duration
+	failCmds           map[string]error
+	failKeys           map[string]error
+	pubsubMu           sync.Mutex
+	pubsubSub          map[string][]net.Conn
+	spubsubSub         map[string][]net.Conn
+	StrictClusterSlots bool
+	SPublishCalls      atomic.Int64
+	SSubscribeCalls    atomic.Int64
+	InfoMemoryUsed     int64
+	InfoMemoryMax      int64
+	InfoEvictedKeys    int64
 }
 
 func newFakeRedisServer(t *testing.T) (*FakeRedisServer, *goredis.Client) {
@@ -48,28 +56,34 @@ func newFakeRedisServer(t *testing.T) (*FakeRedisServer, *goredis.Client) {
 	}
 
 	srv := &FakeRedisServer{
-		listener:  ln,
-		strings:   make(map[string]string),
-		hashes:    make(map[string]map[string]string),
-		sets:      make(map[string]map[string]struct{}),
-		hlls:      make(map[string]map[string]struct{}),
-		zsets:     make(map[string]map[string]float64),
-		geos:      make(map[string]map[string]geoPoint),
-		lists:     make(map[string][]string),
-		ttls:      make(map[string]time.Duration),
-		failCmds:  make(map[string]error),
-		failKeys:  make(map[string]error),
-		pubsubSub: make(map[string][]net.Conn),
+		listener:        ln,
+		strings:         make(map[string]string),
+		hashes:          make(map[string]map[string]string),
+		sets:            make(map[string]map[string]struct{}),
+		hlls:            make(map[string]map[string]struct{}),
+		zsets:           make(map[string]map[string]float64),
+		geos:            make(map[string]map[string]geoPoint),
+		lists:           make(map[string][]string),
+		ttls:            make(map[string]time.Duration),
+		failCmds:        make(map[string]error),
+		failKeys:        make(map[string]error),
+		pubsubSub:       make(map[string][]net.Conn),
+		spubsubSub:      make(map[string][]net.Conn),
+		InfoMemoryUsed:  128 * 1024 * 1024,
+		InfoMemoryMax:   1024 * 1024 * 1024,
+		InfoEvictedKeys: 0,
 	}
 
 	go srv.acceptLoop()
 
 	client := goredis.NewClient(&goredis.Options{
-		Addr:         ln.Addr().String(),
-		DialTimeout:  2 * time.Second,
-		ReadTimeout:  2 * time.Second,
-		WriteTimeout: 2 * time.Second,
-		PoolSize:     10,
+		Addr:            ln.Addr().String(),
+		DialTimeout:     2 * time.Second,
+		ReadTimeout:     2 * time.Second,
+		WriteTimeout:    2 * time.Second,
+		PoolSize:        10,
+		Protocol:        2,
+		DisableIdentity: true,
 	})
 
 	t.Cleanup(func() {
@@ -77,6 +91,11 @@ func newFakeRedisServer(t *testing.T) (*FakeRedisServer, *goredis.Client) {
 		_ = ln.Close()
 		srv.pubsubMu.Lock()
 		for _, conns := range srv.pubsubSub {
+			for _, c := range conns {
+				_ = c.Close()
+			}
+		}
+		for _, conns := range srv.spubsubSub {
 			for _, c := range conns {
 				_ = c.Close()
 			}
@@ -91,8 +110,62 @@ func SetupTestRedis(t *testing.T) *FakeRedisServer {
 	t.Helper()
 	srv, client := newFakeRedisServer(t)
 	infraRedis.Rdb = client
+	infraRedis.RdbCore = client
+	infraRedis.RdbObjects = client
+	infraRedis.RdbPubSub = client
 	repoRedis.InitCacheDatabase()
 	return srv
+}
+
+// SetupTestRedisMultiTier démarre 3 serveurs FakeRedis indépendants (Core, Objects, PubSub) pour tester l'isolation des tiers.
+func SetupTestRedisMultiTier(t *testing.T) (coreSrv, objectsSrv, pubsubSrv *FakeRedisServer) {
+	t.Helper()
+	coreSrv, coreClient := newFakeRedisServer(t)
+	objectsSrv, objectsClient := newFakeRedisServer(t)
+	pubsubSrv, pubsubClient := newFakeRedisServer(t)
+	infraRedis.Rdb = coreClient
+	infraRedis.RdbCore = coreClient
+	infraRedis.RdbObjects = objectsClient
+	infraRedis.RdbPubSub = pubsubClient
+	repoRedis.InitCacheDatabase()
+	return coreSrv, objectsSrv, pubsubSrv
+}
+
+// SetupTestRedisCluster démarre un FakeRedisServer avec vérification stricte CRC16 CROSSSLOT
+// connecté via un vrai *redis.ClusterClient go-redis/v9.
+func SetupTestRedisCluster(t *testing.T) *FakeRedisServer {
+	t.Helper()
+	srv, _ := newFakeRedisServer(t)
+	srv.StrictClusterSlots = true
+	addr := srv.listener.Addr().String()
+
+	clusterClient := goredis.NewClusterClient(&goredis.ClusterOptions{
+		Addrs:           []string{addr},
+		DialTimeout:     2 * time.Second,
+		ReadTimeout:     2 * time.Second,
+		WriteTimeout:    2 * time.Second,
+		PoolSize:        10,
+		Protocol:        2,
+		DisableIdentity: true,
+	})
+	t.Cleanup(func() {
+		_ = clusterClient.Close()
+	})
+
+	infraRedis.Rdb = clusterClient
+	infraRedis.RdbCore = clusterClient
+	infraRedis.RdbObjects = clusterClient
+	infraRedis.RdbPubSub = clusterClient
+	repoRedis.InitCacheDatabase()
+	return srv
+}
+
+func (s *FakeRedisServer) CloseListener() {
+	_ = s.listener.Close()
+}
+
+func (s *FakeRedisServer) Addr() string {
+	return s.listener.Addr().String()
 }
 
 func (s *FakeRedisServer) SetFailCmd(cmd string, err error) {
@@ -198,14 +271,63 @@ func (s *FakeRedisServer) handleConn(conn net.Conn) {
 			continue
 		}
 
-		if upperCmd == "SUBSCRIBE" && len(args) >= 2 {
-			ch := args[1]
+		if (upperCmd == "SUBSCRIBE" || upperCmd == "SSUBSCRIBE") && len(args) >= 2 {
+			isSharded := upperCmd == "SSUBSCRIBE"
 			s.pubsubMu.Lock()
-			s.pubsubSub[ch] = append(s.pubsubSub[ch], conn)
+			for _, ch := range args[1:] {
+				if isSharded {
+					s.spubsubSub[ch] = append(s.spubsubSub[ch], conn)
+					s.SSubscribeCalls.Add(1)
+				} else {
+					s.pubsubSub[ch] = append(s.pubsubSub[ch], conn)
+				}
+			}
 			s.pubsubMu.Unlock()
-			// Write subscribe confirmation: *3\r\n$9\r\nsubscribe\r\n$<len>\r\n<ch>\r\n:1\r\n
-			resp := fmt.Sprintf("*3\r\n$9\r\nsubscribe\r\n$%d\r\n%s\r\n:1\r\n", len(ch), ch)
-			_, _ = conn.Write([]byte(resp))
+			kind := "subscribe"
+			if isSharded {
+				kind = "ssubscribe"
+			}
+			for i, ch := range args[1:] {
+				resp := fmt.Sprintf("*3\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n:%d\r\n", len(kind), kind, len(ch), ch, i+1)
+				_, _ = conn.Write([]byte(resp))
+			}
+			continue
+		}
+		if upperCmd == "UNSUBSCRIBE" || upperCmd == "SUNSUBSCRIBE" {
+			isSharded := upperCmd == "SUNSUBSCRIBE"
+			kind := "unsubscribe"
+			if isSharded {
+				kind = "sunsubscribe"
+			}
+			chs := args[1:]
+			if len(chs) == 0 {
+				chs = []string{""}
+			}
+			s.pubsubMu.Lock()
+			for _, ch := range chs {
+				targetMap := s.pubsubSub
+				if isSharded {
+					targetMap = s.spubsubSub
+				}
+				if list, ok := targetMap[ch]; ok {
+					filtered := list[:0]
+					for _, c := range list {
+						if c != conn {
+							filtered = append(filtered, c)
+						}
+					}
+					if len(filtered) == 0 {
+						delete(targetMap, ch)
+					} else {
+						targetMap[ch] = filtered
+					}
+				}
+			}
+			s.pubsubMu.Unlock()
+			for _, ch := range chs {
+				resp := fmt.Sprintf("*3\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n:0\r\n", len(kind), kind, len(ch), ch)
+				_, _ = conn.Write([]byte(resp))
+			}
 			continue
 		}
 		resp := s.execCommand(args)
@@ -289,9 +411,78 @@ func (s *FakeRedisServer) execCommandLocked(args []string) string {
 		}
 	}
 
+	if s.StrictClusterSlots {
+		if slotErr := checkCrossSlot(cmd, args); slotErr != "" {
+			return slotErr
+		}
+	}
+
 	switch cmd {
 	case "PING":
 		return respSimple("PONG")
+
+	case "HELLO":
+		mode := "standalone"
+		if s.StrictClusterSlots {
+			mode = "cluster"
+		}
+		return respArray([]string{
+			respBulk("server"), respBulk("redis"),
+			respBulk("version"), respBulk("7.2.0"),
+			respBulk("proto"), respInt(2),
+			respBulk("id"), respInt(1),
+			respBulk("mode"), respBulk(mode),
+			respBulk("role"), respBulk("master"),
+		})
+
+	case "CLIENT", "READONLY":
+		return respSimple("OK")
+
+	case "CLUSTER":
+		if len(args) >= 2 && strings.ToUpper(args[1]) == "SLOTS" {
+			host, portStr, _ := net.SplitHostPort(s.listener.Addr().String())
+			port, _ := strconv.ParseInt(portStr, 10, 64)
+			nodeArr := respArray([]string{respBulk(host), respInt(port), respBulk("fake-node-1")})
+			slotEntry := respArray([]string{respInt(0), respInt(16383), nodeArr})
+			return respArray([]string{slotEntry})
+		}
+		if len(args) >= 2 && strings.ToUpper(args[1]) == "NODES" {
+			addr := s.listener.Addr().String()
+			return respBulk(fmt.Sprintf("fake-node-1 %s@16379 myself,master - 0 0 1 connected 0-16383\n", addr))
+		}
+		return respSimple("OK")
+
+	case "INFO":
+		section := ""
+		if len(args) >= 2 {
+			section = strings.ToLower(args[1])
+		}
+		switch section {
+		case "memory":
+			return respBulk(fmt.Sprintf("# Memory\r\nused_memory:%d\r\nmaxmemory:%d\r\n", s.InfoMemoryUsed, s.InfoMemoryMax))
+		case "stats":
+			return respBulk(fmt.Sprintf("# Stats\r\nevicted_keys:%d\r\n", s.InfoEvictedKeys))
+		case "clients":
+			return respBulk("# Clients\r\nconnected_clients:1\r\n")
+		default:
+			return respBulk(fmt.Sprintf("# Memory\r\nused_memory:%d\r\nmaxmemory:%d\r\n# Stats\r\nevicted_keys:%d\r\n# Clients\r\nconnected_clients:1\r\n",
+				s.InfoMemoryUsed, s.InfoMemoryMax, s.InfoEvictedKeys))
+		}
+
+	case "PUBSUB":
+		if len(args) >= 2 && strings.ToUpper(args[1]) == "CHANNELS" {
+			s.pubsubMu.Lock()
+			chs := make([]string, 0, len(s.pubsubSub)+len(s.spubsubSub))
+			for ch := range s.pubsubSub {
+				chs = append(chs, respBulk(ch))
+			}
+			for ch := range s.spubsubSub {
+				chs = append(chs, respBulk(ch))
+			}
+			s.pubsubMu.Unlock()
+			return respArray(chs)
+		}
+		return respArray(nil)
 
 	case "FLUSHDB":
 		s.strings = make(map[string]string)
@@ -1463,6 +1654,18 @@ func (s *FakeRedisServer) execCommandLocked(args []string) string {
 		}
 		return respInt(int64(len(subs)))
 
+	case "SPUBLISH":
+		ch, payload := args[1], args[2]
+		s.pubsubMu.Lock()
+		s.SPublishCalls.Add(1)
+		subs := append([]net.Conn(nil), s.spubsubSub[ch]...)
+		s.pubsubMu.Unlock()
+		msg := fmt.Sprintf("*3\r\n$8\r\nsmessage\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(ch), ch, len(payload), payload)
+		for _, c := range subs {
+			_, _ = c.Write([]byte(msg))
+		}
+		return respInt(int64(len(subs)))
+
 	case "EVALSHA":
 		if ferr, ok := s.failCmds["EVAL"]; ok && ferr != nil {
 			return respErr(ferr.Error())
@@ -1693,4 +1896,65 @@ func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
 		math.Cos(rLat1)*math.Cos(rLat2)*math.Sin(dLon/2)*math.Sin(dLon/2)
 	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 	return earthRadiusKm * c
+}
+
+func checkCrossSlot(cmd string, args []string) string {
+	var keys []string
+	switch cmd {
+	case "MGET", "DEL", "EXISTS", "SINTER", "PFCOUNT":
+		if len(args) > 2 {
+			keys = args[1:]
+		}
+	case "BLPOP", "BRPOP":
+		// BLPOP key [key ...] timeout
+		if len(args) > 3 {
+			keys = args[1 : len(args)-1]
+		}
+	case "EVAL", "EVALSHA":
+		if len(args) >= 4 {
+			numKeys, err := strconv.Atoi(args[2])
+			if err == nil && numKeys > 1 && len(args) >= 3+numKeys {
+				keys = args[3 : 3+numKeys]
+			}
+		}
+	case "ZUNIONSTORE":
+		if len(args) >= 4 {
+			numKeys, err := strconv.Atoi(args[2])
+			if err == nil && len(args) >= 3+numKeys {
+				keys = append([]string{args[1]}, args[3:3+numKeys]...)
+			}
+		}
+	}
+	if len(keys) <= 1 {
+		return ""
+	}
+	firstSlot := redisClusterSlot(keys[0])
+	for _, k := range keys[1:] {
+		if redisClusterSlot(k) != firstSlot {
+			return "-CROSSSLOT Keys in request don't hash to the same slot\r\n"
+		}
+	}
+	return ""
+}
+
+// redisClusterSlot implémente l'algorithme officiel CRC16-XMODEM mod 16384 avec support des hash tags {tag}.
+func redisClusterSlot(key string) uint16 {
+	s := key
+	if start := strings.IndexByte(key, '{'); start != -1 {
+		if end := strings.IndexByte(key[start+1:], '}'); end > 0 {
+			s = key[start+1 : start+1+end]
+		}
+	}
+	var crc uint16
+	for i := 0; i < len(s); i++ {
+		crc ^= uint16(s[i]) << 8
+		for j := 0; j < 8; j++ {
+			if (crc & 0x8000) != 0 {
+				crc = (crc << 1) ^ 0x1021
+			} else {
+				crc <<= 1
+			}
+		}
+	}
+	return crc & 16383
 }

@@ -14,7 +14,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	redisgo "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 )
 
 // --- CONSTANTES ---
@@ -22,7 +22,7 @@ import (
 type ActionType string
 
 const (
-	ActionCreate                      ActionType = "ADD" // J'utilise tes termes "ADD"
+	ActionCreate                      ActionType = "ADD"
 	ActionUpdate                      ActionType = "UPD"
 	ActionDelete                      ActionType = "DEL"
 	ActionBuild                       ActionType = "BUILD"
@@ -48,7 +48,7 @@ const (
 	EntityView               EntityType = "Views"
 	EntityFeed               EntityType = "Feeds"
 	EntityReport             EntityType = "Reports"
-	EntityTelemetry          EntityType = "Telemetry" // NOUVEAU : Pour router les Dwell Times et Clics
+	EntityTelemetry          EntityType = "Telemetry"
 	EntitySaved              EntityType = "Saved"
 	EntityPasskey            EntityType = "Passkeys"
 	EntityNotification       EntityType = "Notifications"
@@ -66,7 +66,7 @@ type DBTarget int
 const (
 	TargetMongo    DBTarget = 1 << 0
 	TargetPostgres DBTarget = 1 << 1
-	TargetWorker   DBTarget = 1 << 2 // <-- NOUVEAU : Cible pour les tâches internes de calcul (hors BDD)
+	TargetWorker   DBTarget = 1 << 2
 	TargetAll               = TargetMongo | TargetPostgres
 )
 
@@ -86,19 +86,41 @@ type AsyncEvent struct {
 const (
 	QueueShards = 64
 
-	// queueBasePrefix est le préfixe utilisé pour séparer les files par Type et Action.
-	// Format de la liste : q:{shardID}:{Type}:{Action}
+	// queueBasePrefix et statsBasePrefix utilisent le hash tag {<shardID>}
+	// afin que request_cache:q:{shard} et request_cache:stats:{shard} atterrissent
+	// systématiquement sur le même slot Redis Cluster.
 	queueBasePrefix = "request_cache:q:"
-
-	// statsBasePrefix est le préfixe utilisé pour les métriques du Dashboard.
-	// Format : h:stats:{shardID}
 	statsBasePrefix = "request_cache:stats:"
 )
+
+// QueueShardKey retourne la clé hash-taggée Redis Cluster pour un shard (ex: request_cache:q:{14}).
+func QueueShardKey(shardID int) string {
+	return fmt.Sprintf("%s{%d}", queueBasePrefix, shardID)
+}
+
+// LegacyQueueShardKey retourne l'ancienne clé non hash-taggée (rolling upgrade drain fallback).
+func LegacyQueueShardKey(shardID int) string {
+	return fmt.Sprintf("%s%d", queueBasePrefix, shardID)
+}
+
+// StatsShardKey retourne la clé hash-taggée des statistiques d'un shard (ex: request_cache:stats:{14}).
+func StatsShardKey(shardID int) string {
+	return fmt.Sprintf("%s{%d}", statsBasePrefix, shardID)
+}
+
+func extractShardStatsKey(queueKey string) string {
+	suffix := strings.TrimPrefix(queueKey, queueBasePrefix)
+	return statsBasePrefix + suffix
+}
 
 // EnqueueDB : Ajout du paramètre partitionKey (int64)
 // Si partitionKey est 0, on utilise l'ID de l'objet pour choisir la file.
 // Si partitionKey est fourni (ex: ID du User), on utilise ça pour forcer la file.
 func EnqueueDB(ctx context.Context, id int64, partitionKey int64, entity EntityType, action ActionType, data interface{}, target DBTarget) error {
+	client := redisgo.CoreClient()
+	if client == nil {
+		return numan_error.NewInternal(errors.New("redis core client not initialized"))
+	}
 
 	now := domain.NowMillis()
 	event := AsyncEvent{
@@ -115,23 +137,19 @@ func EnqueueDB(ctx context.Context, id int64, partitionKey int64, entity EntityT
 		return numan_error.NewInternal(err)
 	}
 
-	// C'EST ICI QUE TOUT SE JOUE : Choix du Shard
 	keyForSharding := id
 	if partitionKey != 0 {
 		keyForSharding = partitionKey
 	}
-	shardID := getShardID(keyForSharding)
+	shardID := int(getShardID(keyForSharding))
 
-	shardStr := strconv.Itoa(int(shardID))
-	queueKey := fmt.Sprintf("%s%s", queueBasePrefix, shardStr) // ex: q:14
-	statsKey := statsBasePrefix + shardStr
-	countField := "count"
-	tsField := "ts"
+	queueKey := QueueShardKey(shardID)
+	statsKey := StatsShardKey(shardID)
 
-	pipe := redisgo.Rdb.Pipeline()
+	pipe := client.Pipeline()
 	pipe.RPush(ctx, queueKey, bytes)
-	pipe.HIncrBy(ctx, statsKey, countField, 1)
-	pipe.HSetNX(ctx, statsKey, tsField, now)
+	pipe.HIncrBy(ctx, statsKey, "count", 1)
+	pipe.HSetNX(ctx, statsKey, "ts", now)
 
 	_, err = pipe.Exec(ctx)
 	if err != nil {
@@ -148,37 +166,116 @@ func PopSmartBatchBlocking(ctx context.Context, shardID int, batchSize int64) ([
 	return PopSmartBatchBlockingMulti(ctx, []int{shardID}, batchSize)
 }
 
-// PopSmartBatchBlockingMulti attend de façon bloquante (BLPOP multi-clés natif Redis) sur un ou plusieurs shards
-// assignés à une goroutine worker, puis rafle jusqu'à batchSize éléments sur le shard réveillé.
-// Permet une plasticité totale du pool (de 1 à 1024 workers) sans jamais laisser de shard orphelin.
+// PopSmartBatchBlockingMulti attend des événements sur un ou plusieurs shards assignés à une goroutine worker,
+// puis rafle jusqu'à batchSize éléments sur le shard réveillé.
+//   - En mode Standalone/Sentinel ou mono-shard : utilise BLPOP bloquant natif (0 CPU).
+//   - En mode Redis Cluster multi-shards (>1) : utilise un pipeline LPop multi-shards avec backoff adaptatif
+//     (50ms..500ms) pour éviter toute erreur CROSSSLOT sur BLPOP multi-clés.
 func PopSmartBatchBlockingMulti(ctx context.Context, shardIDs []int, batchSize int64) ([]AsyncEvent, error) {
 	if len(shardIDs) == 0 {
 		return nil, nil
 	}
-
-	queueKeys := make([]string, len(shardIDs))
-	for i, id := range shardIDs {
-		queueKeys[i] = fmt.Sprintf("%s%d", queueBasePrefix, id)
+	client := redisgo.CoreClient()
+	if client == nil {
+		return nil, errors.New("redis core client not initialized")
 	}
 
-	// 1. Attente BLOQUANTE du tout premier élément sur l'un des shards assignés (Timeout 2s pour écouter ctx.Done)
-	blpopRes, err := redisgo.Rdb.BLPop(ctx, 2*time.Second, queueKeys...).Result()
+	isCluster := redisgo.IsClusterClient(client)
+	if isCluster && len(shardIDs) > 1 {
+		return popClusterMultiShardAdaptive(ctx, client, shardIDs, batchSize)
+	}
+
+	// Mono-shard en Cluster ou Standalone/Sentinel (1..N shards)
+	var queueKeys []string
+	if isCluster {
+		// En Cluster avec 1 shard : 1 seule clé (hash-taggée) pour BLPOP sans CROSSSLOT.
+		// Fallback drain opportuniste de l'ancienne clé legacy avant de bloquer.
+		legacyKey := LegacyQueueShardKey(shardIDs[0])
+		if rawLegacy, errL := client.LPop(ctx, legacyKey).Result(); errL == nil && rawLegacy != "" {
+			return drainRemainingAndDecode(ctx, client, legacyKey, rawLegacy, batchSize), nil
+		}
+		queueKeys = []string{QueueShardKey(shardIDs[0])}
+	} else {
+		queueKeys = make([]string, 0, len(shardIDs)*2)
+		for _, id := range shardIDs {
+			queueKeys = append(queueKeys, QueueShardKey(id), LegacyQueueShardKey(id))
+		}
+	}
+
+	blpopRes, err := client.BLPop(ctx, 2*time.Second, queueKeys...).Result()
 	if err != nil {
-		if errors.Is(err, redis.Nil) { // Timeout de 2s atteint, files toujours vides
+		if errors.Is(err, redis.Nil) {
 			return nil, nil
 		}
-		return nil, err // Vraie erreur (ou context annulé)
+		return nil, err
 	}
 
-	// blpopRes[0] est la clé réveillée (ex: request_cache:q:14), blpopRes[1] est la valeur
-	queueKey := blpopRes[0]
-	shardStr := strings.TrimPrefix(queueKey, queueBasePrefix)
-	statsKey := statsBasePrefix + shardStr
-	rawElements := []string{blpopRes[1]}
+	return drainRemainingAndDecode(ctx, client, blpopRes[0], blpopRes[1], batchSize), nil
+}
 
-	// 2. On rafle le reste de la file d'un coup (Non-bloquant)
+// popClusterMultiShardAdaptive dépile en mode Redis Cluster multi-shards sans jamais déclencher CROSSSLOT.
+func popClusterMultiShardAdaptive(ctx context.Context, client redis.UniversalClient, shardIDs []int, batchSize int64) ([]AsyncEvent, error) {
+	deadline := time.Now().Add(2 * time.Second)
+	backoff := 50 * time.Millisecond
+	const maxClusterBackoff = 500 * time.Millisecond
+
+	keys := make([]string, 0, len(shardIDs)*2)
+	for _, id := range shardIDs {
+		keys = append(keys, QueueShardKey(id), LegacyQueueShardKey(id))
+	}
+
+	for {
+		pipe := client.Pipeline()
+		cmds := make([]*redis.StringCmd, len(keys))
+		for i, k := range keys {
+			cmds[i] = pipe.LPop(ctx, k)
+		}
+		_, err := pipe.Exec(ctx)
+		if err != nil && !errors.Is(err, redis.Nil) {
+			return nil, err
+		}
+
+		var collected []AsyncEvent
+		for i, cmd := range cmds {
+			val, errCmd := cmd.Result()
+			if errCmd != nil || val == "" {
+				continue
+			}
+			remainingBudget := batchSize - int64(len(collected))
+			if remainingBudget < 1 {
+				remainingBudget = 1
+			}
+			batch := drainRemainingAndDecode(ctx, client, keys[i], val, remainingBudget)
+			collected = append(collected, batch...)
+			if int64(len(collected)) >= batchSize {
+				break
+			}
+		}
+		if len(collected) > 0 {
+			return collected, nil
+		}
+
+		if time.Now().After(deadline) {
+			return nil, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+		if backoff > maxClusterBackoff {
+			backoff = maxClusterBackoff
+		}
+	}
+}
+
+func drainRemainingAndDecode(ctx context.Context, client redis.UniversalClient, queueKey, firstVal string, batchSize int64) []AsyncEvent {
+	statsKey := extractShardStatsKey(queueKey)
+	rawElements := []string{firstVal}
+
 	if batchSize > 1 {
-		rest, err := redisgo.Rdb.LPopCount(ctx, queueKey, int(batchSize)-1).Result()
+		rest, err := client.LPopCount(ctx, queueKey, int(batchSize)-1).Result()
 		if err == nil && len(rest) > 0 {
 			rawElements = append(rawElements, rest...)
 		} else if err != nil && !errors.Is(err, redis.Nil) {
@@ -187,8 +284,6 @@ func PopSmartBatchBlockingMulti(ctx context.Context, shardIDs []int, batchSize i
 	}
 
 	countPopped := int64(len(rawElements))
-
-	// 3. Désérialiser avec PROTECTION DES INT64
 	events := make([]AsyncEvent, 0, countPopped)
 	for _, res := range rawElements {
 		var evt AsyncEvent
@@ -202,24 +297,20 @@ func PopSmartBatchBlockingMulti(ctx context.Context, shardIDs []int, batchSize i
 		}
 	}
 
-	// 4. Mise à jour du Dashboard (les stats) en asynchrone
-	go updateDashboardAfterPop(context.Background(), statsKey, queueKey, countPopped)
-
-	return events, nil
+	go updateDashboardAfterPop(context.Background(), client, statsKey, queueKey, countPopped)
+	return events
 }
 
 // updateDashboardAfterPop gère la cohérence du tableau de bord (Async pour perf)
-func updateDashboardAfterPop(ctx context.Context, statsKey, queueKey string, poppedCnt int64) {
-	pipe := redisgo.Rdb.Pipeline()
-
-	// Décrémente le compteur global du shard
+func updateDashboardAfterPop(ctx context.Context, client redis.UniversalClient, statsKey, queueKey string, poppedCnt int64) {
+	if client == nil {
+		return
+	}
+	pipe := client.Pipeline()
 	pipe.HIncrBy(ctx, statsKey, "count", -poppedCnt)
-
-	// LINDEX key 0 nous donne le premier élément sans le supprimer
 	lindexCmd := pipe.LIndex(ctx, queueKey, 0)
 
-	_, err := pipe.Exec(ctx)
-	if err != nil {
+	if _, err := pipe.Exec(ctx); err != nil {
 		return
 	}
 
@@ -227,12 +318,11 @@ func updateDashboardAfterPop(ctx context.Context, statsKey, queueKey string, pop
 	if err == nil && nextHeadVal != "" {
 		var nextEvt AsyncEvent
 		if json.Unmarshal([]byte(nextHeadVal), &nextEvt) == nil {
-			redisgo.Rdb.HSet(ctx, statsKey, "ts", nextEvt.Timestamp)
+			client.HSet(ctx, statsKey, "ts", nextEvt.Timestamp)
 		}
 	} else {
-		// La liste est vide
-		redisgo.Rdb.HDel(ctx, statsKey, "ts")
-		redisgo.Rdb.HSet(ctx, statsKey, "count", 0)
+		client.HDel(ctx, statsKey, "ts")
+		client.HSet(ctx, statsKey, "count", 0)
 	}
 }
 
@@ -241,21 +331,21 @@ func GetShardID(id int64) int {
 	return int(getShardID(id))
 }
 
-// getShardID (Inchangé)
 func getShardID(id int64) uint32 {
 	idStr := strconv.FormatInt(id, 10)
 	return crc32.ChecksumIEEE([]byte(idStr)) % QueueShards
 }
 
-// TotalQueueDepth retourne le nombre total d'événements Write-Behind en attente sur les 64 shards Redis.
+// TotalQueueDepth retourne le nombre total d'événements Write-Behind en attente sur les 64 shards Redis (Cluster-safe).
 func TotalQueueDepth(ctx context.Context) (int64, error) {
-	if redisgo.Rdb == nil {
+	client := redisgo.CoreClient()
+	if client == nil {
 		return 0, errors.New("redis client not initialized")
 	}
-	pipe := redisgo.Rdb.Pipeline()
-	cmds := make([]*redis.IntCmd, QueueShards)
+	pipe := client.Pipeline()
+	cmds := make([]*redis.IntCmd, 0, QueueShards*2)
 	for i := 0; i < QueueShards; i++ {
-		cmds[i] = pipe.LLen(ctx, fmt.Sprintf("%s%d", queueBasePrefix, i))
+		cmds = append(cmds, pipe.LLen(ctx, QueueShardKey(i)), pipe.LLen(ctx, LegacyQueueShardKey(i)))
 	}
 	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
 		return 0, err
@@ -267,4 +357,40 @@ func TotalQueueDepth(ctx context.Context) (int64, error) {
 		}
 	}
 	return total, nil
+}
+
+// OldestQueueEventAgeSeconds calcule l'âge en secondes de l'événement Write-Behind le plus ancien sur les 64 shards (Cluster-safe).
+func OldestQueueEventAgeSeconds(ctx context.Context) (float64, error) {
+	client := redisgo.CoreClient()
+	if client == nil {
+		return 0, errors.New("redis client not initialized")
+	}
+	pipe := client.Pipeline()
+	cmds := make([]*redis.StringCmd, 0, QueueShards*2)
+	for i := 0; i < QueueShards; i++ {
+		cmds = append(cmds, pipe.HGet(ctx, StatsShardKey(i), "ts"), pipe.HGet(ctx, fmt.Sprintf("%s%d", statsBasePrefix, i), "ts"))
+	}
+	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+		return 0, err
+	}
+
+	nowMs := domain.NowMillis()
+	var oldestMs int64
+	for _, cmd := range cmds {
+		raw, err := cmd.Result()
+		if err != nil || raw == "" {
+			continue
+		}
+		ts, errParse := strconv.ParseInt(raw, 10, 64)
+		if errParse != nil || ts <= 0 {
+			continue
+		}
+		if oldestMs == 0 || ts < oldestMs {
+			oldestMs = ts
+		}
+	}
+	if oldestMs == 0 || oldestMs >= nowMs {
+		return 0, nil
+	}
+	return float64(nowMs-oldestMs) / 1000.0, nil
 }

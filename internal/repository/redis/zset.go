@@ -8,7 +8,7 @@ import (
 	"time"
 
 	redisgo "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 )
 
 // ============================================================================
@@ -46,7 +46,7 @@ var zaddCapCompiled = redis.NewScript(zaddCapScript)
 
 // ZAdd ajoute un élément avec un score (ou met à jour son score).
 func (c *Collection) ZAdd(ctx context.Context, id any, score float64, member any) error {
-	return c.Client.ZAdd(ctx, c.Key(id), &redis.Z{
+	return c.Client.ZAdd(ctx, c.Key(id), redis.Z{
 		Score:  score,
 		Member: member,
 	}).Err()
@@ -85,7 +85,7 @@ func (c *Collection) ZRemRangeByScore(ctx context.Context, id any, min, max stri
 	return c.Client.ZRemRangeByScore(ctx, c.Key(id), min, max).Err()
 }
 
-// ZUnionStore fusionne plusieurs ZSETs de la collection vers un identifiant destination.
+// ZUnionStore fusionne plusieurs ZSETs de la collection vers un identifiant destination (Cluster-safe).
 func (c *Collection) ZUnionStore(ctx context.Context, destID any, sourceIDs []any, aggregate string) error {
 	if len(sourceIDs) == 0 {
 		return nil
@@ -98,6 +98,50 @@ func (c *Collection) ZUnionStore(ctx context.Context, destID any, sourceIDs []an
 		aggregate = "MAX"
 	}
 	destKey := c.Key(destID)
+
+	if redisgo.IsClusterClient(c.Client) {
+		pipe := c.Client.Pipeline()
+		cmds := make([]*redis.ZSliceCmd, len(keys))
+		for i, k := range keys {
+			cmds[i] = pipe.ZRangeWithScores(ctx, k, 0, -1)
+		}
+		if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+			return err
+		}
+		merged := make(map[string]float64)
+		for _, cmd := range cmds {
+			zs, errZ := cmd.Result()
+			if errZ != nil {
+				continue
+			}
+			for _, z := range zs {
+				m := fmt.Sprintf("%v", z.Member)
+				prev, exists := merged[m]
+				if !exists {
+					merged[m] = z.Score
+					continue
+				}
+				switch aggregate {
+				case "MIN":
+					if z.Score < prev {
+						merged[m] = z.Score
+					}
+				case "SUM":
+					merged[m] = prev + z.Score
+				default: // MAX
+					if z.Score > prev {
+						merged[m] = z.Score
+					}
+				}
+			}
+		}
+		members := make([]*redis.Z, 0, len(merged))
+		for m, sc := range merged {
+			members = append(members, &redis.Z{Score: sc, Member: m})
+		}
+		return c.ZSetReplaceAtomic(ctx, destID, members, c.DefaultTTL)
+	}
+
 	if err := c.Client.ZUnionStore(ctx, destKey, &redis.ZStore{
 		Keys:      keys,
 		Aggregate: aggregate,
@@ -152,7 +196,7 @@ func (c *Collection) ZRangeByScore(ctx context.Context, id any, min string, max 
 
 // ZAddLex ajoute un élément avec un score absolu de 0 pour un tri purement lexicographique.
 func (c *Collection) ZAddLex(ctx context.Context, id any, member any) error {
-	return c.Client.ZAdd(ctx, c.Key(id), &redis.Z{
+	return c.Client.ZAdd(ctx, c.Key(id), redis.Z{
 		Score:  0,
 		Member: member,
 	}).Err()
@@ -260,47 +304,45 @@ func (c *Collection) ZRevRangeWithScores(ctx context.Context, id any, start, sto
 
 // ============================================================================
 // 3. FONCTIONS GLOBALES (LEGACY)
-// Ces fonctions sont maintenues temporairement pour ne pas casser la compilation
-// des Workers non-migrés. Elles devront être supprimées à l'Étape 6.
 // ============================================================================
 
 func ZAdd(ctx context.Context, key string, score float64, member interface{}) error {
-	return redisgo.Rdb.ZAdd(ctx, key, &redis.Z{Score: score, Member: member}).Err()
+	return redisgo.CoreClient().ZAdd(ctx, key, redis.Z{Score: score, Member: member}).Err()
 }
 
 func ZIncrBy(ctx context.Context, key string, increment float64, member interface{}) error {
-	return redisgo.Rdb.ZIncrBy(ctx, key, increment, fmt.Sprintf("%v", member)).Err()
+	return redisgo.CoreClient().ZIncrBy(ctx, key, increment, fmt.Sprintf("%v", member)).Err()
 }
 
 func ZRevRange(ctx context.Context, key string, start, stop int64) ([]string, error) {
-	return redisgo.Rdb.ZRevRange(ctx, key, start, stop).Result()
+	return redisgo.CoreClient().ZRevRange(ctx, key, start, stop).Result()
 }
 
 func ZRange(ctx context.Context, key string, start, stop int64) ([]string, error) {
-	return redisgo.Rdb.ZRange(ctx, key, start, stop).Result()
+	return redisgo.CoreClient().ZRange(ctx, key, start, stop).Result()
 }
 
 func ZRemRangeByRank(ctx context.Context, key string, start, stop int64) error {
-	return redisgo.Rdb.ZRemRangeByRank(ctx, key, start, stop).Err()
+	return redisgo.CoreClient().ZRemRangeByRank(ctx, key, start, stop).Err()
 }
 
 func ZScore(ctx context.Context, key string, member interface{}) (float64, error) {
-	return redisgo.Rdb.ZScore(ctx, key, fmt.Sprintf("%v", member)).Result()
+	return redisgo.CoreClient().ZScore(ctx, key, fmt.Sprintf("%v", member)).Result()
 }
 
 func ZCount(ctx context.Context, key, min, max string) (int64, error) {
-	return redisgo.Rdb.ZCount(ctx, key, min, max).Result()
+	return redisgo.CoreClient().ZCount(ctx, key, min, max).Result()
 }
 
 func ZCard(ctx context.Context, key string) (int64, error) {
-	return redisgo.Rdb.ZCard(ctx, key).Result()
+	return redisgo.CoreClient().ZCard(ctx, key).Result()
 }
 
 func ZRevRangeByRanks(ctx context.Context, key string, ranks []int64) ([]string, error) {
 	if len(ranks) == 0 {
 		return nil, nil
 	}
-	pipe := redisgo.Rdb.Pipeline()
+	pipe := redisgo.CoreClient().Pipeline()
 	cmds := make([]*redis.StringSliceCmd, 0, len(ranks))
 	for _, rank := range ranks {
 		cmds = append(cmds, pipe.ZRevRange(ctx, key, rank, rank))
@@ -323,22 +365,22 @@ func ZRevRangeByRanks(ctx context.Context, key string, ranks []int64) ([]string,
 }
 
 func ZAddWithCap(ctx context.Context, key string, score float64, member any, maxSize int) error {
-	return zaddCapCompiled.Run(ctx, redisgo.Rdb, []string{key}, score, member, maxSize, 0).Err()
+	return zaddCapCompiled.Run(ctx, redisgo.CoreClient(), []string{key}, score, member, maxSize, 0).Err()
 }
 
 func ZRevRangeWithScores(ctx context.Context, key string, start, stop int64) ([]redis.Z, error) {
-	return redisgo.Rdb.ZRevRangeWithScores(ctx, key, start, stop).Result()
+	return redisgo.CoreClient().ZRevRangeWithScores(ctx, key, start, stop).Result()
 }
 
 func Del(ctx context.Context, keys ...string) error {
-	return redisgo.Rdb.Del(ctx, keys...).Err()
+	return delKeysClusterSafe(ctx, redisgo.CoreClient(), keys)
 }
 
 func ZScores(ctx context.Context, key string, members []string) ([]float64, error) {
 	if len(members) == 0 {
 		return nil, nil
 	}
-	pipe := redisgo.Rdb.Pipeline()
+	pipe := redisgo.CoreClient().Pipeline()
 	for _, member := range members {
 		pipe.ZScore(ctx, key, member)
 	}
@@ -374,7 +416,7 @@ func (c *Collection) ZAddMultiple(ctx context.Context, ids []int64, score float6
 	pipe := c.Client.Pipeline()
 	for _, id := range ids {
 		key := c.Key(id)
-		pipe.ZAdd(ctx, key, &redis.Z{
+		pipe.ZAdd(ctx, key, redis.Z{
 			Score:  score,
 			Member: member,
 		})

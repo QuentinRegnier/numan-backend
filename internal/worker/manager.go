@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
+	"github.com/QuentinRegnier/numan-backend/internal/pkg/metrics"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 )
 
@@ -63,64 +64,38 @@ func assignWorkerShards(workerIdx, totalWorkers, totalShards int) []int {
 	return shards
 }
 
-// StartBackgroundWorkers lance tous les processus asynchrones vitaux de l'API numan.
-// Il déploie les planificateurs (Crons) et les pools de travailleurs (Sharding plastique) qui
-// dépilent les files d'attente Redis H24.
-func StartBackgroundWorkers(ctx context.Context) {
-	numan_log.Info(ctx).Msg("Démarrage du moteur de persistance et des processus asynchrones...")
+// StartWriteBehindWorkers lance UNIQUEMENT les chemins temps réel à SLA strict et le pool Write-Behind 64 shards :
+//   - Time-Decay fenêtre chaude (0..24h), Tendances Hashtags temps réel
+//   - Consommateur file Trust Score & Expiration Modération (SLA strict 48h/7j)
+//   - Push (FCM) & Email (SMTP)
+//   - Pool Write-Behind plastique (1..1024 goroutines sur 64 shards)
+//
+// Les jobs périodiques lourds (canonicalisation, reco utilisateurs/communautés, warm-up inactifs,
+// 4 GC orphelins, trust mensuel, moderation aging, time-decay deep pass) sont orchestrés par
+// l'Activity-Aware Job Scheduler (`scheduler_node` en distribué/HA, embarqué en `monolith`).
+func StartWriteBehindWorkers(ctx context.Context) {
+	numan_log.Info(ctx).Msg("Démarrage du moteur Write-Behind temps réel (sans crons périodiques lourds)...")
 
-	// ── ÉTAPE 1 : LANCEMENT DES MOTEURS ALGORITHMIQUES (CRONS) ──────────────
-
-	// Moteur de Time-Decay : Recalcule la chute du score viral au fil du temps
+	// ── ÉTAPE 1 : CHEMINS TEMPS RÉEL À SLA STRICT ───────────────────────────
+	// Time-Decay fenêtre chaude (0..24h) uniquement (le deep pass 24h..30j tourne en DEEP_IDLE)
 	startScoreUpdaterCron(ctx)
 
-	// Moteur d'Émergence : Fusionne les hashtags similaires (Fautes de frappe)
-	startHashtagCanonCron(ctx)
-
-	// Moteur de Tendances : Calcule le classement mondial des hashtags
+	// Tendances horaires temps réel
 	startHashtagTrendCron(ctx)
 
-	// Moteur de Warm-up : Régénère en silence les flux des utilisateurs inactifs
-	startFeedWarmupCron(ctx)
-
-	// Moteur de Réputation (Trust Score) : Consommateur par lots + Cron mensuel (+0.02)
+	// Consommateur de la file Trust Score (événements temps réel)
 	startTrustScoreWorker(ctx)
-	startMonthlyTrustScoreCron(ctx)
 
-	// Moteur de Modération Unifiée : Vieillissement quadratique M_temps + Expiration verrous & minuteurs
-	StartModerationAgingCron(ctx)
+	// Expiration verrous & minuteurs de modération (SLA strict 48h/7j)
 	StartModerationExpirationWorker(ctx)
 
-	// Moteur de Recommandation d'Utilisateurs : Rafraîchissement périodique par lots (24-48h)
-	startUserRecommendationCron(ctx)
-
-	// Moteur de Recommandation de Communautés Publiques : Recalcul global par langue (2h)
-	startCommunityRecommendationCron(ctx)
-
-	// ── ÉTAPE 2 : LANCEMENT DES GARBAGE COLLECTORS (PURGES L3->L2) ──────────
-
-	// Détruit les fichiers physiques et logs des médias orphelins
-	startMediaCleanupCron(ctx)
-
-	// Nettoie les Likes qui pointent vers des posts supprimés
-	startLikeCleanupCron(ctx)
-
-	// Nettoie les Réactions (Emoji) sur les messages supprimés
-	startReactionCleanupCron(ctx)
-
-	// Supprime les sauvegardes de posts qui n'existent plus
-	startSavedCleanupCron(ctx)
-
-	// ── ÉTAPE 3 : LANCEMENT DES CANAUX EXTERNES ─────────────────────────────
-
-	// Initialise Firebase Cloud Messaging et consomme les requêtes de Push
+	// ── ÉTAPE 2 : CANAUX EXTERNES TEMPS RÉEL ────────────────────────────────
 	startPushNotificationWorker(ctx)
-
-	// Initialise le client SMTP et consomme les requêtes d'Emails Sortants
 	go startEmailWorker(ctx)
 
-	// ── ÉTAPE 4 : DÉPLOIEMENT DU WORKER POOL PLASTIQUE (1..1024 WORKERS / 64 SHARDS) ──
+	// ── ÉTAPE 3 : POOL WRITE-BEHIND PLASTIQUE (1..1024 WORKERS / 64 SHARDS) ─
 	concurrency := ResolveWorkerConcurrency()
+	metrics.SetWorkerConcurrency(concurrency)
 
 	workerWGMux.Lock()
 	for i := 0; i < concurrency; i++ {
@@ -138,6 +113,11 @@ func StartBackgroundWorkers(ctx context.Context) {
 		Int("worker_concurrency", concurrency).
 		Int("queue_shards", redis.QueueShards).
 		Msg("Moteur de persistance asynchrone opérationnel (pool Write-Behind plastique à l'écoute).")
+}
+
+// StartBackgroundWorkers est conservé comme alias rétrocompatible de StartWriteBehindWorkers.
+func StartBackgroundWorkers(ctx context.Context) {
+	StartWriteBehindWorkers(ctx)
 }
 
 // WaitForShutdown attend la fin propre de tous les workers Write-Behind actifs jusqu'à expiration du contexte.

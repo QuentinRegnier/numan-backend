@@ -6,23 +6,24 @@ Ce document décrit le contrat d'architecture et d'intégration CLI permettant d
 
 ## 1. Architecture « Monolithe Modulaire » (`./numan` multi-rôle)
 
-Un seul binaire Go (`./numan`, image `numan-api`) pilote quatre rôles opérationnels via la variable `SERVER_ROLE` (`cmd/role.go`) :
+Un seul binaire Go (`./numan`, image `numan-api`) pilote cinq rôles opérationnels via la variable `SERVER_ROLE` (`cmd/role.go`) :
 
-| `SERVER_ROLE` | Routes HTTP REST | WebSocket `/ws` & Hub | Workers Write-Behind & Crons | Cuckoo Filter & Smart Seeding | Pool Postgres par pod |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **`monolith`** (défaut) | ✅ | ✅ | ✅ | ✅ (verrou Redis `startup_seeding`) | 15 conns |
-| **`api_node`** | ✅ | ❌ (404) | ❌ | ✅ (verrou Redis `startup_seeding`) | 15 conns |
-| **`ws_node`** | ❌ (404) | ✅ | ❌ | ❌ (boot éclair) | 5 conns |
-| **`worker_node`** | ❌ (404) | ❌ (404) | ✅ | ✅ (verrou Redis `startup_seeding`) | 15 conns |
+| `SERVER_ROLE` | Routes HTTP REST | WebSocket `/ws` & Hub | Workers Write-Behind | Activity-Aware Scheduler | Cuckoo Filter & Smart Seeding | Pool Postgres par pod |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **`monolith`** (défaut) | ✅ | ✅ | ✅ | ✅ (embarqué) | ✅ (verrou Redis `startup_seeding`) | 15 conns |
+| **`api_node`** | ✅ | ❌ (404) | ❌ | ❌ | ✅ (verrou Redis `startup_seeding`) | 15 conns |
+| **`ws_node`** | ❌ (404) | ✅ | ❌ | ❌ | ❌ (boot éclair) | 5 conns |
+| **`worker_node`** | ❌ (404) | ❌ (404) | ✅ | ❌ | ✅ (verrou Redis `startup_seeding`) | 15 conns |
+| **`scheduler_node`** | ❌ (404) | ❌ (404) | ❌ | ✅ (pod dédié) | ✅ (Cuckoo health/rebuild) | 15 conns |
 
 - **Microservice indépendant :** `cmd/watermark` (`numan-watermark`) reste un binaire et un `Deployment` séparés (stéganographie AVIF DCT sans accès BDD).
-- **Dépendances réelles respectées :** tous les rôles `./numan` initialisent Redis L1, MongoDB L2, PostgreSQL L3, MinIO (`ws_node` en a besoin pour activer les médias dans les messages, `worker_node` pour purger les orphelins) et les variables dynamiques.
-- **Sondes unifiées :** tous les rôles exposent `/healthz`, `/readyz` (incluant `datacenter`, `role`, `node_id`) et `/metrics` interne sur `:9090`.
+- **Dépendances réelles respectées :** tous les rôles `./numan` initialisent Redis 3-Tiers (Core / Object Pool / PubSub), MongoDB L2, PostgreSQL L3, MinIO (`ws_node` en a besoin pour activer les médias dans les messages, `worker_node` / `scheduler_node` pour purger les orphelins) et les variables dynamiques.
+- **Sondes unifiées :** tous les rôles exposent `/healthz`, `/readyz` (incluant `datacenter`, `role`, `node_id` et tolérance dégradée sur Tier 2 Object Pool) ainsi que `/metrics` + `/internal/cli-telemetry` + `/internal/scheduler/pause|resume` sur `:9090`.
 - **Anti-collision au démarrage :** le Smart Seeding et `mongo.EnsureIndexes` sont protégés par le verrou distribué Redis `startup_seeding` (TTL 2 min, libéré dès la fin du seeding).
 
 ---
 
-## 2. Catalogue des Profils de Nœuds Kubernetes
+## 2. Catalogue des 13 Profils Canoniques de Nœuds Kubernetes
 
 Chaque serveur Linux intégré dans un cluster K3s reçoit des labels normalisés :
 
@@ -34,15 +35,16 @@ Chaque serveur Linux intégré dans un cluster K3s reçoit des labels normalisé
 | :--- | :--- | :---: | :--- |
 | `all-in-one` | Tous les workloads (cluster mono-serveur ou compact) | — | — |
 | `ingress` | `Deployment/traefik` (`kube-system`, Load Balancer L7 + TLS, `externalTrafficPolicy: Local`) | ✅ | `numan.io/dedicated=ingress:NoSchedule` |
-| `api` | `StatefulSet/api` (`monolith` ou `api_node`) | ✅ | `numan.io/dedicated=api:NoSchedule` |
-| `websocket` | `StatefulSet/websocket` (`ws_node`) | ✅ | `numan.io/dedicated=websocket:NoSchedule` |
-| `worker` | `StatefulSet/worker` (`worker_node`) | ✅ | `numan.io/dedicated=worker:NoSchedule` |
+| `api` | `StatefulSet/api` (`monolith` ou `api_node`) + Tier 2 `redis-object-pool` (poids 60) | ✅ | `numan.io/dedicated=api:NoSchedule` |
+| `websocket` | `StatefulSet/websocket` (`ws_node`) + Tier 3 `redis-pubsub` (poids 100) | ✅ | `numan.io/dedicated=websocket:NoSchedule` |
+| `worker` | `StatefulSet/worker` (`worker_node`) + Tier 2 `redis-object-pool` (poids 80) + `scheduler` (repli poids 75) | ✅ | `numan.io/dedicated=worker:NoSchedule` |
+| `scheduler` | `Deployment/scheduler` (`SERVER_ROLE=scheduler_node`, Activity-Aware Job Scheduler) | ✅ | `numan.io/dedicated=scheduler:NoSchedule` |
 | `watermark` | `Deployment/watermark` | ✅ | `numan.io/dedicated=watermark:NoSchedule` |
 | `mail` | `StatefulSet/maddy` | ✅ | `numan.io/dedicated=mail:NoSchedule` |
 | `db` | `postgres` + `mongo` + `redis` (poids 80) | ✅ | `numan.io/dedicated=db:NoSchedule` |
 | `db-sql` | `StatefulSet/postgres` | ✅ | `numan.io/dedicated=db-sql:NoSchedule` |
 | `db-mongo` | `StatefulSet/mongo` | ✅ | `numan.io/dedicated=db-mongo:NoSchedule` |
-| `db-redis` | `StatefulSet/redis` | ✅ | `numan.io/dedicated=db-redis:NoSchedule` |
+| `db-redis` | `StatefulSet/redis` + `redis-core-cluster` + `redis-object-pool` + `redis-pubsub` | ✅ | `numan.io/dedicated=db-redis:NoSchedule` |
 | `storage` | `StatefulSet/minio-hot` + `StatefulSet/minio-cold` | ✅ | `numan.io/dedicated=storage:NoSchedule` |
 
 > **Affinité souple (`preferredDuringSchedulingIgnoredDuringExecution`) :**

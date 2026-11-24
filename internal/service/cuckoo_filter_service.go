@@ -147,3 +147,29 @@ func WarmUpCuckooFilter(ctx context.Context) {
 
 	numan_log.Info(ctx).Int("users_loaded", injectionCount).Msg("Cuckoo Filter amorcé avec succès.")
 }
+
+// GetGlobalCuckooFillRatio retourne le taux de remplissage courant du Cuckoo Filter RAM global.
+func GetGlobalCuckooFillRatio() (float64, bool) {
+	return cuckoo.FillRatio()
+}
+
+// RebuildCuckooFilterSafe reconstruit le Cuckoo Filter RAM global depuis PostgreSQL sans jamais appeler Fatal.
+func RebuildCuckooFilterSafe(ctx context.Context) error {
+	identifiersList, err := postgres.FuncLoadAllUserIdentifiers(ctx)
+	if err != nil {
+		return err
+	}
+	cuckoo.InitCuckooFilter()
+	for _, identifiers := range identifiersList {
+		if identifiers.Username != nil && *identifiers.Username != "" {
+			cuckoo.GlobalCuckoo.Insert([]byte("username:" + *identifiers.Username))
+		}
+		if identifiers.Email != nil && *identifiers.Email != "" {
+			cuckoo.GlobalCuckoo.Insert([]byte("email:" + *identifiers.Email))
+		}
+		if identifiers.Phone != nil && *identifiers.Phone != "" {
+			cuckoo.GlobalCuckoo.Insert([]byte("phone:" + *identifiers.Phone))
+		}
+	}
+	return nil
+}

@@ -1,0 +1,208 @@
+# Tier 1 — Optional Replicated Redis Cluster for High-Value Core State (~5-15 GiB per shard).
+#
+# Holds MOST Cache, Speed Cache, Write-Behind 64 shards, Sessions, Locks, Moderation, and Inter-Pod Telemetry.
+# Deploy when horizontal sharding of Tier 1 Core is required beyond single-Primary + Sentinel HA (`03-databases/redis.yaml`).
+# Requires >= 6 pods (3 Masters + 3 Replicas) with cross-node Master/Replica separation via topologySpreadConstraints
+# and soft podAntiAffinity.
+#
+# Wire into numan-config by setting DB_REDIS_CORE_CLUSTER_ADDRS in infrastructure.env, e.g.:
+#   DB_REDIS_CORE_CLUSTER_ADDRS=redis-core-cluster-0.redis-core-cluster-headless:6379,redis-core-cluster-1.redis-core-cluster-headless:6379,redis-core-cluster-2.redis-core-cluster-headless:6379
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-core-cluster-headless
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: redis-core-cluster
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: database
+    numan.io/redis-tier: core
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: redis-core-cluster
+  ports:
+    - {name: redis, port: 6379, targetPort: redis}
+    - {name: cluster-bus, port: 16379, targetPort: cluster-bus}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-core-cluster
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: redis-core-cluster
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: database
+    numan.io/redis-tier: core
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: redis-core-cluster
+  ports:
+    - {name: redis, port: 6379, targetPort: redis}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-core-cluster
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: redis-core-cluster
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: database
+    numan.io/redis-tier: core
+spec:
+  serviceName: redis-core-cluster-headless
+  replicas: ${DB_REDIS_CORE_CLUSTER_REPLICAS}
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis-core-cluster
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis-core-cluster
+        app.kubernetes.io/part-of: numan
+        app.kubernetes.io/component: database
+        numan.io/redis-tier: core
+        numan.io/redis-cluster-member: "true"
+    spec:
+      serviceAccountName: redis
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 120
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis-core-cluster
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["db-redis"]
+            - weight: 80
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["db"]
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["all-in-one"]
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: redis-core-cluster
+                topologyKey: kubernetes.io/hostname
+      tolerations:
+        - key: numan.io/dedicated
+          operator: Equal
+          value: db-redis
+          effect: NoSchedule
+        - key: numan.io/dedicated
+          operator: Equal
+          value: db
+          effect: NoSchedule
+      containers:
+        - name: redis
+          image: redis:7.4.2
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              SELF_FQDN="$POD_NAME.redis-core-cluster-headless.numan.svc.cluster.local"
+              exec redis-server \
+                --port 6379 \
+                --dir /data \
+                --cluster-enabled yes \
+                --cluster-config-file /data/nodes.conf \
+                --cluster-node-timeout 5000 \
+                --cluster-announce-hostname "$SELF_FQDN" \
+                --cluster-preferred-endpoint-type hostname \
+                --appendonly yes \
+                --maxmemory "$REDIS_MAXMEMORY" \
+                --maxmemory-policy volatile-lfu \
+                --lfu-log-factor 10 \
+                --lfu-decay-time 120 \
+                --requirepass "$REDIS_PASSWORD" \
+                --masterauth "$REDIS_PASSWORD"
+          ports:
+            - {name: redis, containerPort: 6379}
+            - {name: cluster-bus, containerPort: 16379}
+          env:
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: redis-credentials, key: REDIS_PASSWORD}}
+            - name: REDISCLI_AUTH
+              valueFrom: {secretKeyRef: {name: redis-credentials, key: REDIS_PASSWORD}}
+            - name: REDIS_MAXMEMORY
+              valueFrom: {configMapKeyRef: {name: numan-config, key: REDIS_MAXMEMORY}}
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli ping | grep -q PONG"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli ping | grep -q PONG"]
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli ping | grep -q PONG"]
+            periodSeconds: 5
+            failureThreshold: 120
+          resources:
+            requests: {cpu: "${REDIS_CPU_REQUEST}", memory: "${REDIS_MEMORY_REQUEST}"}
+            limits: {cpu: "${REDIS_CPU_LIMIT}", memory: "${REDIS_MEMORY_LIMIT}"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {}}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: redis-core-cluster
+          app.kubernetes.io/part-of: numan
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: "${STORAGE_CLASS_REDIS}"
+        resources:
+          requests:
+            storage: "${PVC_SIZE_REDIS}"

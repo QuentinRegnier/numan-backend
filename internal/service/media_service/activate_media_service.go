@@ -407,7 +407,8 @@ func DeactivateAdminMediaBatch(ctx context.Context, candidateMediaIDs []int64, e
 // par au moins un autre article actif (`Visibility >= 0` et `ID != excludeArticleID`).
 func findArticleMediaReferencedInL1(ctx context.Context, candidateIDs []int64, excludeArticleID int64) map[int64]struct{} {
 	referenced := make(map[int64]struct{})
-	if len(candidateIDs) == 0 || infraRedis.Rdb == nil {
+	objClient := infraRedis.ObjectClient()
+	if len(candidateIDs) == 0 || objClient == nil {
 		return referenced
 	}
 
@@ -416,7 +417,7 @@ func findArticleMediaReferencedInL1(ctx context.Context, candidateIDs []int64, e
 		candidateSet[id] = struct{}{}
 	}
 
-	allRaw, err := infraRedis.Rdb.HGetAll(ctx, variables.RedisKeyArticlesIndexData).Result()
+	allRaw, err := objClient.HGetAll(ctx, variables.RedisKeyArticlesIndexData).Result()
 	if err != nil || len(allRaw) == 0 {
 		return referenced
 	}

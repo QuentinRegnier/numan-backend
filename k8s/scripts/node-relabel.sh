@@ -9,7 +9,7 @@
 # =============================================================================
 set -euo pipefail
 
-ALLOWED_PROFILES="all-in-one ingress api websocket worker watermark mail db db-sql db-mongo db-redis storage"
+ALLOWED_PROFILES="all-in-one ingress api websocket worker scheduler watermark mail db db-sql db-mongo db-redis storage"
 
 NODE_NAME=""
 PROFILE=""

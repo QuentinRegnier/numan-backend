@@ -82,13 +82,57 @@ func startScoreUpdaterCron(ctx context.Context) {
 		}()
 	}
 
-	// ── ÉTAPE 3 : LANCEMENT DES CRONS ÉTAGÉS (PRODUCTEURS) ──────────────────
-	// Pour économiser les ressources, on recalcule très souvent les posts récents,
-	// et beaucoup moins souvent les posts anciens (qui ont déjà subi un fort déclin).
-	go runTierCron(ctx, jobs, 2*time.Minute, "0", "6 hours")          // Tier 1 : Hyperactif
-	go runTierCron(ctx, jobs, 15*time.Minute, "6 hours", "24 hours")  // Tier 2 : Actif
-	go runTierCron(ctx, jobs, 60*time.Minute, "24 hours", "72 hours") // Tier 3 : Ralenti
-	go runTierCron(ctx, jobs, 6*time.Hour, "72 hours", "30 days")     // Tier 4 : Dormant
+	// ── ÉTAPE 3 : LANCEMENT DES CRONS RAPIDES (FENÊTRE CHAUDE TEMPS RÉEL) ───
+	// Les posts hyperactifs (0..24h) restent pilotés en temps réel sur worker_node / monolith.
+	// Les posts anciens (24h..30j) sont délégués à RunTimeDecayDeepPass dans l'Activity-Aware Scheduler (DEEP_IDLE).
+	go runTierCron(ctx, jobs, 2*time.Minute, "0", "6 hours")         // Tier 1 : Hyperactif
+	go runTierCron(ctx, jobs, 15*time.Minute, "6 hours", "24 hours") // Tier 2 : Actif
+}
+
+// RunTimeDecayDeepPass recalcule le déclin temporel des posts anciens (24h..72h et 72h..30j)
+// en mode coopératif (vérifie ctx.Done() entre chaque post pour préemption <200ms).
+func RunTimeDecayDeepPass(ctx context.Context) (processed int64, err error) {
+	tiers := [][2]string{
+		{"24 hours", "72 hours"},
+		{"72 hours", "30 days"},
+	}
+	for _, tier := range tiers {
+		if ctx.Err() != nil {
+			return processed, ctx.Err()
+		}
+		posts, errLoad := postgres.FuncLoadPostsForTimeDecay(ctx, tier[0], tier[1])
+		if errLoad != nil {
+			numan_log.Warn(ctx).Err(errLoad).Str("min_age", tier[0]).Str("max_age", tier[1]).Msg("Time-Decay Deep Pass : échec lecture L3")
+			return processed, errLoad
+		}
+		for _, p := range posts {
+			if ctx.Err() != nil {
+				return processed, ctx.Err()
+			}
+			mediaCount := p.MediaCount
+			if mediaCount == 0 && p.HasMedia {
+				mediaCount = 1
+			}
+			cache_service.UpdateScoreWithMetrics(
+				ctx,
+				p.ID,
+				p.LikeCount,
+				p.CommentCount,
+				p.ViewCount,
+				mediaCount,
+				p.CreatedAt,
+				p.Hashtags,
+				p.IndirectHashtags,
+				p.Visibility,
+				p.ReportCount,
+				p.PriorityLevel,
+				p.Lang,
+				int(p.UserID),
+			)
+			processed++
+		}
+	}
+	return processed, nil
 }
 
 // runTierCron exécute la récupération des métriques sur une tranche d'âge précise.

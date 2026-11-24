@@ -1,0 +1,206 @@
+# Dedicated Activity-Aware Job Scheduler (`SERVER_ROLE=scheduler_node`) — DISABLED BY DEFAULT in all-in-one (replicas: 0).
+#
+# Why a dedicated Deployment in distributed / HA production?
+#   1. Heavy off-peak CPU jobs (LSH reindex, social graph 2-hop, orphan GC, PG VACUUM ANALYZE, Cuckoo rebuild)
+#      NEVER distort API/WS/Worker pod CPU metrics and NEVER trigger false HPA scaling.
+#   2. In `all-in-one` (`SERVER_ROLE=monolith`), the Scheduler runs embedded inside the monolith pod with
+#      `SCHEDULER_REPLICAS=0` (zero extra pod overhead on a single server / Mac dev).
+#   3. Exposes internal-only port 9090 via headless Service `scheduler-internal` (NEVER exposed by Traefik Ingress)
+#      so `numan-cli` can query `/internal/cli-telemetry`, `/metrics`, and call `/internal/scheduler/pause|resume`
+#      via Kubernetes API `client-go` Service Proxy over WireGuard with ZERO user JWT dependency.
+apiVersion: v1
+kind: Service
+metadata:
+  name: scheduler-internal
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: scheduler
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: scheduler
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: scheduler
+  ports:
+    - {name: metrics, port: 9090, targetPort: metrics}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: scheduler
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: scheduler
+spec:
+  replicas: ${SCHEDULER_REPLICAS}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: scheduler
+  template:
+    metadata:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+      labels:
+        app.kubernetes.io/name: scheduler
+        app.kubernetes.io/part-of: numan
+        app.kubernetes.io/component: scheduler
+        numan.io/exposes-internal-metrics: "true"
+        numan.io/uses-postgres: "true"
+        numan.io/uses-mongo: "true"
+        numan.io/uses-redis: "true"
+        numan.io/uses-minio-hot: "true"
+        numan.io/uses-minio-cold: "true"
+    spec:
+      serviceAccountName: scheduler
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile: {type: RuntimeDefault}
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["scheduler"]
+            - weight: 75
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["worker"]
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["all-in-one"]
+      tolerations:
+        - key: numan.io/dedicated
+          operator: Equal
+          value: scheduler
+          effect: NoSchedule
+      initContainers:
+        - name: wait-for-datastores
+          image: busybox:1.37.0
+          env:
+            - name: REDIS_ADDR
+              valueFrom: {configMapKeyRef: {name: numan-config, key: REDIS_ADDR}}
+            - name: REDIS_CLUSTER_ADDRS
+              valueFrom: {configMapKeyRef: {name: numan-config, key: REDIS_CLUSTER_ADDRS}}
+          command: ["sh", "-c"]
+          args:
+            - |
+              REDIS_TARGET="$(printf '%s' "$REDIS_CLUSTER_ADDRS" | cut -d',' -f1)"
+              [ -n "$REDIS_TARGET" ] || REDIS_TARGET="$REDIS_ADDR"
+              [ -n "$REDIS_TARGET" ] || REDIS_TARGET="redis:6379"
+              REDIS_H="$(printf '%s' "$REDIS_TARGET" | cut -d':' -f1)"
+              REDIS_P="$(printf '%s' "$REDIS_TARGET" | cut -d':' -f2)"
+              for hp in "${DB_POSTGRES_HOST} 5432" "mongo 27017" "$REDIS_H $REDIS_P" "minio-hot 9000"; do
+                set -- $hp
+                until nc -z -w 2 "$1" "$2"; do echo "waiting for $1:$2"; sleep 3; done
+              done
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 100m, memory: 32Mi}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+      containers:
+        - name: scheduler
+          image: numan-api
+          imagePullPolicy: IfNotPresent
+          command: ["./numan"]
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: metrics, containerPort: 9090}
+          envFrom:
+            - configMapRef: {name: numan-config}
+          env:
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: NODE_NAME
+              valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
+            - name: NODE_ID
+              value: "0"
+            - name: SERVER_ROLE
+              value: scheduler_node
+            # ---- PostgreSQL (Write + Read pools) ----
+            - name: POSTGRES_HOST
+              valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_HOST}}
+            - name: POSTGRES_READ_HOST
+              valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_READ_HOST}}
+            - name: POSTGRES_PORT
+              valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_PORT}}
+            - name: POSTGRES_DB
+              valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_DB}}
+            - name: POSTGRES_SSLMODE
+              valueFrom: {configMapKeyRef: {name: numan-config, key: POSTGRES_SSLMODE}}
+            - name: POSTGRES_USER
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: POSTGRES_USER}}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: postgres-credentials, key: POSTGRES_PASSWORD}}
+            - name: DB_DSN
+              value: "host=$(POSTGRES_HOST) user=$(POSTGRES_USER) password=$(POSTGRES_PASSWORD) dbname=$(POSTGRES_DB) port=$(POSTGRES_PORT) sslmode=$(POSTGRES_SSLMODE)"
+            # ---- MongoDB ----
+            - name: MONGO_APP_USER
+              valueFrom: {secretKeyRef: {name: mongo-app-credentials, key: MONGO_APP_USER}}
+            - name: MONGO_APP_PASSWORD
+              valueFrom: {secretKeyRef: {name: mongo-app-credentials, key: MONGO_APP_PASSWORD}}
+            # ---- 3-Tier Redis (Core + Object Pool + Pub/Sub share cluster password by default) ----
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: redis-credentials, key: REDIS_PASSWORD}}
+            # ---- MinIO / S3 (hot) ----
+            - name: MINIO_BUCKET_NAME
+              valueFrom: {configMapKeyRef: {name: numan-config, key: MINIO_BUCKET_NAME}}
+            - name: MINIO_PUBLIC_BUCKET_NAME
+              valueFrom: {configMapKeyRef: {name: numan-config, key: MINIO_PUBLIC_BUCKET_NAME}}
+            - name: PUBLIC_MEDIA_BASE_URL
+              valueFrom: {configMapKeyRef: {name: numan-config, key: PUBLIC_MEDIA_BASE_URL}}
+            - name: S3_ACCESS_KEY
+              valueFrom: {secretKeyRef: {name: minio-hot-users, key: S3_ACCESS_KEY}}
+            - name: S3_SECRET_KEY
+              valueFrom: {secretKeyRef: {name: minio-hot-users, key: S3_SECRET_KEY}}
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            requests: {cpu: "${SCHEDULER_CPU_REQUEST}", memory: "${SCHEDULER_MEMORY_REQUEST}"}
+            limits: {cpu: "${SCHEDULER_CPU_LIMIT}", memory: "${SCHEDULER_MEMORY_LIMIT}"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: 128Mi}

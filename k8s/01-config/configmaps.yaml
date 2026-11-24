@@ -41,6 +41,11 @@ data:
   WORKER_MIN_BACKOFF_MS: "50"
   WORKER_MAX_BACKOFF_MS: "1000"
 
+  # --- ACTIVITY-AWARE SCHEDULER THRESHOLDS (consumed by scheduler_node / monolith) --
+  NUMAN_SCHEDULER_IDLE_THRESHOLD: "${SCHEDULER_IDLE_THRESHOLD}"
+  NUMAN_SCHEDULER_DEEP_IDLE_THRESHOLD: "${SCHEDULER_DEEP_IDLE_THRESHOLD}"
+  NUMAN_SCHEDULER_OVERLOAD_THRESHOLD: "${SCHEDULER_OVERLOAD_THRESHOLD}"
+
   # --- TOPOLOGY (Kubernetes Service names; seamlessly switches standalone <-> HA) --
   POSTGRES_HOST: "${DB_POSTGRES_HOST}"
   POSTGRES_READ_HOST: "${DB_POSTGRES_READ_HOST}"
@@ -62,10 +67,14 @@ data:
   # Least-privilege MongoDB app user created by job/mongo-init authenticates against MONGO_DB (not admin).
   MONGO_AUTH_SOURCE: "numan_mongo"
   MONGO_TLS: "${DB_MONGO_TLS}"
+  # 3-Tier Universal Redis (Tier 2 & Tier 3 collapse automatically to Tier 1 Core when empty)
   REDIS_ADDR: "redis:6379"
+  REDIS_CLUSTER_ADDRS: "${DB_REDIS_CORE_CLUSTER_ADDRS}"
   REDIS_MASTER_NAME: "${DB_REDIS_MASTER_NAME}"
   REDIS_SENTINEL_ADDRS: "${DB_REDIS_SENTINEL_ADDRS}"
   REDIS_TLS: "${DB_REDIS_TLS}"
+  REDIS_OBJECT_CLUSTER_ADDRS: "${DB_REDIS_OBJECT_CLUSTER_ADDRS}"
+  REDIS_PUBSUB_ADDR: "${DB_REDIS_PUBSUB_ADDRS}"
   # Stable internal name of the hot MinIO S3 endpoint (Service minio-hot, port 9000).
   MINIO_ENDPOINT: "minio-hot:9000"
   # Deployment variable: the same value feeds the bootstrap Job, so app and bucket cannot drift apart.

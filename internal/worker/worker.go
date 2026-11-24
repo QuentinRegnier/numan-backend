@@ -87,9 +87,11 @@ func runWorkerOnShards(ctx context.Context, workerID int, shards []int) {
 		if len(events) > 0 {
 			// On détache l'annulation parente le temps de finaliser ce lot déjà dépilé de Redis
 			// afin de garantir zéro perte de données pendant un SIGTERM Kubernetes.
+			metrics.IncWorkerActive()
 			batchCtx, cancelBatch := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			processBatch(batchCtx, events)
 			cancelBatch()
+			metrics.DecWorkerActive()
 
 			// RESET DU SOMMEIL : on a trouvé du travail, on repasse en hyperactivité !
 			currentBackoff = minBackoff

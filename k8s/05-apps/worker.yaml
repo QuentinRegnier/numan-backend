@@ -60,6 +60,7 @@ spec:
         app.kubernetes.io/name: worker
         app.kubernetes.io/part-of: numan
         app.kubernetes.io/component: worker
+        numan.io/exposes-internal-metrics: "true"
         numan.io/uses-postgres: "true"
         numan.io/uses-mongo: "true"
         numan.io/uses-redis: "true"
@@ -107,10 +108,20 @@ spec:
       initContainers:
         - name: wait-for-datastores
           image: busybox:1.37.0
+          env:
+            - name: REDIS_ADDR
+              valueFrom: {configMapKeyRef: {name: numan-config, key: REDIS_ADDR}}
+            - name: REDIS_CLUSTER_ADDRS
+              valueFrom: {configMapKeyRef: {name: numan-config, key: REDIS_CLUSTER_ADDRS}}
           command: ["sh", "-c"]
           args:
             - |
-              for hp in "${DB_POSTGRES_HOST} 5432" "mongo 27017" "redis 6379" "minio-hot 9000"; do
+              REDIS_TARGET="$(printf '%s' "$REDIS_CLUSTER_ADDRS" | cut -d',' -f1)"
+              [ -n "$REDIS_TARGET" ] || REDIS_TARGET="$REDIS_ADDR"
+              [ -n "$REDIS_TARGET" ] || REDIS_TARGET="redis:6379"
+              REDIS_H="$(printf '%s' "$REDIS_TARGET" | cut -d':' -f1)"
+              REDIS_P="$(printf '%s' "$REDIS_TARGET" | cut -d':' -f2)"
+              for hp in "${DB_POSTGRES_HOST} 5432" "mongo 27017" "$REDIS_H $REDIS_P" "minio-hot 9000"; do
                 set -- $hp
                 until nc -z -w 2 "$1" "$2"; do echo "waiting for $1:$2"; sleep 3; done
               done
@@ -138,6 +149,8 @@ spec:
             # ---- identity: unique per pod, derived from the StatefulSet ordinal (no shell/wrapper needed) ----
             - name: POD_NAME
               valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: NODE_NAME
+              valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
             - name: NODE_ID
               valueFrom: {fieldRef: {fieldPath: "metadata.labels['apps.kubernetes.io/pod-index']"}}
             - name: SERVER_ROLE         # overrides the "monolith" default from numan-config

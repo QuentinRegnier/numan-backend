@@ -12,7 +12,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	redisgo "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -157,149 +157,159 @@ var (
 	CommunityRecoAuthors  *Collection // HLL  community:reco:authors:{conv_id}:{YYYY-MM-DD}
 	CommunityRecoGrowth   *Collection // HASH community:reco:growth:{YYYY-MM-DD}
 	UserPublicComms       *Collection // SET  user:public_comms:{user_id}
+
+	// --- INFRA TELEMETRY & ACTIVITY-AWARE SCHEDULER (Tier 1 Core) ---
+	InfraTelemetry *Collection // Telemetry heartbeats & live DC aggregates (infra:telemetry:*)
+	SchedulerState *Collection // Scheduler job checkpoints, pause state & regime (scheduler:*)
 )
 
 // ============================================================================
-// 2. INITIALISATION
+// 2. INITIALISATION (ARCHITECTURE REDIS 3 TIERS)
 // ============================================================================
 
 func InitCacheDatabase() {
-	// --- OBJECT Cache ---
-	Users = newCollection("object_cache:user", variables.StandardTTL)
-	UserSettings = newCollection("object_cache:user_settings", variables.StandardTTL)
-	Sessions = newCollection("object_cache:session", variables.StandardTTL)
-	Passkeys = newCollection("object_cache:passkey", variables.StandardTTL)
-	Posts = newCollection("object_cache:post_service", variables.StandardTTL)
-	Comments = newCollection("object_cache:comment", variables.StandardTTL)
-	Media = newCollection("object_cache:media", variables.StandardTTL)
-	Messages = newCollection("object_cache:msg", variables.StandardTTL)
-	Conversations = newCollection("object_cache:conv", variables.StandardTTL)
-	Members = newCollection("object_cache:member", variables.StandardTTL)
-	Relations = newCollection("object_cache:rel", variables.StandardTTL)
-	Saved = newCollection("object_cache:saved:zset", variables.StandardTTL)
-	PostComments = newCollection("object:comments:zset", variables.StandardTTL)
-	UserTimeline = newCollection("user_cache:posts:zset", variables.StandardTTL)
-	NotificationsObj = newCollection("object_cache:notification", variables.StandardTTL)
+	// --- TIER 2 : OBJECT Cache (100% RAM éphémère non-répliquée, repli MongoDB L2) ---
+	Users = newObjectCollection("object_cache:user", variables.StandardTTL)
+	UserSettings = newObjectCollection("object_cache:user_settings", variables.StandardTTL)
+	Posts = newObjectCollection("object_cache:post_service", variables.StandardTTL)
+	Comments = newObjectCollection("object_cache:comment", variables.StandardTTL)
+	Media = newObjectCollection("object_cache:media", variables.StandardTTL)
+	Messages = newObjectCollection("object_cache:msg", variables.StandardTTL)
+	Conversations = newObjectCollection("object_cache:conv", variables.StandardTTL)
+	Members = newObjectCollection("object_cache:member", variables.StandardTTL)
+	Relations = newObjectCollection("object_cache:rel", variables.StandardTTL)
+	Saved = newObjectCollection("object_cache:saved:zset", variables.StandardTTL)
+	PostComments = newObjectCollection("object:comments:zset", variables.StandardTTL)
+	UserTimeline = newObjectCollection("user_cache:posts:zset", variables.StandardTTL)
+	NotificationsObj = newObjectCollection("object_cache:notification", variables.StandardTTL)
+	POIs = newObjectCollection("object_cache:poi", 0)
+	POIReviews = newObjectCollection("object_cache:poi_review", variables.StandardTTL)
+	POIReviewsByPOI = newObjectCollection("object_cache:poi_reviews:zset", variables.StandardTTL)
+	POIReviewUserIndex = newObjectCollection("index:poi_review:user", variables.StandardTTL)
+	MessageReactionCounts = newObjectCollection("msg_react_counts", variables.StandardTTL)
+	MessageUserReactions = newObjectCollection("msg_user_react", variables.StandardTTL)
 
-	// --- SPEED Cache ---
-	UsersLite = newCollection("speed_cache:user:lite", 0)
-	UsersLex = newCollection("speed_cache:user:search", 0)
-	CommunitiesLex = newCollection("speed_cache:community:search", 0)
-	TagsLex = newCollection("speed_cache:tag:search", 0)
-	ConvMeta = newCollection("speed_cache:conversation:meta", variables.StandardTTL)
-	ConvMembers = newCollection("speed_cache:conversation:members", variables.StandardTTL)
-	SpeedRelationsIndex = newCollection("speed_cache:relations:index:default", 0)
-	SpeedRelations = newCollection("speed_cache:relations:default", 0)
-	SpeedAddable = newCollection("speed_cache:addable:default", variables.StandardTTL)
-	SpeedCommunity = newCollection("speed_cache:community:default", variables.StandardTTL)
+	// --- TIER 1 : CORE HA (Auth, Sessions, Locks, Speed Cache, MOST Cache, Write-Behind, Telemetry) ---
+	Sessions = newCoreCollection("object_cache:session", variables.StandardTTL)
+	Passkeys = newCoreCollection("object_cache:passkey", variables.StandardTTL)
 
-	// --- FEED Cache ---
-	FeedsObject = newCollection("feed:state", variables.StandardTTL)
-	FeedsMailbox = newCollection("feed_cache:mailbox", variables.StandardTTL)
-	FeedsPersonalized = newCollection("feed:personalized", variables.StandardTTL)
+	// --- SPEED Cache (Tier 1 Core) ---
+	UsersLite = newCoreCollection("speed_cache:user:lite", 0)
+	UsersLex = newCoreCollection("speed_cache:user:search", 0)
+	CommunitiesLex = newCoreCollection("speed_cache:community:search", 0)
+	TagsLex = newCoreCollection("speed_cache:tag:search", 0)
+	ConvMeta = newCoreCollection("speed_cache:conversation:meta", variables.StandardTTL)
+	ConvMembers = newCoreCollection("speed_cache:conversation:members", variables.StandardTTL)
+	SpeedRelationsIndex = newCoreCollection("speed_cache:relations:index:default", 0)
+	SpeedRelations = newCoreCollection("speed_cache:relations:default", 0)
+	SpeedAddable = newCoreCollection("speed_cache:addable:default", variables.StandardTTL)
+	SpeedCommunity = newCoreCollection("speed_cache:community:default", variables.StandardTTL)
 
-	// --- ALGORITHM & MOST Cache ---
-	ContentVectors = newCollection("most_cache:vec", variables.StandardTTL)
-	RankedPosts = newCollection("most_cache", variables.StandardTTL)
-	TagPosts = newCollection("most_cache:idx:tag", variables.StandardTTL)
-	TrendGlobalHourly = newCollection("trend:global:hourly", variables.TrendGlobalHourlyTTL)
-	TrendGlobalDaily = newCollection("trend:global:daily", variables.TrendGlobalDailyTTL)
-	TrendTagDaily = newCollection("trend:tag:daily", variables.TrendTagDailyTTL)
-	TrendTagWeekly = newCollection("trend:tag:weekly", variables.TrendTagWeeklyTTL)
-	HashtagLeaderboard = newCollection("hashtag:leaderboard", 0)
-	TagQuarantine = newCollection("tags:quarantine", variables.TagQuarantineTTL)
-	IndirectTagConsensus = newCollection("post:itags:consensus", variables.IndirectTagSetTTL)
-	AuthorPostWindows = newCollection("author:posts:window", variables.AuthorPostWindowTTL)
+	// --- FEED Cache (Tier 1 Core) ---
+	FeedsObject = newCoreCollection("feed:state", variables.StandardTTL)
+	FeedsMailbox = newCoreCollection("feed_cache:mailbox", variables.StandardTTL)
+	FeedsPersonalized = newCoreCollection("feed:personalized", variables.StandardTTL)
 
-	// --- SYSTEM Cache ---
-	RateLimits = newCollection("rate_limit:ip", 10*time.Second)
-	DLQ = newCollection("dlq", 0)
-	GraphEdges = newCollection("graph_cache:tag_edges", 0)
-	Tags = newCollection("tags", 0)
-	HashtagCanon = newCollection("hashtag:canon", 0)
-	CronLocks = newCollection("lock:cron", 5*time.Minute)
+	// --- ALGORITHM & MOST Cache (Tier 1 Core) ---
+	ContentVectors = newCoreCollection("most_cache:vec", variables.StandardTTL)
+	RankedPosts = newCoreCollection("most_cache", variables.StandardTTL)
+	TagPosts = newCoreCollection("most_cache:idx:tag", variables.StandardTTL)
+	TrendGlobalHourly = newCoreCollection("trend:global:hourly", variables.TrendGlobalHourlyTTL)
+	TrendGlobalDaily = newCoreCollection("trend:global:daily", variables.TrendGlobalDailyTTL)
+	TrendTagDaily = newCoreCollection("trend:tag:daily", variables.TrendTagDailyTTL)
+	TrendTagWeekly = newCoreCollection("trend:tag:weekly", variables.TrendTagWeeklyTTL)
+	HashtagLeaderboard = newCoreCollection("hashtag:leaderboard", 0)
+	TagQuarantine = newCoreCollection("tags:quarantine", variables.TagQuarantineTTL)
+	IndirectTagConsensus = newCoreCollection("post:itags:consensus", variables.IndirectTagSetTTL)
+	AuthorPostWindows = newCoreCollection("author:posts:window", variables.AuthorPostWindowTTL)
 
-	// --- INDEX & IDEMPOTENCE ---
-	SessionIndexes = newCollection("session_cache", variables.StandardTTL)
-	SessionBlacklist = newCollection("blacklist:session", 24*time.Hour)
-	PostLikesSet = newCollection("post:likes_set", 0)
-	CommentLikesSet = newCollection("comment:likes_set", 0)
-	SystemStatus = newCollection("system:status", 0)
+	// --- SYSTEM Cache (Tier 1 Core) ---
+	RateLimits = newCoreCollection("rate_limit:ip", 10*time.Second)
+	DLQ = newCoreCollection("dlq", 0)
+	GraphEdges = newCoreCollection("graph_cache:tag_edges", 0)
+	Tags = newCoreCollection("tags", 0)
+	HashtagCanon = newCoreCollection("hashtag:canon", 0)
+	CronLocks = newCoreCollection("lock:cron", 5*time.Minute)
+
+	// --- INDEX & IDEMPOTENCE (Tier 1 Core) ---
+	SessionIndexes = newCoreCollection("session_cache", variables.StandardTTL)
+	SessionBlacklist = newCoreCollection("blacklist:session", 24*time.Hour)
+	PostLikesSet = newCoreCollection("post:likes_set", 0)
+	CommentLikesSet = newCoreCollection("comment:likes_set", 0)
+	SystemStatus = newCoreCollection("system:status", 0)
 
 	// --- CUCKOO FILTER ---
-	CuckooSeen = newCollection("cuckoo:seen", variables.StandardTTL)
-	CuckooSync = newCollection("cuckoo:sync", 5*time.Second) // NOUVEAU : TTL court encapsulé !
+	CuckooSeen = newCoreCollection("cuckoo:seen", variables.StandardTTL)
+	CuckooSync = newPubSubCollection("cuckoo:sync", 5*time.Second) // Tier 3 PubSub Bus
 
-	// --- MESSAGING & LSH ---
-	ConvParticipants = newCollection("conv:participants", 0)
-	UserInbox = newCollection("inbox:user", 0)
-	MessagesIndex = newCollection("messages:idx", 24*time.Hour)
-	LSHBuckets = newCollection("lsh:bucket", variables.StandardTTL)
-	ConvWatermarks = newCollection("conv:watermarks", variables.StandardTTL)
+	// --- MESSAGING & LSH (Tier 1 Core) ---
+	ConvParticipants = newCoreCollection("conv:participants", 0)
+	UserInbox = newCoreCollection("inbox:user", 0)
+	MessagesIndex = newCoreCollection("messages:idx", 24*time.Hour)
+	LSHBuckets = newCoreCollection("lsh:bucket", variables.StandardTTL)
+	ConvWatermarks = newCoreCollection("conv:watermarks", variables.StandardTTL)
 
-	UserSyncLedger = newCollection("sync:ledger:user", 30*24*time.Hour)
-	ConvMessageLedger = newCollection("sync:ledger:conv_msg", 30*24*time.Hour)
+	UserSyncLedger = newCoreCollection("sync:ledger:user", 30*24*time.Hour)
+	ConvMessageLedger = newCoreCollection("sync:ledger:conv_msg", 30*24*time.Hour)
 
-	// --- RÉACTIONS AUX MESSAGES ---
-	MessageReactionCounts = newCollection("msg_react_counts", variables.StandardTTL)
-	MessageUserReactions = newCollection("msg_user_react", variables.StandardTTL)
+	// --- ACTIVITY FEED (Tier 1 Core) ---
+	FeedSchedule = newCoreCollection("feed:precompute:schedule", 0)
+	NotificationsZSet = newCoreCollection("notifications:user", variables.StandardTTL)
+	NotificationCursors = newCoreCollection("notifications:cursor", 0)
+	NotificationActivity = newCoreCollection("notifications:activity", 0)
+	InboxActivity = newCoreCollection("inbox:activity", 0)
 
-	// --- ACTIVITY FEED ---
-	FeedSchedule = newCollection("feed:precompute:schedule", 0)
-	NotificationsZSet = newCollection("notifications:user", variables.StandardTTL)
-	NotificationCursors = newCollection("notifications:cursor", 0)
-	NotificationActivity = newCollection("notifications:activity", 0)
-	InboxActivity = newCollection("inbox:activity", 0)
+	// --- TELEMETRY Cache (Tier 1 Core) ---
+	TelemetryProfiles = newCoreCollection("telemetry:profiles", variables.StandardTTL)
 
-	// --- TELEMETRY Cache ---
-	TelemetryProfiles = newCollection("telemetry:profiles", variables.StandardTTL)
+	// --- TIER 3 : PUB/SUB & EPHEMERAL PRESENCE BUS ---
+	Presence = newPubSubCollection("presence:user", 60*time.Second)
+	ChannelUser = newPubSubCollection("channel:user", 0)
+	ChannelCommunity = newPubSubCollection("channel:community", 0)
 
-	// --- WEBSOCKET Cache ---
-	Presence = newCollection("presence:user", 60*time.Second)
-
-	// --- PUB/SUB CHANNELS & WORKER QUEUES ---
-	ChannelUser = newCollection("channel:user", 0)
-	ChannelCommunity = newCollection("channel:community", 0)
-	WorkerQueue = newCollection("worker:queue", 0)
+	// --- WORKER QUEUES (Tier 1 Core) ---
+	WorkerQueue = newCoreCollection("worker:queue", 0)
 
 	// --- CONFIGURATION DYNAMIQUE CENTRALISÉE ---
-	DynamicVariables = newCollection("system:variables", 0)
-	DynamicVariablesSync = newCollection("system:variables:sync", 10*time.Second)
+	// Hash tag {dynamic_vars} garantit que KEYS[1] (overrides) et KEYS[2] (version)
+	// atterrissent toujours sur le même slot Redis Cluster (zéro CROSSSLOT Lua).
+	DynamicVariables = newCoreCollection("system:{dynamic_vars}:variables", 0)
+	DynamicVariablesSync = newPubSubCollection("system:variables:sync", 10*time.Second) // Tier 3 PubSub Bus
 
-	// --- PASSKEY TWO FACTOR ---
-	PreAuth = newCollection("auth:pre_auth", variables.TwoFactorPreAuthTTL)
+	// --- PASSKEY TWO FACTOR (Tier 1 Core) ---
+	PreAuth = newCoreCollection("auth:pre_auth", variables.TwoFactorPreAuthTTL)
 
-	// --- TRUST SCORE & MODERATION ---
-	ReportAggregators = newCollection("moderation:report_agg", variables.StandardTTL)
-	SteganoBanlist = newCollection("moderation:stegano_banlist", 0)
-	ModerationQueues = newCollection("moderation:queue", 0)
-	ModerationExpirations = newCollection("moderation:expirations", 0)
-	ModerationTickets = newCollection("moderation:ticket", 0)
-	ModeratorStats = newCollection("moderation:mod_stats", 0)
+	// --- TRUST SCORE & MODERATION (Tier 1 Core) ---
+	ReportAggregators = newCoreCollection("moderation:report_agg", variables.StandardTTL)
+	SteganoBanlist = newCoreCollection("moderation:stegano_banlist", 0)
+	ModerationQueues = newCoreCollection("moderation:queue", 0)
+	ModerationExpirations = newCoreCollection("moderation:expirations", 0)
+	ModerationTickets = newCoreCollection("moderation:ticket", 0)
+	ModeratorStats = newCoreCollection("moderation:mod_stats", 0)
 
-	// --- DISCOVERY MAP & POINTS OF INTEREST (TTL 0 — Non-expiring) ---
-	POIs = newCollection("object_cache:poi", 0)
-	POIsGeo = newCollection("geo_cache:poi", 0)
-	POIReviews = newCollection("object_cache:poi_review", variables.StandardTTL)
-	POIReviewsByPOI = newCollection("object_cache:poi_reviews:zset", variables.StandardTTL)
-	POIReviewUserIndex = newCollection("index:poi_review:user", variables.StandardTTL)
+	// --- DISCOVERY MAP GEO INDEX (Tier 1 Core) ---
+	POIsGeo = newCoreCollection("geo_cache:poi", 0)
 
-	// --- USER RECOMMENDATION SYSTEM (L1 Speed Cache) ---
-	UserRecoListGeo = newCollection(variables.RedisKeyUserRecoListGeo, variables.UserRecoListTTL)
-	UserRecoListAff = newCollection(variables.RedisKeyUserRecoListAff, variables.UserRecoListTTL)
-	UserRecoListTaste = newCollection(variables.RedisKeyUserRecoListTaste, variables.UserRecoListTTL)
-	UserRecoListGlobal = newCollection(variables.RedisKeyUserRecoListGlobal, variables.UserRecoListTTL)
-	UsersLang = newCollection(variables.RedisKeyUsersLang, 0)
-	CuckooUserRecoSkips = newCollection(variables.RedisKeyCuckooUserRecoSkips, time.Duration(variables.UserRecoSkipTTLSeconds)*time.Second)
-	LockUserRecoCompute = newCollection(variables.RedisKeyLockUserRecoCompute, variables.UserRecoComputeLockTTL)
+	// --- USER RECOMMENDATION SYSTEM (Tier 1 Core) ---
+	UserRecoListGeo = newCoreCollection(variables.RedisKeyUserRecoListGeo, variables.UserRecoListTTL)
+	UserRecoListAff = newCoreCollection(variables.RedisKeyUserRecoListAff, variables.UserRecoListTTL)
+	UserRecoListTaste = newCoreCollection(variables.RedisKeyUserRecoListTaste, variables.UserRecoListTTL)
+	UserRecoListGlobal = newCoreCollection(variables.RedisKeyUserRecoListGlobal, variables.UserRecoListTTL)
+	UsersLang = newCoreCollection(variables.RedisKeyUsersLang, 0)
+	CuckooUserRecoSkips = newCoreCollection(variables.RedisKeyCuckooUserRecoSkips, time.Duration(variables.UserRecoSkipTTLSeconds)*time.Second)
+	LockUserRecoCompute = newCoreCollection(variables.RedisKeyLockUserRecoCompute, variables.UserRecoComputeLockTTL)
 
-	// --- PUBLIC COMMUNITY RECOMMENDATION SYSTEM (L1 Speed Cache & Telemetry) ---
-	CommunityRecoRanked = newCollection(variables.RedisKeyCommunityRecoRanked, 0)
-	CommunityRecoPins = newCollection(variables.RedisKeyCommunityRecoPins, 0)
-	CommunityRecoMsgCount = newCollection(variables.RedisKeyCommunityRecoMsgCount, variables.CommunityRecoTelemetryTTL)
-	CommunityRecoAuthors = newCollection(variables.RedisKeyCommunityRecoAuthors, variables.CommunityRecoTelemetryTTL)
-	CommunityRecoGrowth = newCollection(variables.RedisKeyCommunityRecoGrowth, variables.CommunityRecoTelemetryTTL)
-	UserPublicComms = newCollection(variables.RedisKeyUserPublicComms, 0)
+	// --- PUBLIC COMMUNITY RECOMMENDATION SYSTEM (Tier 1 Core) ---
+	CommunityRecoRanked = newCoreCollection(variables.RedisKeyCommunityRecoRanked, 0)
+	CommunityRecoPins = newCoreCollection(variables.RedisKeyCommunityRecoPins, 0)
+	CommunityRecoMsgCount = newCoreCollection(variables.RedisKeyCommunityRecoMsgCount, variables.CommunityRecoTelemetryTTL)
+	CommunityRecoAuthors = newCoreCollection(variables.RedisKeyCommunityRecoAuthors, variables.CommunityRecoTelemetryTTL)
+	CommunityRecoGrowth = newCoreCollection(variables.RedisKeyCommunityRecoGrowth, variables.CommunityRecoTelemetryTTL)
+	UserPublicComms = newCoreCollection(variables.RedisKeyUserPublicComms, 0)
+
+	// --- INFRA TELEMETRY & ACTIVITY-AWARE SCHEDULER (Tier 1 Core) ---
+	InfraTelemetry = newCoreCollection("infra:telemetry", 60*time.Second)
+	SchedulerState = newCoreCollection("scheduler", 0)
 }
 
 // ============================================================================
@@ -308,17 +318,54 @@ func InitCacheDatabase() {
 
 // IsReady isole l'état de l'infrastructure pour les routines de maintenance.
 func IsReady() bool {
-	return redisgo.Rdb != nil
+	return redisgo.CoreClient() != nil
 }
 
-// Keys renvoie toutes les clés correspondant à un pattern global.
+// Keys renvoie toutes les clés correspondant à un pattern global (Cluster-safe via ForEachMaster).
 func Keys(ctx context.Context, pattern string) ([]string, error) {
-	return redisgo.Rdb.Keys(ctx, pattern).Result()
+	client := redisgo.CoreClient()
+	if client == nil {
+		return nil, nil
+	}
+	if clusterClient, ok := client.(*redis.ClusterClient); ok {
+		var all []string
+		err := clusterClient.ForEachMaster(ctx, func(c context.Context, master *redis.Client) error {
+			ks, errM := master.Keys(c, pattern).Result()
+			if errM != nil {
+				return errM
+			}
+			all = append(all, ks...)
+			return nil
+		})
+		return all, err
+	}
+	return client.Keys(ctx, pattern).Result()
 }
 
-// FlushDB vide l'intégralité de la base de données Redis courante.
+// FlushDB vide l'intégralité de la base de données Redis courante (Cluster-safe sur tous les masters).
 func FlushDB(ctx context.Context) error {
-	return redisgo.Rdb.FlushDB(ctx).Err()
+	seen := make(map[redis.UniversalClient]struct{}, 3)
+	for _, client := range []redis.UniversalClient{redisgo.CoreClient(), redisgo.ObjectClient(), redisgo.PubSubClient()} {
+		if client == nil {
+			continue
+		}
+		if _, done := seen[client]; done {
+			continue
+		}
+		seen[client] = struct{}{}
+		if clusterClient, ok := client.(*redis.ClusterClient); ok {
+			if err := clusterClient.ForEachMaster(ctx, func(c context.Context, master *redis.Client) error {
+				return master.FlushDB(c).Err()
+			}); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := client.FlushDB(ctx).Err(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ============================================================================
@@ -326,15 +373,31 @@ func FlushDB(ctx context.Context) error {
 // ============================================================================
 
 type Collection struct {
-	Prefix     string        // ex: "post_service" (donnera "post_service:123")
-	Client     *redis.Client // Client Redis
-	DefaultTTL time.Duration // Durée de vie par défaut
+	Prefix     string                // ex: "post_service" (donnera "post_service:123")
+	Client     redis.UniversalClient // Client Redis universel (Standalone, Sentinel ou Cluster)
+	DefaultTTL time.Duration         // Durée de vie par défaut
 }
 
-func newCollection(prefix string, ttl time.Duration) *Collection {
+func newCoreCollection(prefix string, ttl time.Duration) *Collection {
 	return &Collection{
 		Prefix:     prefix,
-		Client:     redisgo.Rdb,
+		Client:     redisgo.CoreClient(),
+		DefaultTTL: ttl,
+	}
+}
+
+func newObjectCollection(prefix string, ttl time.Duration) *Collection {
+	return &Collection{
+		Prefix:     prefix,
+		Client:     redisgo.ObjectClient(),
+		DefaultTTL: ttl,
+	}
+}
+
+func newPubSubCollection(prefix string, ttl time.Duration) *Collection {
+	return &Collection{
+		Prefix:     prefix,
+		Client:     redisgo.PubSubClient(),
 		DefaultTTL: ttl,
 	}
 }
@@ -426,7 +489,7 @@ func (c *Collection) HSet(ctx context.Context, id any, values ...any) error {
 	return c.Client.HSet(ctx, c.Key(id), values...).Err()
 }
 
-func (c *Collection) HGetAll(ctx context.Context, id any) *redis.StringStringMapCmd {
+func (c *Collection) HGetAll(ctx context.Context, id any) *redis.MapStringStringCmd {
 	return c.Client.HGetAll(ctx, c.Key(id))
 }
 
@@ -453,7 +516,7 @@ func (c *Collection) PFAdd(ctx context.Context, id any, els ...any) (int64, erro
 	return c.Client.PFAdd(ctx, c.Key(id), els...).Result()
 }
 
-// PFCount calcule la cardinalité union d'un ou plusieurs HyperLogLog de la collection.
+// PFCount calcule la cardinalité union d'un ou plusieurs HyperLogLog de la collection (Cluster-safe).
 func (c *Collection) PFCount(ctx context.Context, ids ...any) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
@@ -461,6 +524,23 @@ func (c *Collection) PFCount(ctx context.Context, ids ...any) (int64, error) {
 	keys := make([]string, len(ids))
 	for i, id := range ids {
 		keys[i] = c.Key(id)
+	}
+	if redisgo.IsClusterClient(c.Client) && len(keys) > 1 {
+		pipe := c.Client.Pipeline()
+		cmds := make([]*redis.IntCmd, len(keys))
+		for i, k := range keys {
+			cmds[i] = pipe.PFCount(ctx, k)
+		}
+		if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+			return 0, err
+		}
+		var total int64
+		for _, cmd := range cmds {
+			if n, err := cmd.Result(); err == nil {
+				total += n
+			}
+		}
+		return total, nil
 	}
 	return c.Client.PFCount(ctx, keys...).Result()
 }
@@ -539,7 +619,7 @@ func (c *Collection) SRemCount(ctx context.Context, id any, members ...any) (int
 	return c.Client.SRem(ctx, c.Key(id), members...).Result()
 }
 
-// SInter effectue l'intersection atomique Redis SINTER sur un ou plusieurs identifiants de la collection.
+// SInter effectue l'intersection Redis SINTER sur un ou plusieurs identifiants de la collection (Cluster-safe).
 func (c *Collection) SInter(ctx context.Context, ids ...any) ([]string, error) {
 	if len(ids) == 0 {
 		return []string{}, nil
@@ -547,6 +627,45 @@ func (c *Collection) SInter(ctx context.Context, ids ...any) ([]string, error) {
 	keys := make([]string, len(ids))
 	for i, id := range ids {
 		keys[i] = c.Key(id)
+	}
+	if redisgo.IsClusterClient(c.Client) && len(keys) > 1 {
+		pipe := c.Client.Pipeline()
+		cmds := make([]*redis.StringSliceCmd, len(keys))
+		for i, k := range keys {
+			cmds[i] = pipe.SMembers(ctx, k)
+		}
+		if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+			return nil, err
+		}
+		first, err := cmds[0].Result()
+		if err != nil || len(first) == 0 {
+			return []string{}, nil
+		}
+		common := make(map[string]struct{}, len(first))
+		for _, m := range first {
+			common[m] = struct{}{}
+		}
+		for _, cmd := range cmds[1:] {
+			members, errM := cmd.Result()
+			if errM != nil || len(members) == 0 {
+				return []string{}, nil
+			}
+			next := make(map[string]struct{}, len(common))
+			for _, m := range members {
+				if _, ok := common[m]; ok {
+					next[m] = struct{}{}
+				}
+			}
+			common = next
+			if len(common) == 0 {
+				return []string{}, nil
+			}
+		}
+		out := make([]string, 0, len(common))
+		for m := range common {
+			out = append(out, m)
+		}
+		return out, nil
 	}
 	return c.Client.SInter(ctx, keys...).Result()
 }
@@ -583,6 +702,55 @@ func (c *Collection) Pipeline() redis.Pipeliner {
 	return c.Client.Pipeline()
 }
 
+// mgetKeysClusterSafe exécute un MGET natif sur Standalone/Sentinel ou un Pipeline de GET en mode Cluster
+// (1 RTT parallèle par nœud, zéro CROSSSLOT, ordre exact et nil sur miss préservés).
+func mgetKeysClusterSafe(ctx context.Context, client redis.UniversalClient, keys []string) ([]interface{}, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	if !redisgo.IsClusterClient(client) || len(keys) == 1 {
+		return client.MGet(ctx, keys...).Result()
+	}
+
+	pipe := client.Pipeline()
+	cmds := make([]*redis.StringCmd, len(keys))
+	for i, k := range keys {
+		cmds[i] = pipe.Get(ctx, k)
+	}
+	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+		return nil, err
+	}
+	values := make([]interface{}, len(keys))
+	for i, cmd := range cmds {
+		val, err := cmd.Result()
+		if err != nil {
+			if errors.Is(err, redis.Nil) {
+				values[i] = nil
+				continue
+			}
+			return nil, err
+		}
+		values[i] = val
+	}
+	return values, nil
+}
+
+// delKeysClusterSafe exécute DEL natif sur Standalone/Sentinel ou un Pipeline de DEL unitaires en mode Cluster.
+func delKeysClusterSafe(ctx context.Context, client redis.UniversalClient, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	if !redisgo.IsClusterClient(client) || len(keys) == 1 {
+		return client.Del(ctx, keys...).Err()
+	}
+	pipe := client.Pipeline()
+	for _, k := range keys {
+		pipe.Del(ctx, k)
+	}
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
 func (c *Collection) MGet(ctx context.Context, ids ...any) ([]interface{}, error) {
 	if len(ids) == 0 {
 		return nil, nil
@@ -591,7 +759,7 @@ func (c *Collection) MGet(ctx context.Context, ids ...any) ([]interface{}, error
 	for i, id := range ids {
 		keys[i] = c.Key(id)
 	}
-	return c.Client.MGet(ctx, keys...).Result()
+	return mgetKeysClusterSafe(ctx, c.Client, keys)
 }
 
 type GetManyResult struct {
@@ -599,7 +767,7 @@ type GetManyResult struct {
 	MissingIDs []int64
 }
 
-// GetMany récupère une liste d'objets en un seul appel réseau (MGET).
+// GetMany récupère une liste d'objets en un seul aller-retour (MGET ou Pipeline Cluster-safe).
 func (c *Collection) GetMany(ctx context.Context, ids []int64) (*GetManyResult, error) {
 	if len(ids) == 0 {
 		return &GetManyResult{}, nil
@@ -610,7 +778,7 @@ func (c *Collection) GetMany(ctx context.Context, ids []int64) (*GetManyResult, 
 		keys[i] = c.Key(id)
 	}
 
-	values, err := c.Client.MGet(ctx, keys...).Result()
+	values, err := mgetKeysClusterSafe(ctx, c.Client, keys)
 	if err != nil {
 		return nil, err
 	}
@@ -652,7 +820,7 @@ func (c *Collection) SetMany(ctx context.Context, items map[int64]any) error {
 	return err
 }
 
-// DeleteMany supprime un lot d'identifiants de la collection en un seul appel DEL.
+// DeleteMany supprime un lot d'identifiants de la collection (Cluster-safe).
 func (c *Collection) DeleteMany(ctx context.Context, ids []int64) error {
 	if len(ids) == 0 {
 		return nil
@@ -661,7 +829,7 @@ func (c *Collection) DeleteMany(ctx context.Context, ids []int64) error {
 	for i, id := range ids {
 		keys[i] = c.Key(id)
 	}
-	return c.Client.Del(ctx, keys...).Err()
+	return delKeysClusterSafe(ctx, c.Client, keys)
 }
 
 // ZSetReplaceAtomic remplace atomiquement le contenu d'un ZSET (DEL + ZADD + EXPIRE via MULTI/EXEC)
@@ -674,7 +842,15 @@ func (c *Collection) ZSetReplaceAtomic(ctx context.Context, id any, members []*r
 	pipe := c.Client.TxPipeline()
 	pipe.Del(ctx, key)
 	if len(members) > 0 {
-		pipe.ZAdd(ctx, key, members...)
+		zVals := make([]redis.Z, 0, len(members))
+		for _, m := range members {
+			if m != nil {
+				zVals = append(zVals, *m)
+			}
+		}
+		if len(zVals) > 0 {
+			pipe.ZAdd(ctx, key, zVals...)
+		}
 		if ttl > 0 {
 			pipe.Expire(ctx, key, ttl)
 		}
@@ -765,32 +941,36 @@ func (c *Collection) CFExistsMany(ctx context.Context, id any, items []int64) (m
 }
 
 // ============================================================================
-// 11. PUB/SUB FLUX (Pattern Claim Check - DDD)
+// 11. PUB/SUB FLUX (Pattern Claim Check - DDD, Sharded Pub/Sub en Cluster)
 // ============================================================================
 
-// PushFlux publie un message lourd (stockage RAM puis notification)
+// PushFlux publie un message lourd (stockage RAM puis notification).
 func (c *Collection) PushFlux(ctx context.Context, message []byte) error {
-	// 1. La génération de l'ID est encapsulée ici (zéro fuite d'infrastructure)
 	messageID := strconv.FormatInt(domain.NowTime().UnixNano(), 10)
 
-	// 2. Stockage du payload avec le TTL par défaut de la collection
 	payloadKey := c.Key("msg:" + messageID)
 	if err := c.Client.Set(ctx, payloadKey, message, c.DefaultTTL).Err(); err != nil {
 		return err
 	}
 
-	// 3. Publication de l'ID sur le canal de cette collection
 	channelKey := c.Key("channel")
+	if redisgo.IsClusterClient(c.Client) {
+		return c.Client.SPublish(ctx, channelKey, messageID).Err()
+	}
 	return c.Client.Publish(ctx, channelKey, messageID).Err()
 }
 
-// SubscribeFlux s'abonne au canal et récupère automatiquement les payloads (Claim Check)
+// SubscribeFlux s'abonne au canal et récupère automatiquement les payloads (Claim Check).
 func (c *Collection) SubscribeFlux(ctx context.Context) (<-chan []byte, context.CancelFunc) {
 	channelKey := c.Key("channel")
 
-	// Sous-contexte pour pouvoir annuler l'écoute proprement
 	subCtx, cancel := context.WithCancel(ctx)
-	pubsub := c.Client.Subscribe(subCtx, channelKey)
+	var pubsub *redis.PubSub
+	if redisgo.IsClusterClient(c.Client) {
+		pubsub = c.Client.SSubscribe(subCtx, channelKey)
+	} else {
+		pubsub = c.Client.Subscribe(subCtx, channelKey)
+	}
 	ch := make(chan []byte, 100)
 
 	go func() {
@@ -805,13 +985,11 @@ func (c *Collection) SubscribeFlux(ctx context.Context) (<-chan []byte, context.
 			messageID := msg.Payload
 			payloadKey := c.Key("msg:" + messageID)
 
-			// Récupération du payload lourd stocké juste avant la publication
 			readCtx, readCancel := context.WithTimeout(subCtx, 2*time.Second)
 			data, err := c.Client.Get(readCtx, payloadKey).Bytes()
 			readCancel()
 
 			if err != nil {
-				// Si absent (TTL expiré ou erreur), on l'ignore silencieusement
 				continue
 			}
 
@@ -827,22 +1005,31 @@ func (c *Collection) SubscribeFlux(ctx context.Context) (<-chan []byte, context.
 }
 
 // ============================================================================
-// 12. PUB/SUB (Mode DDD strict)
+// 12. PUB/SUB (Mode DDD strict — Sharded Pub/Sub O(1) en Cluster)
 // ============================================================================
 
-// Publish publie un message sur un canal Pub/Sub
+// Publish publie un message sur un canal Pub/Sub (SPUBLISH en mode Redis Cluster 7).
 func (c *Collection) Publish(ctx context.Context, id any, message any) error {
+	if redisgo.IsClusterClient(c.Client) {
+		return c.Client.SPublish(ctx, c.Key(id), message).Err()
+	}
 	return c.Client.Publish(ctx, c.Key(id), message).Err()
 }
 
-// PublishMultiple publie un même message sur plusieurs canaux via un Pipeline (O(1) RTT)
+// PublishMultiple publie un même message sur plusieurs canaux via un Pipeline (O(1) RTT).
+// Utilise SPUBLISH en mode Redis Cluster 7 pour éviter tout broadcast inter-nœuds.
 func (c *Collection) PublishMultiple(ctx context.Context, ids []int64, message any) error {
 	if len(ids) == 0 {
 		return nil
 	}
+	isCluster := redisgo.IsClusterClient(c.Client)
 	pipe := c.Client.Pipeline()
 	for _, id := range ids {
-		pipe.Publish(ctx, c.Key(id), message)
+		if isCluster {
+			pipe.SPublish(ctx, c.Key(id), message)
+		} else {
+			pipe.Publish(ctx, c.Key(id), message)
+		}
 	}
 	_, err := pipe.Exec(ctx)
 	return err
@@ -979,6 +1166,22 @@ func (c *Collection) Expire(ctx context.Context, id any, ttl time.Duration) erro
 	return c.Client.Expire(ctx, c.Key(id), ttl).Err()
 }
 
+// SetRawWithTTL stocke une valeur brute (JSON/string) avec un TTL explicite.
+func (c *Collection) SetRawWithTTL(ctx context.Context, id any, val any, ttl time.Duration) error {
+	if c == nil || c.Client == nil {
+		return errors.New("collection Redis non initialisée")
+	}
+	return c.Client.Set(ctx, c.Key(id), val, ttl).Err()
+}
+
+// GetBytes récupère la valeur brute d'une clé de la collection.
+func (c *Collection) GetBytes(ctx context.Context, id any) ([]byte, error) {
+	if c == nil || c.Client == nil {
+		return nil, errors.New("collection Redis non initialisée")
+	}
+	return c.Client.Get(ctx, c.Key(id)).Bytes()
+}
+
 const releaseLockScript = `
 if redis.call("GET", KEYS[1]) == ARGV[1] then
     return redis.call("DEL", KEYS[1])
@@ -1010,20 +1213,45 @@ func ReleaseCronLock(ctx context.Context, jobName, token string) error {
 	return releaseLockCompiled.Run(ctx, CronLocks.Client, []string{CronLocks.Key(jobName)}, token).Err()
 }
 
-// ScanKeys itère de manière non-bloquante via SCAN sur un motif de clés Redis (remplace KEYS O(N) bloquant).
+// ScanKeys itère de manière non-bloquante via SCAN sur un motif de clés Redis (Cluster-safe via ForEachMaster).
 func ScanKeys(ctx context.Context, pattern string, count int64) ([]string, error) {
-	if redisgo.Rdb == nil {
+	return ScanKeysOnClient(ctx, redisgo.CoreClient(), pattern, count)
+}
+
+// ScanKeysOnClient itère de manière non-bloquante via SCAN sur un client Redis spécifique (Cluster-safe).
+func ScanKeysOnClient(ctx context.Context, client redis.UniversalClient, pattern string, count int64) ([]string, error) {
+	if client == nil {
 		return nil, nil
 	}
 	if count <= 0 {
 		count = 200
 	}
+	if clusterClient, ok := client.(*redis.ClusterClient); ok {
+		var all []string
+		err := clusterClient.ForEachMaster(ctx, func(c context.Context, master *redis.Client) error {
+			var cursor uint64
+			for {
+				keys, nextCursor, errS := master.Scan(c, cursor, pattern, count).Result()
+				if errS != nil {
+					return errS
+				}
+				all = append(all, keys...)
+				cursor = nextCursor
+				if cursor == 0 {
+					break
+				}
+			}
+			return nil
+		})
+		return all, err
+	}
+
 	var (
 		cursor uint64
 		all    []string
 	)
 	for {
-		keys, nextCursor, err := redisgo.Rdb.Scan(ctx, cursor, pattern, count).Result()
+		keys, nextCursor, err := client.Scan(ctx, cursor, pattern, count).Result()
 		if err != nil {
 			return all, err
 		}

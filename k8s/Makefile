@@ -6,7 +6,7 @@ ENV_FILE ?= infrastructure.env
 OUT      ?= build
 export ENV_FILE
 
-.PHONY: help lint env-check check-fleet render render-strict validate diff install-cnpg deploy deploy-postgres-ha deploy-tls deploy-admin deploy-admin-ingress deploy-traefik verify inventory test clean
+.PHONY: help lint env-check check-fleet render render-strict validate diff install-cnpg deploy deploy-postgres-ha deploy-redis-core-cluster deploy-redis-object-pool deploy-redis-pubsub deploy-redis-3tier deploy-tls deploy-admin deploy-admin-ingress deploy-traefik verify inventory test clean
 help: ## list targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*## /\t/'
 
@@ -30,6 +30,14 @@ deploy: ## render + validate + context guard + diff + confirm + apply + wait (CO
 	@bash scripts/deploy.sh --env-file $(ENV_FILE) --stack core $(ARGS)
 deploy-postgres-ha: ## optional CloudNativePG HA PostgreSQL cluster (requires make install-cnpg)
 	@bash scripts/deploy.sh --env-file $(ENV_FILE) --stack postgres-ha $(ARGS)
+deploy-redis-core-cluster: ## optional Tier 1 Replicated Redis Core Cluster (DB_REDIS_CORE_CLUSTER_REPLICAS >= 6)
+	@bash scripts/deploy.sh --env-file $(ENV_FILE) --stack redis-core-cluster $(ARGS)
+deploy-redis-object-pool: ## optional Tier 2 Unreplicated Ephemeral Object Cache Pool (DB_REDIS_OBJECT_REPLICAS >= 3)
+	@bash scripts/deploy.sh --env-file $(ENV_FILE) --stack redis-object-pool $(ARGS)
+deploy-redis-pubsub: ## optional Tier 3 Ultra-Low-Latency Ephemeral Pub/Sub Bus (DB_REDIS_PUBSUB_REPLICAS >= 1)
+	@bash scripts/deploy.sh --env-file $(ENV_FILE) --stack redis-pubsub $(ARGS)
+deploy-redis-3tier: ## deploy all 3 optional Redis tiers together (core-cluster + object-pool + pubsub)
+	@bash scripts/deploy.sh --env-file $(ENV_FILE) --stack redis-3tier $(ARGS)
 deploy-tls: ## ClusterIssuers + Certificate (cert-manager must be installed)
 	@bash scripts/deploy.sh --env-file $(ENV_FILE) --stack tls $(ARGS)
 deploy-admin: ## optional admin UIs (still replicas 0, ClusterIP + port-forward only)

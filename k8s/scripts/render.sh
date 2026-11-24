@@ -9,7 +9,7 @@
 # Pipeline: lint templates -> validate env file -> resolve variables (template defaults for omitted ones) ->
 #           substitute with an explicit allowlist in a CLEAN environment (env -i) -> verify nothing unresolved remains ->
 #           parse every rendered file as YAML -> kustomize build the rendered tree -> write resolved.env + hash stamp.
-# Outputs (all under DIR, git-ignored):  rendered/  manifests/{core,tls,admin,traefik}.yaml  resolved.env  .render.meta
+# Outputs (all under DIR, git-ignored):  rendered/  manifests/{core,postgres-ha,redis-core-cluster,redis-object-pool,redis-pubsub,redis-3tier,tls,admin,admin-ingress,traefik}.yaml  resolved.env  .render.meta
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # shellcheck source=scripts/lib.sh
@@ -84,10 +84,20 @@ kbuild "$OUT/rendered/06-ingress/tls"                          > "$OUT/manifests
 kbuild "$OUT/rendered/08-operations/admin-tools"               > "$OUT/manifests/admin.yaml"
 kbuild "$OUT/rendered/08-operations/admin-tools/wireguard-ingress" > "$OUT/manifests/admin-ingress.yaml"
 cp "$OUT/rendered/06-ingress/optional/traefik-helmchartconfig.yaml" "$OUT/manifests/traefik.yaml"
+cp "$OUT/rendered/03-databases-ha/redis-core-cluster.yaml"          "$OUT/manifests/redis-core-cluster.yaml"
+cp "$OUT/rendered/03-databases-ha/redis-object-pool.yaml"           "$OUT/manifests/redis-object-pool.yaml"
+cp "$OUT/rendered/03-databases-ha/redis-pubsub.yaml"                "$OUT/manifests/redis-pubsub.yaml"
+{
+  cat "$OUT/rendered/03-databases-ha/redis-core-cluster.yaml"
+  printf '\n---\n'
+  cat "$OUT/rendered/03-databases-ha/redis-object-pool.yaml"
+  printf '\n---\n'
+  cat "$OUT/rendered/03-databases-ha/redis-pubsub.yaml"
+} > "$OUT/manifests/redis-3tier.yaml"
 python3 scripts/envtool.py resolved "$ENV_FILE" > "$OUT/resolved.env"; chmod 600 "$OUT/resolved.env"
 
 echo "==> 6/6 stamp"
 H="$(render_hash "$OUT")"
 { echo "hash=$H"; echo "strict=$STRICT"; echo "env_file=$ENV_FILE"; } > "$OUT/.render.meta"
-echo "rendered OK  hash=${H:0:16}  strict=$STRICT  ->  $OUT/manifests/{core,postgres-ha,tls,admin,admin-ingress,traefik}.yaml"
+echo "rendered OK  hash=${H:0:16}  strict=$STRICT  ->  $OUT/manifests/{core,postgres-ha,redis-core-cluster,redis-object-pool,redis-pubsub,redis-3tier,tls,admin,admin-ingress,traefik}.yaml"
 echo "Rendered files hold no secrets by construction, but are build artifacts: never commit them."

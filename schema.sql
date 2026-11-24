@@ -2797,6 +2797,203 @@ CREATE FUNCTION content.func_filter_unreferenced_article_media(
       );
 $$;
 
+-- =============================================================================
+-- ACTIVITY-AWARE SCHEDULER MAINTENANCE FUNCTIONS
+-- =============================================================================
+
+-- 1. Purge par lots des sessions expirées (auth.sessions)
+CREATE FUNCTION auth.func_purge_expired_sessions(
+    p_cutoff_ms bigint,
+    p_limit     integer DEFAULT 5000
+) RETURNS bigint
+    LANGUAGE plpgsql AS $$
+DECLARE
+    v_deleted bigint := 0;
+BEGIN
+    WITH victims AS (
+        SELECT id
+        FROM auth.sessions
+        WHERE expires_at < p_cutoff_ms
+        ORDER BY expires_at ASC
+        LIMIT GREATEST(1, COALESCE(p_limit, 5000))
+    )
+    DELETE FROM auth.sessions s
+    USING victims v
+    WHERE s.id = v.id;
+
+    GET DIAGNOSTICS v_deleted = ROW_COUNT;
+    RETURN v_deleted;
+END;
+$$;
+
+-- 2. Réconciliation des bannissements temporaires expirés (auth.users)
+CREATE FUNCTION auth.func_reconcile_expired_temp_bans(
+    p_now_ms bigint,
+    p_limit  integer DEFAULT 500
+) RETURNS TABLE(user_id bigint)
+    LANGUAGE sql AS $$
+    WITH candidates AS (
+        SELECT id
+        FROM auth.users
+        WHERE banned = true
+          AND ban_expires_at IS NOT NULL
+          AND ban_expires_at <= p_now_ms
+        ORDER BY ban_expires_at ASC
+        LIMIT GREATEST(1, COALESCE(p_limit, 500))
+    ),
+    updated AS (
+        UPDATE auth.users u
+        SET banned = false,
+            ban_reason = NULL,
+            ban_expires_at = NULL,
+            updated_at = p_now_ms
+        FROM candidates c
+        WHERE u.id = c.id
+        RETURNING u.id
+    )
+    SELECT id AS user_id FROM updated;
+$$;
+
+-- 3. Purge RGPD par lots des enregistrements soft-deleted anciens (posts, comments, messages, pois, poi_reviews, articles)
+CREATE FUNCTION util.func_purge_old_soft_deletes(
+    p_cutoff_ms bigint,
+    p_limit     integer DEFAULT 500
+) RETURNS bigint
+    LANGUAGE plpgsql AS $$
+DECLARE
+    v_lim       integer := GREATEST(1, COALESCE(p_limit, 500));
+    v_total     bigint := 0;
+    v_cnt       bigint := 0;
+    v_cutoff_ts timestamptz := to_timestamp(p_cutoff_ms / 1000.0);
+BEGIN
+    WITH victims AS (
+        SELECT id FROM content.poi_reviews
+        WHERE visibility = -1 AND updated_at < p_cutoff_ms
+        LIMIT v_lim
+    )
+    DELETE FROM content.poi_reviews t USING victims v WHERE t.id = v.id;
+    GET DIAGNOSTICS v_cnt = ROW_COUNT;
+    v_total := v_total + v_cnt;
+
+    WITH victims AS (
+        SELECT id FROM content.comments
+        WHERE visibility = -1 AND updated_at < v_cutoff_ts
+        LIMIT v_lim
+    )
+    DELETE FROM content.comments t USING victims v WHERE t.id = v.id;
+    GET DIAGNOSTICS v_cnt = ROW_COUNT;
+    v_total := v_total + v_cnt;
+
+    WITH victims AS (
+        SELECT id FROM content.posts
+        WHERE visibility = -1 AND updated_at < p_cutoff_ms
+        LIMIT v_lim
+    )
+    DELETE FROM content.posts t USING victims v WHERE t.id = v.id;
+    GET DIAGNOSTICS v_cnt = ROW_COUNT;
+    v_total := v_total + v_cnt;
+
+    WITH victims AS (
+        SELECT id FROM messaging.messages
+        WHERE visibility = false AND updated_at < p_cutoff_ms
+        LIMIT v_lim
+    )
+    DELETE FROM messaging.messages t USING victims v WHERE t.id = v.id;
+    GET DIAGNOSTICS v_cnt = ROW_COUNT;
+    v_total := v_total + v_cnt;
+
+    WITH victims AS (
+        SELECT id FROM content.pois
+        WHERE visibility = -1 AND updated_at < p_cutoff_ms
+        LIMIT v_lim
+    )
+    DELETE FROM content.pois t USING victims v WHERE t.id = v.id;
+    GET DIAGNOSTICS v_cnt = ROW_COUNT;
+    v_total := v_total + v_cnt;
+
+    WITH victims AS (
+        SELECT id FROM content.articles
+        WHERE visibility = -1 AND updated_at < p_cutoff_ms
+        LIMIT v_lim
+    )
+    DELETE FROM content.articles t USING victims v WHERE t.id = v.id;
+    GET DIAGNOSTICS v_cnt = ROW_COUNT;
+    v_total := v_total + v_cnt;
+
+    RETURN v_total;
+END;
+$$;
+
+-- 4. Auto-guérison par lots des compteurs dérivés (POIs rating/comment_count, Posts like_count/comment_count)
+CREATE FUNCTION util.func_reconcile_derived_counters(
+    p_limit integer DEFAULT 200
+) RETURNS bigint
+    LANGUAGE plpgsql AS $$
+DECLARE
+    v_lim   integer := GREATEST(1, COALESCE(p_limit, 200));
+    v_total bigint := 0;
+    v_cnt   bigint := 0;
+BEGIN
+    WITH agg AS (
+        SELECT
+            p.id,
+            COALESCE(AVG(r.rating), 0.0)::double precision AS calc_rating,
+            COUNT(r.id)::integer AS calc_count
+        FROM content.pois p
+        LEFT JOIN content.poi_reviews r
+          ON r.poi_id = p.id AND r.visibility >= 0
+        WHERE p.visibility >= 0
+        GROUP BY p.id
+        HAVING ABS(p.rating - COALESCE(AVG(r.rating), 0.0)) > 0.001
+            OR p.comment_count <> COUNT(r.id)
+        LIMIT v_lim
+    )
+    UPDATE content.pois p
+    SET rating = a.calc_rating,
+        comment_count = a.calc_count
+    FROM agg a
+    WHERE p.id = a.id;
+    GET DIAGNOSTICS v_cnt = ROW_COUNT;
+    v_total := v_total + v_cnt;
+
+    WITH post_agg AS (
+        SELECT
+            p.id,
+            (SELECT COUNT(*)::integer FROM content.likes l WHERE l.target_id = p.id AND l.target_type = 0) AS calc_likes,
+            (SELECT COUNT(*)::integer FROM content.comments c WHERE c.post_id = p.id AND c.visibility >= 0) AS calc_comments
+        FROM content.posts p
+        WHERE p.visibility >= 0
+        ORDER BY p.updated_at DESC
+        LIMIT v_lim
+    )
+    UPDATE content.posts p
+    SET like_count = a.calc_likes,
+        comment_count = a.calc_comments
+    FROM post_agg a
+    WHERE p.id = a.id
+      AND (p.like_count <> a.calc_likes OR p.comment_count <> a.calc_comments);
+    GET DIAGNOSTICS v_cnt = ROW_COUNT;
+    v_total := v_total + v_cnt;
+
+    RETURN v_total;
+END;
+$$;
+
+-- 5) Verrous consultatifs globaux multi-DC pour l'Activity-Aware Job Scheduler
+CREATE OR REPLACE FUNCTION util.func_try_scheduler_advisory_lock(p_lock_id BIGINT)
+RETURNS BOOLEAN
+LANGUAGE sql
+AS $$
+    SELECT pg_try_advisory_lock(p_lock_id);
+$$;
+
+CREATE OR REPLACE FUNCTION util.func_release_scheduler_advisory_lock(p_lock_id BIGINT)
+RETURNS BOOLEAN
+LANGUAGE sql
+AS $$
+    SELECT pg_advisory_unlock(p_lock_id);
+$$;
+
 /* =============================================================================
    END OF SCHEMA
    ============================================================================= */

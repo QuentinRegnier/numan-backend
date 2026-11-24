@@ -3,6 +3,7 @@ package like_service_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/like_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
@@ -10,6 +11,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
+	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/like_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
@@ -26,6 +28,9 @@ func TestTogglePostLike_AdminBonus(t *testing.T) {
 	modCallerID := int64(999)
 	normalCallerID := int64(111)
 	postID := int64(555)
+
+	// Marque l'auteur en ligne afin que DispatchNotification termine dès le broadcast WS sans cascade DB.
+	cache_service.MarkUserOnline(ctx, postAuthorID)
 
 	// Inscription du modérateur dans UsersLite
 	require.NoError(t, redis.UsersLite.SetObject(ctx, modCallerID, lite_models.UserLiteRequest{
@@ -69,4 +74,11 @@ func TestTogglePostLike_AdminBonus(t *testing.T) {
 	require.NoError(t, errPop)
 	assert.Contains(t, rawEvt, variables.TrustTriggerLikedByAdmin)
 	assert.Contains(t, rawEvt, "888")
+
+	// Attente deterministe des 2 goroutines de notification afin d'eviter toute fuite vers le test suivant.
+	require.Eventually(t, func() bool {
+		n, err := redis.NotificationsZSet.ZCard(ctx, postAuthorID)
+		return err == nil && n >= 2
+	}, 2*time.Second, 5*time.Millisecond)
+	time.Sleep(30 * time.Millisecond)
 }

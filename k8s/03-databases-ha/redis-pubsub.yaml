@@ -1,0 +1,165 @@
+# Tier 3 — Ultra-Low-Latency Ephemeral Pub/Sub Bus (WebSocket channels, Presence, Cuckoo & DynamicVariables sync).
+#
+# Characteristics:
+#   - Zero AOF, zero RDB (`--appendonly no --save ""`): pure RAM signaling bus.
+#   - Bounded client output buffer (`--client-output-buffer-limit pubsub 64mb 16mb 60`) protecting RAM against slow WS consumers.
+#   - Redis 7 Sharded Pub/Sub ready: when `DB_REDIS_PUBSUB_REPLICAS >= 3`, enables `--cluster-enabled yes` so Go WS hubs
+#     automatically route `ChannelUser` / `ChannelCommunity` through `SPUBLISH` / `SSUBSCRIBE` without cluster-wide fan-out!
+#   - `DB_REDIS_PUBSUB_REPLICAS=0` by default (collapses onto Tier 1 Core with zero overhead on single-server / Mac dev).
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-pubsub-headless
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: redis-pubsub
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: database
+    numan.io/redis-tier: pubsub
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: redis-pubsub
+  ports:
+    - {name: redis, port: 6379, targetPort: redis}
+    - {name: cluster-bus, port: 16379, targetPort: cluster-bus}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-pubsub
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: redis-pubsub
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: database
+    numan.io/redis-tier: pubsub
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: redis-pubsub
+  ports:
+    - {name: redis, port: 6379, targetPort: redis}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-pubsub
+  namespace: numan
+  labels:
+    app.kubernetes.io/name: redis-pubsub
+    app.kubernetes.io/part-of: numan
+    app.kubernetes.io/component: database
+    numan.io/redis-tier: pubsub
+spec:
+  serviceName: redis-pubsub-headless
+  replicas: ${DB_REDIS_PUBSUB_REPLICAS}
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis-pubsub
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis-pubsub
+        app.kubernetes.io/part-of: numan
+        app.kubernetes.io/component: database
+        numan.io/redis-tier: pubsub
+        numan.io/redis-cluster-member: "true"
+    spec:
+      serviceAccountName: redis
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 15
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: {type: RuntimeDefault}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis-pubsub
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["websocket", "db-redis"]
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: numan.io/node-profile
+                    operator: In
+                    values: ["all-in-one"]
+      containers:
+        - name: redis-pubsub
+          image: redis:7.4.2
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              SELF_FQDN="$POD_NAME.redis-pubsub-headless.numan.svc.cluster.local"
+              CLUSTER_FLAGS=""
+              if [ "$PUBSUB_REPLICAS" -ge 3 ]; then
+                CLUSTER_FLAGS="--cluster-enabled yes --cluster-config-file /tmp/nodes.conf --cluster-node-timeout 5000 --cluster-require-full-coverage no --cluster-announce-hostname $SELF_FQDN --cluster-preferred-endpoint-type hostname"
+              fi
+              # shellcheck disable=SC2086
+              exec redis-server \
+                --port 6379 \
+                --dir /tmp \
+                --appendonly no \
+                --save "" \
+                --maxmemory "$PUBSUB_MAXMEMORY" \
+                --maxmemory-policy allkeys-lru \
+                --client-output-buffer-limit pubsub 64mb 16mb 60 \
+                --requirepass "$REDIS_PASSWORD" \
+                --masterauth "$REDIS_PASSWORD" \
+                $CLUSTER_FLAGS
+          ports:
+            - {name: redis, containerPort: 6379}
+            - {name: cluster-bus, containerPort: 16379}
+          env:
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: redis-credentials, key: REDIS_PASSWORD}}
+            - name: REDISCLI_AUTH
+              valueFrom: {secretKeyRef: {name: redis-credentials, key: REDIS_PASSWORD}}
+            - name: PUBSUB_REPLICAS
+              value: "${DB_REDIS_PUBSUB_REPLICAS}"
+            - name: PUBSUB_MAXMEMORY
+              value: "${DB_REDIS_PUBSUB_MAXMEMORY}"
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli ping | grep -q PONG"]
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli ping | grep -q PONG"]
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            requests: {cpu: "100m", memory: "128Mi"}
+            limits: {cpu: "2", memory: "2Gi"}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 128Mi}}
