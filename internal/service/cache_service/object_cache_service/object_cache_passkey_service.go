@@ -12,7 +12,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
-	goredis "github.com/redis/go-redis/v9"
 )
 
 func passkeyUserKey(userID int64) string {
@@ -59,7 +58,7 @@ func GetUserPasskeysCascade(ctx context.Context, userID int64) ([]two_factor_mod
 	var cachedList []two_factor_models.PasskeyPayload
 	if errL1 := redis.Passkeys.GetObject(ctx, passkeyUserKey(userID), &cachedList); errL1 == nil && len(cachedList) > 0 {
 		return cachedList, nil
-	} else if errL1 != nil && !errors.Is(errL1, goredis.Nil) {
+	} else if errL1 != nil && !errors.Is(errL1, redis.ErrNotFound) {
 		numan_log.Warn(ctx).Err(errL1).Int64("user_id", userID).Msg("Erreur L1 lors de la lecture des Passkeys utilisateur")
 	}
 
@@ -120,7 +119,7 @@ func GetPasskeyByCredentialIDCascade(ctx context.Context, credentialID string) (
 	var cached two_factor_models.PasskeyPayload
 	if errL1 := redis.Passkeys.GetObject(ctx, passkeyCredKey(credentialID), &cached); errL1 == nil && cached.ID != 0 {
 		return cached, nil
-	} else if errL1 != nil && !errors.Is(errL1, goredis.Nil) {
+	} else if errL1 != nil && !errors.Is(errL1, redis.ErrNotFound) {
 		numan_log.Warn(ctx).Err(errL1).Msg("Erreur L1 lors de la lecture de la Passkey par CredentialID")
 	}
 

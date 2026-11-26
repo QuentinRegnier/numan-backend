@@ -53,7 +53,7 @@ func TestRedisCluster_CrossSlotEliminationAndShardedPubSub(t *testing.T) {
 		require.NoError(t, repoRedis.RankedPosts.ZAdd(ctx, "slot_a", 10.0, "p1"))
 		require.NoError(t, repoRedis.RankedPosts.ZAdd(ctx, "slot_b", 20.0, "p2"))
 		require.NoError(t, repoRedis.RankedPosts.ZUnionStore(ctx, "slot_dest", []any{"slot_a", "slot_b"}, "MAX"))
-		require.NoError(t, repoRedis.DelKeysOnClient(ctx, infraRedis.CoreClient(), repoRedis.RankedPosts.Key("slot_a"), repoRedis.RankedPosts.Key("slot_b"), repoRedis.RankedPosts.Key("slot_dest")))
+		require.NoError(t, repoRedis.DeleteKeysOnCore(ctx, repoRedis.RankedPosts.Key("slot_a"), repoRedis.RankedPosts.Key("slot_b"), repoRedis.RankedPosts.Key("slot_dest")))
 	})
 
 	t.Run("SInter_and_PFCount_AcrossDifferentSlots", func(t *testing.T) {
@@ -135,7 +135,7 @@ func TestRedisCluster_CrossSlotEliminationAndShardedPubSub(t *testing.T) {
 		assert.Equal(t, int64(777), got.ID)
 
 		require.NoError(t, object_cache_service.DeleteArticleFromCache(ctx, 777))
-		require.NoError(t, repoRedis.DelKeysOnClient(ctx, infraRedis.ObjectClient(), "articles:index:data", "articles:index:order", "articles:index:init"))
+		require.NoError(t, repoRedis.DeleteKeysOnObjects(ctx, "articles:index:data", "articles:index:order", "articles:index:init"))
 	})
 
 	t.Run("ChannelUser_PublishMultiple_UsesShardedPubSub_SPublish", func(t *testing.T) {

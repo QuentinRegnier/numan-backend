@@ -7,9 +7,9 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/api/websocket/ws_handlers"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
+	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,7 +28,7 @@ func TestWSHandlers_PayloadValidation(t *testing.T) {
 	_ = pkg.InitSnowflake(1)
 	ctx := context.Background()
 
-	initialKeys, err := infraRedis.Rdb.Keys(ctx, "*").Result()
+	initialKeys, err := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, err)
 
 	_, err = ws_handlers.HandleReadReceipt(ctx, 1, []byte(`{"conversation_id":0}`))
@@ -63,7 +63,7 @@ func TestWSHandlers_PayloadValidation(t *testing.T) {
 	err = ws_handlers.HandleTyping(ctx, 1, []byte(`{"conversation_id":0}`), true)
 	assertWSBadRequest(t, err)
 
-	finalKeys, err := infraRedis.Rdb.Keys(ctx, "*").Result()
+	finalKeys, err := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, initialKeys, finalKeys)
 }

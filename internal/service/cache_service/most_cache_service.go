@@ -57,7 +57,7 @@ func ComputeBoundedPriorityMultiplier(priorityLevel int) float64 {
 // TrackAndCountAuthorPostsInWindow enregistre la publication dans la fenêtre glissante 24h de l'auteur
 // et retourne le nombre de publications de cet auteur sur les dernières 24 heures (anti-flood).
 func TrackAndCountAuthorPostsInWindow(ctx context.Context, authorID int64, postID int64, createdAt time.Time) int {
-	if authorID <= 0 || redis.AuthorPostWindows == nil || redis.AuthorPostWindows.Client == nil {
+	if authorID <= 0 || !redis.AuthorPostWindows.IsReady() {
 		return 1
 	}
 	now := domain.NowTime()
@@ -111,7 +111,7 @@ func EvaluatePostAfterLike(ctx context.Context, postPayload post_models.PostPayl
 
 	normLang := variables.NormalizeLangForCache(postPayload.Lang)
 	postIDStr := strconv.FormatInt(postPayload.ID, 10)
-	if redis.RankedPosts != nil && redis.RankedPosts.Client != nil {
+	if redis.RankedPosts.IsReady() {
 		errRedis := redis.RankedPosts.ZAddWithCap(ctx, variables.StrictRankSubKey(variables.StrictTypeLikes, normLang), float64(postPayload.LikeCount), postIDStr, variables.MaxStrictElements)
 		if errRedis != nil {
 			numan_log.Warn(ctx).Err(errRedis).Int64("post_id", postPayload.ID).Msg("Impossible de mettre à jour le classement strict des likes par langue")
@@ -130,7 +130,7 @@ func EvaluatePostAfterView(ctx context.Context, postPayload post_models.PostPayl
 
 	normLang := variables.NormalizeLangForCache(postPayload.Lang)
 	postIDStr := strconv.FormatInt(postPayload.ID, 10)
-	if redis.RankedPosts != nil && redis.RankedPosts.Client != nil {
+	if redis.RankedPosts.IsReady() {
 		errRedis := redis.RankedPosts.ZAddWithCap(ctx, variables.StrictRankSubKey(variables.StrictTypeViews, normLang), float64(postPayload.ViewCount), postIDStr, variables.MaxStrictElements)
 		if errRedis != nil {
 			numan_log.Warn(ctx).Err(errRedis).Int64("post_id", postPayload.ID).Msg("Impossible de mettre à jour le classement strict des vues par langue")
@@ -337,7 +337,7 @@ func updateTrendZSETs(
 			}
 
 			// Indexation dans redis.TagPosts pour l'UI et la recherche par tag
-			if redis.TagPosts != nil && redis.TagPosts.Client != nil {
+			if redis.TagPosts.IsReady() {
 				_ = redis.TagPosts.ZAddWithCap(ctx, variables.TagIndexSubKey(normLang, cleanSlug), createdAtMs, postIDStr, variables.MaxPostsPerTagInRAM)
 				_ = redis.TagPosts.ZAddWithCap(ctx, cleanSlug, createdAtMs, postIDStr, variables.MaxPostsPerTagInRAM)
 			}
@@ -460,7 +460,7 @@ func UpdateScoreWithMetrics(
 	postIDStr := strconv.FormatInt(postID, 10)
 	scoreStrictRecent := float64(domain.TimeToMillis(createdAt))
 
-	if redis.RankedPosts != nil && redis.RankedPosts.Client != nil {
+	if redis.RankedPosts.IsReady() {
 		if err := redis.RankedPosts.ZAddWithCap(ctx, variables.StrictRankSubKey(variables.StrictTypeRecent, lang), scoreStrictRecent, postIDStr, variables.MaxStrictElements); err != nil {
 			appErr := numan_error.NewAppError(
 				http.StatusInternalServerError,
@@ -552,7 +552,7 @@ func EvictPostFromPublicTrends(ctx context.Context, post post_models.PostPayload
 	}
 
 	// 1. Purge des classements stricts (par langue + legacy)
-	if redis.RankedPosts != nil && redis.RankedPosts.Client != nil {
+	if redis.RankedPosts.IsReady() {
 		for _, strictType := range []string{variables.StrictTypeLikes, variables.StrictTypeViews, variables.StrictTypeRecent} {
 			_ = redis.RankedPosts.ZRem(ctx, variables.StrictRankSubKey(strictType, normLang), postIDStr)
 			_ = redis.RankedPosts.ZRem(ctx, "strict:"+strictType, postIDStr)
@@ -560,7 +560,7 @@ func EvictPostFromPublicTrends(ctx context.Context, post post_models.PostPayload
 	}
 
 	// 2. Purge des index de tags (TagPosts)
-	if redis.TagPosts != nil && redis.TagPosts.Client != nil {
+	if redis.TagPosts.IsReady() {
 		for tag := range tagSet {
 			_ = redis.TagPosts.ZRem(ctx, variables.TagIndexSubKey(normLang, tag), postIDStr)
 			_ = redis.TagPosts.ZRem(ctx, tag, postIDStr)
@@ -574,21 +574,21 @@ func EvictPostFromPublicTrends(ctx context.Context, post post_models.PostPayload
 		year, isoWeek := ts.ISOWeek()
 		weekStr := fmt.Sprintf("%d-W%02d", year, isoWeek)
 
-		if redis.TrendGlobalHourly != nil && redis.TrendGlobalHourly.Client != nil {
+		if redis.TrendGlobalHourly.IsReady() {
 			_ = redis.TrendGlobalHourly.ZRem(ctx, variables.TrendGlobalHourlySubKey(normLang, hourStr), postIDStr)
 			_ = redis.TrendGlobalHourly.ZRem(ctx, hourStr, postIDStr)
 		}
-		if redis.TrendGlobalDaily != nil && redis.TrendGlobalDaily.Client != nil {
+		if redis.TrendGlobalDaily.IsReady() {
 			_ = redis.TrendGlobalDaily.ZRem(ctx, variables.TrendGlobalDailySubKey(normLang, dateStr), postIDStr)
 			_ = redis.TrendGlobalDaily.ZRem(ctx, dateStr, postIDStr)
 		}
 
 		for tag := range tagSet {
-			if redis.TrendTagDaily != nil && redis.TrendTagDaily.Client != nil {
+			if redis.TrendTagDaily.IsReady() {
 				_ = redis.TrendTagDaily.ZRem(ctx, variables.TrendTagDailySubKey(normLang, tag, dateStr), postIDStr)
 				_ = redis.TrendTagDaily.ZRem(ctx, fmt.Sprintf("%s:%s", tag, dateStr), postIDStr)
 			}
-			if redis.TrendTagWeekly != nil && redis.TrendTagWeekly.Client != nil {
+			if redis.TrendTagWeekly.IsReady() {
 				_ = redis.TrendTagWeekly.ZRem(ctx, variables.TrendTagWeeklySubKey(normLang, tag, weekStr), postIDStr)
 				_ = redis.TrendTagWeekly.ZRem(ctx, fmt.Sprintf("%s:%s", tag, weekStr), postIDStr)
 			}

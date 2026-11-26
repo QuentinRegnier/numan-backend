@@ -194,6 +194,30 @@ func registerCategoryCAlgoAndMigratedJobs(eng *Engine) {
 			return cp, err == nil, err
 		},
 	})
+
+	// 19. redis_orphan_cleanup (DEEP_IDLE, LocalDC, 24h, SLA 72h)
+	eng.Register(JobDefinition{
+		Name:         "redis_orphan_cleanup",
+		Category:     "algo_cache",
+		Description:  "Cluster-safe SCAN + Snowflake grace-window + batched Postgres L3 verification + UNLINK orphan Redis keys (dry-run by default)",
+		MinRegime:    scheduler_models.RegimeDeepIdle,
+		LockScope:    scheduler_models.LockScopeLocalDC,
+		MinInterval:  24 * time.Hour,
+		MaxStaleness: 72 * time.Hour,
+		Fn:           runRedisOrphanCleanup,
+	})
+}
+
+func runRedisOrphanCleanup(ctx context.Context, cp scheduler_models.JobCheckpoint, trickle bool) (scheduler_models.JobCheckpoint, bool, error) {
+	summary, err := worker.RunRedisOrphanCleanupCycle(ctx, func(_ int64) error {
+		return pauseIfTrickle(ctx, trickle)
+	})
+	cp.ItemsDone = summary.OrphansUnlinked
+	cp.ItemsTotal = summary.KeysScanned
+	if err != nil {
+		return cp, false, err
+	}
+	return cp, true, nil
 }
 
 func runLSHAffinityMatrixReindex(ctx context.Context, cp scheduler_models.JobCheckpoint, trickle bool) (scheduler_models.JobCheckpoint, bool, error) {

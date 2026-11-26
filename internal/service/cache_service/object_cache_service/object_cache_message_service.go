@@ -11,7 +11,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
-	goredis "github.com/redis/go-redis/v9"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -25,7 +24,7 @@ func GetMessageFromObjectCache(ctx context.Context, messageID int64) (message_mo
 
 	errRedis := redis.Messages.GetObject(ctx, messageID, &messagePayload)
 	if errRedis != nil {
-		if errors.Is(errRedis, goredis.Nil) {
+		if errors.Is(errRedis, redis.ErrNotFound) {
 			return message_models.MessagePayload{}, numan_error.NewNotFound(numan_error.CodeNotFound, "Message introuvable dans le cache.", errRedis)
 		}
 		return message_models.MessagePayload{}, numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeCacheError, "Impossible de récupérer le message depuis l'Object Cache.", errRedis)

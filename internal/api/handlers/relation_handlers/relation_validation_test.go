@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/relation_handlers"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
+	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -52,7 +52,7 @@ func TestRelationHandlers_UnActionWithoutActionField(t *testing.T) {
 			assert.Equal(t, http.StatusOK, w.Code)
 
 			// Idempotent un-action on nonexistent relation must NOT enqueue any DB mutation
-			queueKeys, err := infraRedis.Rdb.Keys(c.Request.Context(), "request_cache:q:*").Result()
+			queueKeys, err := repoRedis.ScanKeys(c.Request.Context(), "request_cache:q:*", 200)
 			require.NoError(t, err)
 			assert.Empty(t, queueKeys)
 		})

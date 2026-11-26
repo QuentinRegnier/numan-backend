@@ -7,9 +7,9 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/member_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
+	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/member_service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,7 +29,7 @@ func TestMemberServices_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 	_ = pkg.InitSnowflake(1)
 	ctx := context.Background()
 
-	initialKeys, err := infraRedis.Rdb.Keys(ctx, "*").Result()
+	initialKeys, err := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, err)
 
 	_, err = member_service.AcceptCommunityRequest(ctx, 1, member_models.AcceptCommunityRequestInput{ConversationID: 0, TargetUserID: 2})
@@ -69,11 +69,11 @@ func TestMemberServices_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 	_, err = member_service.UpdateMemberSettings(ctx, 0, member_models.UpdateMemberSettingsInput{ConversationID: 1})
 	assertMemberServiceBadRequest(t, err)
 
-	finalKeys, err := infraRedis.Rdb.Keys(ctx, "*").Result()
+	finalKeys, err := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, initialKeys, finalKeys)
 
-	queueKeys, err := infraRedis.Rdb.Keys(ctx, "request_cache:q:*").Result()
+	queueKeys, err := repoRedis.ScanKeys(ctx, "request_cache:q:*", 200)
 	require.NoError(t, err)
 	assert.Empty(t, queueKeys)
 }

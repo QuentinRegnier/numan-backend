@@ -41,7 +41,7 @@ func SetWatermarkInSpeedCache(ctx context.Context, conversationID int64, userID 
 // GetWatermarksFromSpeedCache récupère tous les curseurs de lecture d'une conversation d'un seul coup (O(1)).
 func GetWatermarksFromSpeedCache(ctx context.Context, conversationID int64) (map[int64]int64, error) {
 
-	rawWatermarksMap, errRedis := redis.ConvWatermarks.HGetAll(ctx, conversationID).Result()
+	rawWatermarksMap, errRedis := redis.ConvWatermarks.HGetAll(ctx, conversationID)
 	if errRedis != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,

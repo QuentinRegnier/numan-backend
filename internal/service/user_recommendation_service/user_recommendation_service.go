@@ -23,7 +23,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/media_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
-	goredis "github.com/redis/go-redis/v9"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -548,8 +547,8 @@ func loadSocialExclusionsAndTargetFriends(ctx context.Context, userID int64) (ma
 	}
 
 	// 2. Lecture depuis le Hash SpeedRelations de l'utilisateur cible
-	if redis.SpeedRelations != nil {
-		if relMap, err := redis.SpeedRelations.HGetAll(ctx, userID).Result(); err == nil {
+	if redis.SpeedRelations.IsReady() {
+		if relMap, err := redis.SpeedRelations.HGetAll(ctx, userID); err == nil {
 			for otherIDStr, stateStr := range relMap {
 				otherID := pkg.ParseInt64(otherIDStr)
 				stateVal, errConv := strconv.Atoi(stateStr)
@@ -715,13 +714,8 @@ func loadSharedCommunitySizesBatch(ctx context.Context, targetUserID int64, viab
 		}
 	}
 
-	// Chargement groupé des participants de chaque communauté via un Pipeline Redis unique
-	pipe := redis.ConvParticipants.Client.Pipeline()
-	membersCmds := make(map[int64]*goredis.StringSliceCmd, len(convIDs))
-	for _, cID := range convIDs {
-		membersCmds[cID] = pipe.SMembers(ctx, redis.ConvParticipants.Key(cID))
-	}
-	_, _ = pipe.Exec(ctx)
+	// Chargement groupé des participants de chaque communauté via SMembersBatch (Cluster-safe)
+	membersByConv, _ := redis.ConvParticipants.SMembersBatch(ctx, convIDs)
 
 	candidateSet := make(map[int64]struct{}, len(viableCandidates))
 	for _, candID := range viableCandidates {
@@ -729,12 +723,8 @@ func loadSharedCommunitySizesBatch(ctx context.Context, targetUserID int64, viab
 	}
 
 	for _, cID := range convIDs {
-		cmd := membersCmds[cID]
-		if cmd == nil {
-			continue
-		}
-		memberStrs, errCmd := cmd.Result()
-		if errCmd != nil || len(memberStrs) == 0 {
+		memberStrs := membersByConv[cID]
+		if len(memberStrs) == 0 {
 			continue
 		}
 		memberIDs := pkg.ParseInt64List(memberStrs)
@@ -765,7 +755,7 @@ func loadCandidateVectorsBatch(ctx context.Context, viableCandidates []int64) ma
 	}
 
 	// 1. MGET massif sur redis.TelemetryProfiles
-	if redis.TelemetryProfiles != nil {
+	if redis.TelemetryProfiles.IsReady() {
 		if mgetRes, err := redis.TelemetryProfiles.GetMany(ctx, viableCandidates); err == nil && mgetRes != nil {
 			for uID, raw := range mgetRes.Found {
 				var profile lite_models.TelemetryProfileLite
@@ -785,7 +775,7 @@ func loadCandidateVectorsBatch(ctx context.Context, viableCandidates []int64) ma
 			missingIDs = append(missingIDs, uID)
 		}
 	}
-	if len(missingIDs) > 0 && redis.UserSettings != nil {
+	if len(missingIDs) > 0 && redis.UserSettings.IsReady() {
 		if mgetSettings, err := redis.UserSettings.GetMany(ctx, missingIDs); err == nil && mgetSettings != nil {
 			for uID, raw := range mgetSettings.Found {
 				var s user_settings_models.UserSettingsPayload
@@ -801,7 +791,7 @@ func loadCandidateVectorsBatch(ctx context.Context, viableCandidates []int64) ma
 	return vectors
 }
 
-// countMutualFriendsBatch calcule en un seul Pipeline Redis le nombre d'amis en commun
+// countMutualFriendsBatch calcule en un seul batch Redis le nombre d'amis en commun
 // entre l'utilisateur cible et chaque candidat viable (aucune requête N+1).
 func countMutualFriendsBatch(
 	ctx context.Context,
@@ -809,29 +799,25 @@ func countMutualFriendsBatch(
 	viableCandidates []int64,
 ) map[int64]int {
 	counts := make(map[int64]int, len(viableCandidates))
-	if len(targetFriends) == 0 || len(viableCandidates) == 0 || redis.SpeedRelationsIndex == nil {
+	if len(targetFriends) == 0 || len(viableCandidates) == 0 || !redis.SpeedRelationsIndex.IsReady() {
 		return counts
 	}
 
-	pipe := redis.SpeedRelationsIndex.Client.Pipeline()
-	cmds := make(map[int64]*goredis.StringSliceCmd, len(viableCandidates))
-	for _, candID := range viableCandidates {
-		zsetKey := redis.SpeedRelationsIndex.Key(fmt.Sprintf("in:%d:%d", variables.RelationStateFriend, candID))
-		cmds[candID] = pipe.ZRevRange(ctx, zsetKey, 0, -1)
+	subKeys := make([]any, len(viableCandidates))
+	for i, candID := range viableCandidates {
+		subKeys[i] = fmt.Sprintf("in:%d:%d", variables.RelationStateFriend, candID)
 	}
-	_, _ = pipe.Exec(ctx)
+	friendLists, err := redis.SpeedRelationsIndex.ZRevRangeBatch(ctx, subKeys, 0, -1)
+	if err != nil {
+		return counts
+	}
 
-	for _, candID := range viableCandidates {
-		cmd := cmds[candID]
-		if cmd == nil {
-			continue
-		}
-		friendStrs, err := cmd.Result()
-		if err != nil || len(friendStrs) == 0 {
+	for i, candID := range viableCandidates {
+		if i >= len(friendLists) || len(friendLists[i]) == 0 {
 			continue
 		}
 		mutual := 0
-		for _, fID := range pkg.ParseInt64List(friendStrs) {
+		for _, fID := range pkg.ParseInt64List(friendLists[i]) {
 			if _, isTargetFriend := targetFriends[fID]; isTargetFriend {
 				mutual++
 			}

@@ -1,9 +1,6 @@
 package variables
 
-import "time"
-
-// Configuration temporelle et limites OBJECT Cache (Modifiables à chaud)
+// Limites OBJECT Cache (Modifiables à chaud ; les TTL Redis sont centralisés dans redis_ttl_constants.go)
 var (
-	StandardTTL        = 7 * 24 * time.Hour // TTL STANDARD : 7 Jours
 	MaxZsetPostComment = 100
 )

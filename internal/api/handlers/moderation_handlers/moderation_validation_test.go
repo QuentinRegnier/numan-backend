@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
@@ -71,7 +70,7 @@ func TestModerationHandlers_ValidationAndDefaults(t *testing.T) {
 		assert.Contains(t, w.Body.String(), "INVALID_PAYLOAD")
 	}
 
-	keys, errKeys := infraRedis.Rdb.Keys(ctx, "*").Result()
+	keys, errKeys := redis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, errKeys)
 	assert.Empty(t, keys, "Invalid moderation handler calls must not mutate Redis")
 

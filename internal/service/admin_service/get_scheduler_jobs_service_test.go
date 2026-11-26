@@ -36,6 +36,6 @@ func TestGetSchedulerJobsService(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, "dc-eu-1", ov.Datacenter)
-		assert.Len(t, ov.Jobs, 24)
+		assert.Len(t, ov.Jobs, 25)
 	})
 }

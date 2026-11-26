@@ -8,9 +8,9 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/post_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/saved_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
+	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/saved_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
@@ -40,7 +40,7 @@ func TestSavedServices_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 	}
 	require.NoError(t, object_cache_service.SetPostInObjectCache(ctx, seedPost))
 
-	initialKeys, err := infraRedis.Rdb.Keys(ctx, "*").Result()
+	initialKeys, err := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, err)
 
 	// Invalid userID, postID, or action must fail with BadRequest BEFORE any Redis ZSET or queue write
@@ -58,11 +58,11 @@ func TestSavedServices_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 	_, err = saved_service.GetSavedPosts(ctx, 402, saved_models.GetSavedInput{Limit: 101})
 	assertSavedBadRequest(t, err)
 
-	finalKeys, err := infraRedis.Rdb.Keys(ctx, "*").Result()
+	finalKeys, err := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, initialKeys, finalKeys)
 
-	queueKeys, err := infraRedis.Rdb.Keys(ctx, "request_cache:q:*").Result()
+	queueKeys, err := repoRedis.ScanKeys(ctx, "request_cache:q:*", 200)
 	require.NoError(t, err)
 	assert.Empty(t, queueKeys)
 }
@@ -91,7 +91,7 @@ func TestToggleSaved_ValidAndNotFound(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []int64{9201}, ids)
 
-	queueKeys, err := infraRedis.Rdb.Keys(ctx, "request_cache:q:*").Result()
+	queueKeys, err := repoRedis.ScanKeys(ctx, "request_cache:q:*", 200)
 	require.NoError(t, err)
 	assert.NotEmpty(t, queueKeys)
 }

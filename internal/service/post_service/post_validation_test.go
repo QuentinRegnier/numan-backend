@@ -8,9 +8,9 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/post_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
+	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/post_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
@@ -42,7 +42,7 @@ func TestPostServices_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 	}
 	require.NoError(t, object_cache_service.SetPostInObjectCache(ctx, seedPost))
 
-	initialKeys, err := infraRedis.Rdb.Keys(ctx, "*").Result()
+	initialKeys, err := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, err)
 
 	// 1. CreatePost invalid cases (missing media, content > 2200 runes, invalid hashtag, invalid visibility, bad media ID)
@@ -112,7 +112,7 @@ func TestPostServices_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 	assertServiceBadRequest(t, err)
 
 	// Verify seedPost wasn't modified and no queues or extra keys were created
-	finalKeys, err := infraRedis.Rdb.Keys(ctx, "*").Result()
+	finalKeys, err := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, initialKeys, finalKeys)
 
@@ -121,7 +121,7 @@ func TestPostServices_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 	assert.Equal(t, "Original post", afterSeed.Content)
 	assert.Equal(t, variables.PostVisibilityAll, afterSeed.Visibility)
 
-	queueKeys, err := infraRedis.Rdb.Keys(ctx, "request_cache:q:*").Result()
+	queueKeys, err := repoRedis.ScanKeys(ctx, "request_cache:q:*", 200)
 	require.NoError(t, err)
 	assert.Empty(t, queueKeys)
 }

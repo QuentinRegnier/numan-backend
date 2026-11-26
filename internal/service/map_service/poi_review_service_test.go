@@ -4,13 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/lite_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/map_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
@@ -22,7 +20,7 @@ import (
 )
 
 func TestPOIReviewService_UnifiedRatingTextFilterUpdateDelete(t *testing.T) {
-	_ = test.SetupTestRedis(t)
+	srv := test.SetupTestRedis(t)
 	_ = pkg.InitSnowflake(1)
 	ctx := context.Background()
 
@@ -107,28 +105,18 @@ func TestPOIReviewService_UnifiedRatingTextFilterUpdateDelete(t *testing.T) {
 	assert.Equal(t, int64(1002), getOut4.Reviews[0].UserID)
 
 	// 5. Verify EntityPOIReview events were enqueued cleanly to Redis (and NOT EntityPOI full updates)
-	keys, err := infraRedis.Rdb.Keys(ctx, "request_cache:q:*").Result()
-	require.NoError(t, err)
 	var reviewEventCount, reviewSoftDeleteCount, poiFullUpdateCount int
-	for _, k := range keys {
-		items, errL := infraRedis.Rdb.LRange(ctx, k, 0, -1).Result()
-		require.NoError(t, errL)
-		for _, raw := range items {
-			var evt redis.AsyncEvent
-			dec := json.NewDecoder(strings.NewReader(raw))
-			dec.UseNumber()
-			require.NoError(t, dec.Decode(&evt))
-			if evt.Type == redis.EntityPOIReview {
-				reviewEventCount++
-				if evt.Action == redis.ActionDelete {
-					reviewSoftDeleteCount++
-					payloadMap, ok := evt.Payload.(map[string]any)
-					require.True(t, ok)
-					assert.Equal(t, json.Number("-1"), payloadMap["visibility"])
-				}
-			} else if evt.Type == redis.EntityPOI {
-				poiFullUpdateCount++
+	for _, evt := range test.ReadWriteBehindEvents(t, srv) {
+		if evt.Type == redis.EntityPOIReview {
+			reviewEventCount++
+			if evt.Action == redis.ActionDelete {
+				reviewSoftDeleteCount++
+				payloadMap, ok := evt.Payload.(map[string]any)
+				require.True(t, ok)
+				assert.Equal(t, json.Number("-1"), payloadMap["visibility"])
 			}
+		} else if evt.Type == redis.EntityPOI {
+			poiFullUpdateCount++
 		}
 	}
 	assert.Equal(t, 4, reviewEventCount)      // 3 creates/updates + 1 soft delete

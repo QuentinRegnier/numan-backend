@@ -20,7 +20,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
-	goredis "github.com/redis/go-redis/v9"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -458,7 +457,7 @@ func ResetMemberUnreadCountInSpeedCache(ctx context.Context, conversationID int6
 	compositeMemberKey := fmt.Sprintf("%d:%d", conversationID, userID)
 
 	errGet := redis.ConvMembers.GetObject(ctx, compositeMemberKey, &memberLitePayload)
-	if errGet != nil && !errors.Is(errGet, goredis.Nil) {
+	if errGet != nil && !errors.Is(errGet, redis.ErrNotFound) {
 		numan_log.Warn(ctx).Err(errGet).Int64("conversation_id", conversationID).Int64("user_id", userID).Msg("Erreur Redis lors de la lecture du membre pour remise à zéro des non-lus")
 	}
 	if errGet == nil && memberLitePayload.ConversationID != 0 {

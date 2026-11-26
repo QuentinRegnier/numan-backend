@@ -8,19 +8,17 @@ import (
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/article_models"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
-	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestArticleObjectCache_SetGetDeleteAndPersistentTTL(t *testing.T) {
 	ctx := context.Background()
-	test.SetupTestRedis(t)
+	srv := test.SetupTestRedis(t)
 
 	art1 := article_models.ArticlePayload{
 		ID:                 1001,
@@ -38,17 +36,9 @@ func TestArticleObjectCache_SetGetDeleteAndPersistentTTL(t *testing.T) {
 	require.NoError(t, object_cache_service.SetArticleInCache(ctx, art1))
 
 	// Vérification critique : TTL = -1 (persistant / non-évictable sous volatile-lfu)
-	ttlData, err := infraRedis.Rdb.TTL(ctx, variables.RedisKeyArticlesIndexData).Result()
-	require.NoError(t, err)
-	assert.Equal(t, time.Duration(-1), ttlData)
-
-	ttlOrder, err := infraRedis.Rdb.TTL(ctx, variables.RedisKeyArticlesIndexOrder).Result()
-	require.NoError(t, err)
-	assert.Equal(t, time.Duration(-1), ttlOrder)
-
-	ttlInit, err := infraRedis.Rdb.TTL(ctx, variables.RedisKeyArticlesIndexInit).Result()
-	require.NoError(t, err)
-	assert.Equal(t, time.Duration(-1), ttlInit)
+	assert.Equal(t, time.Duration(-1), srv.KeyTTL(variables.RedisKeyArticlesIndexData))
+	assert.Equal(t, time.Duration(-1), srv.KeyTTL(variables.RedisKeyArticlesIndexOrder))
+	assert.Equal(t, time.Duration(-1), srv.KeyTTL(variables.RedisKeyArticlesIndexInit))
 
 	// Lecture L1 hit
 	got, err := object_cache_service.GetArticleFromCache(ctx, 1001)
@@ -62,14 +52,12 @@ func TestArticleObjectCache_SetGetDeleteAndPersistentTTL(t *testing.T) {
 	artDeleted.Visibility = variables.ArticleVisibilitySoftDeleted
 	require.NoError(t, object_cache_service.SetArticleInCache(ctx, artDeleted))
 
-	existsInHash, err := infraRedis.Rdb.HExists(ctx, variables.RedisKeyArticlesIndexData, "1001").Result()
-	require.NoError(t, err)
-	assert.False(t, existsInHash)
+	assert.False(t, srv.HashExists(variables.RedisKeyArticlesIndexData, "1001"))
 }
 
 func TestArticleObjectCache_ListOrderingAndPartialSelfHealing(t *testing.T) {
 	ctx := context.Background()
-	test.SetupTestRedis(t)
+	srv := test.SetupTestRedis(t)
 	defer test.ResetCollections()()
 	mongo.Articles = nil
 
@@ -118,8 +106,8 @@ func TestArticleObjectCache_ListOrderingAndPartialSelfHealing(t *testing.T) {
 
 	// Simuler une corruption partielle : supprimer 1002 du HASH mais le laisser dans le ZSET,
 	// et ajouter un membre orphelin 9999 dans le ZSET qui n'existe ni en L2 ni en L3
-	require.NoError(t, infraRedis.Rdb.HDel(ctx, variables.RedisKeyArticlesIndexData, "1002").Err())
-	require.NoError(t, infraRedis.Rdb.ZAdd(ctx, variables.RedisKeyArticlesIndexOrder, goredis.Z{Score: 1700000009000, Member: "9999"}).Err())
+	srv.HashDelete(variables.RedisKeyArticlesIndexData, "1002")
+	srv.ZSetAdd(variables.RedisKeyArticlesIndexOrder, "9999", 1700000009000)
 
 	list, err := object_cache_service.ListArticlesFromCache(ctx)
 	require.NoError(t, err)
@@ -132,9 +120,7 @@ func TestArticleObjectCache_ListOrderingAndPartialSelfHealing(t *testing.T) {
 	assert.Equal(t, int64(1001), list[2].ID)
 
 	// Vérifier que 1002 a été réécrit dans le HASH L1
-	healedExists, err := infraRedis.Rdb.HExists(ctx, variables.RedisKeyArticlesIndexData, "1002").Result()
-	require.NoError(t, err)
-	assert.True(t, healedExists)
+	assert.True(t, srv.HashExists(variables.RedisKeyArticlesIndexData, "1002"))
 
 	// Test GetArticleFromCache cascade L1 miss -> L3 hit -> L1 heal
 	art4, err := object_cache_service.GetArticleFromCache(ctx, 1004)
@@ -142,9 +128,7 @@ func TestArticleObjectCache_ListOrderingAndPartialSelfHealing(t *testing.T) {
 	assert.Equal(t, int64(1004), art4.ID)
 	assert.Equal(t, "Cascade L3 Article", art4.Title)
 
-	healed4, err := infraRedis.Rdb.HExists(ctx, variables.RedisKeyArticlesIndexData, "1004").Result()
-	require.NoError(t, err)
-	assert.True(t, healed4)
+	assert.True(t, srv.HashExists(variables.RedisKeyArticlesIndexData, "1004"))
 }
 
 func TestArticleObjectCache_RebuildOnWipedRedisAndEmptySeededIndex(t *testing.T) {

@@ -2,6 +2,7 @@ package test
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"math"
@@ -192,6 +193,239 @@ func (s *FakeRedisServer) getTTL(key string) time.Duration {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.ttls[key]
+}
+
+// DisableTestRedis simule temporairement une indisponibilité complète de Redis en test
+// sans exposer internal/infrastructure/redis aux suites de tests externes.
+func DisableTestRedis(t *testing.T) func() {
+	t.Helper()
+	prevRdb := infraRedis.Rdb
+	prevCore := infraRedis.RdbCore
+	prevObj := infraRedis.RdbObjects
+	prevPubSub := infraRedis.RdbPubSub
+
+	infraRedis.Rdb = nil
+	infraRedis.RdbCore = nil
+	infraRedis.RdbObjects = nil
+	infraRedis.RdbPubSub = nil
+	repoRedis.InitCacheDatabase()
+
+	return func() {
+		infraRedis.Rdb = prevRdb
+		infraRedis.RdbCore = prevCore
+		infraRedis.RdbObjects = prevObj
+		infraRedis.RdbPubSub = prevPubSub
+		repoRedis.InitCacheDatabase()
+	}
+}
+
+// Keys retourne toutes les clés présentes dans le serveur FakeRedis correspondant au préfixe/pattern (triées).
+func (s *FakeRedisServer) Keys(pattern string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	prefix := strings.TrimSuffix(pattern, "*")
+	seen := make(map[string]struct{})
+	addMatching := func(key string) {
+		if strings.HasPrefix(key, prefix) {
+			seen[key] = struct{}{}
+		}
+	}
+	for k := range s.strings {
+		addMatching(k)
+	}
+	for k := range s.zsets {
+		addMatching(k)
+	}
+	for k := range s.hashes {
+		addMatching(k)
+	}
+	for k := range s.sets {
+		addMatching(k)
+	}
+	for k := range s.hlls {
+		addMatching(k)
+	}
+	for k := range s.lists {
+		addMatching(k)
+	}
+	for k := range s.geos {
+		addMatching(k)
+	}
+	out := make([]string, 0, len(seen))
+	for k := range seen {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// KeyTTL retourne le TTL configuré sur une clé (-1 si persistante, -2 si absente, >0 sinon), aligné sur go-redis TTL().
+func (s *FakeRedisServer) KeyTTL(key string) time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.keyExistsLocked(key) {
+		return time.Duration(-2)
+	}
+	if d, ok := s.ttls[key]; ok && d > 0 {
+		return d
+	}
+	return time.Duration(-1)
+}
+
+func (s *FakeRedisServer) keyExistsLocked(key string) bool {
+	if _, ok := s.strings[key]; ok {
+		return true
+	}
+	if _, ok := s.hashes[key]; ok {
+		return true
+	}
+	if _, ok := s.sets[key]; ok {
+		return true
+	}
+	if _, ok := s.hlls[key]; ok {
+		return true
+	}
+	if _, ok := s.zsets[key]; ok {
+		return true
+	}
+	if _, ok := s.geos[key]; ok {
+		return true
+	}
+	if _, ok := s.lists[key]; ok {
+		return true
+	}
+	return false
+}
+
+// DeleteKey supprime une clé de toutes les structures internes du FakeRedisServer.
+func (s *FakeRedisServer) DeleteKey(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.strings, key)
+	delete(s.hashes, key)
+	delete(s.sets, key)
+	delete(s.hlls, key)
+	delete(s.zsets, key)
+	delete(s.geos, key)
+	delete(s.lists, key)
+	delete(s.ttls, key)
+}
+
+// ListRange retourne une copie des éléments d'une LIST Redis dans le FakeRedisServer.
+func (s *FakeRedisServer) ListRange(key string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	src := s.lists[key]
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]string, len(src))
+	copy(out, src)
+	return out
+}
+
+// ListPopLeft dépile le premier élément d'une LIST Redis dans le FakeRedisServer.
+func (s *FakeRedisServer) ListPopLeft(key string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	src := s.lists[key]
+	if len(src) == 0 {
+		return "", false
+	}
+	val := src[0]
+	if len(src) == 1 {
+		delete(s.lists, key)
+	} else {
+		s.lists[key] = src[1:]
+	}
+	return val, true
+}
+
+// HashSet définit un champ dans un HASH du FakeRedisServer.
+func (s *FakeRedisServer) HashSet(key, field, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.hashes[key] == nil {
+		s.hashes[key] = make(map[string]string)
+	}
+	s.hashes[key][field] = value
+}
+
+// HashGet lit un champ d'un HASH du FakeRedisServer.
+func (s *FakeRedisServer) HashGet(key, field string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if h, ok := s.hashes[key]; ok {
+		val, exists := h[field]
+		return val, exists
+	}
+	return "", false
+}
+
+// HashExists vérifie l'existence d'un champ dans un HASH du FakeRedisServer.
+func (s *FakeRedisServer) HashExists(key, field string) bool {
+	_, ok := s.HashGet(key, field)
+	return ok
+}
+
+// HashDelete supprime un champ d'un HASH du FakeRedisServer.
+func (s *FakeRedisServer) HashDelete(key, field string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if h, ok := s.hashes[key]; ok {
+		delete(h, field)
+		if len(h) == 0 {
+			delete(s.hashes, key)
+		}
+	}
+}
+
+// ZSetAdd ajoute ou met à jour un membre dans un ZSET du FakeRedisServer.
+func (s *FakeRedisServer) ZSetAdd(key, member string, score float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.zsets[key] == nil {
+		s.zsets[key] = make(map[string]float64)
+	}
+	s.zsets[key][member] = score
+}
+
+// SetMembers retourne les membres d'un SET du FakeRedisServer (triés).
+func (s *FakeRedisServer) SetMembers(key string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	set := s.sets[key]
+	if len(set) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(set))
+	for m := range set {
+		out = append(out, m)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ReadWriteBehindEvents inspecte les files Write-Behind (`request_cache:q:*`) sans vider les listes.
+func ReadWriteBehindEvents(t *testing.T, srv *FakeRedisServer) []repoRedis.AsyncEvent {
+	t.Helper()
+	if srv == nil {
+		return nil
+	}
+	keys := srv.Keys("request_cache:q:*")
+	var events []repoRedis.AsyncEvent
+	for _, k := range keys {
+		for _, raw := range srv.ListRange(k) {
+			var evt repoRedis.AsyncEvent
+			dec := json.NewDecoder(strings.NewReader(raw))
+			dec.UseNumber()
+			if err := dec.Decode(&evt); err != nil {
+				t.Fatalf("failed to decode write-behind event from %s: %v", k, err)
+			}
+			events = append(events, evt)
+		}
+	}
+	return events
 }
 
 func (s *FakeRedisServer) acceptLoop() {
@@ -569,7 +803,7 @@ func (s *FakeRedisServer) execCommandLocked(args []string) string {
 		}
 		return respArray(out)
 
-	case "DEL":
+	case "DEL", "UNLINK":
 		var deleted int64
 		for _, k := range args[1:] {
 			var found bool
@@ -785,8 +1019,13 @@ func (s *FakeRedisServer) execCommandLocked(args []string) string {
 				seen[k] = struct{}{}
 			}
 		}
-		keysOut := make([]string, 0, len(seen))
+		rawKeys := make([]string, 0, len(seen))
 		for k := range seen {
+			rawKeys = append(rawKeys, k)
+		}
+		sort.Strings(rawKeys)
+		keysOut := make([]string, 0, len(rawKeys))
+		for _, k := range rawKeys {
 			keysOut = append(keysOut, respBulk(k))
 		}
 		return respArray([]string{respBulk("0"), respArray(keysOut)})
@@ -1901,7 +2140,7 @@ func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
 func checkCrossSlot(cmd string, args []string) string {
 	var keys []string
 	switch cmd {
-	case "MGET", "DEL", "EXISTS", "SINTER", "PFCOUNT":
+	case "MGET", "DEL", "UNLINK", "EXISTS", "SINTER", "PFCOUNT":
 		if len(args) > 2 {
 			keys = args[1:]
 		}

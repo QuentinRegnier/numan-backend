@@ -21,7 +21,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/media_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	infraMinio "github.com/QuentinRegnier/numan-backend/internal/infrastructure/minio"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
@@ -487,7 +486,7 @@ func TestValidateAndActivateAdminArticleMedia_CrossAdminAndSemanticChecks(t *tes
 }
 
 func TestDeactivateAdminMediaBatch_SharedMediaProtection(t *testing.T) {
-	_ = test.SetupTestRedis(t)
+	srv := test.SetupTestRedis(t)
 	_ = pkg.InitSnowflake(1)
 	ctx := context.Background()
 	now := domain.NowMillis()
@@ -517,7 +516,7 @@ func TestDeactivateAdminMediaBatch_SharedMediaProtection(t *testing.T) {
 	}
 	rawOther, errM := msgpack.Marshal(otherArt)
 	require.NoError(t, errM)
-	require.NoError(t, infraRedis.Rdb.HSet(ctx, variables.RedisKeyArticlesIndexData, "888", string(rawOther)).Err())
+	srv.HashSet(variables.RedisKeyArticlesIndexData, "888", string(rawOther))
 
 	// Deactivate [6001, 6002] when updating article 777 -> 6001 must be protected, only 6002 soft-deleted
 	deactivated, errDeact := media_service.DeactivateAdminMediaBatch(ctx, []int64{6001, 6002}, 777)

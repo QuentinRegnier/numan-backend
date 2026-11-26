@@ -27,7 +27,7 @@ func RelationValue(ctx context.Context, targetID int64, callerID int64) int {
 	callerIDString := strconv.FormatInt(callerID, 10)
 
 	// ── ÉTAPE 1 : VÉRIFICATION RAM L1 (O(1)) ────────────────────────────────
-	cachedStateString, errRedis := redis.SpeedRelations.HGet(ctx, targetID, callerIDString).Result()
+	cachedStateString, errRedis := redis.SpeedRelations.HGet(ctx, targetID, callerIDString)
 	if errRedis == nil {
 		if relationState, errParse := strconv.Atoi(cachedStateString); errParse == nil {
 			return relationState
@@ -168,7 +168,7 @@ func GetSpeedRelationsIndex(ctx context.Context, userID int64) ([]int64, error) 
 // GetSpeedFollowingIndex récupère les créateurs/comptes suivis par userID (abonnements sortants + amis) en O(log N).
 // Utilisé par le Magasinier (clerk.go) pour l'optimisation "Justin Bieber" (injection des tags user_{authorID}).
 func GetSpeedFollowingIndex(ctx context.Context, userID int64) ([]int64, error) {
-	if redis.SpeedRelationsIndex == nil || redis.SpeedRelationsIndex.Client == nil {
+	if !redis.SpeedRelationsIndex.IsReady() {
 		return nil, nil
 	}
 	outFollowKey := fmt.Sprintf("out:%d:%d", variables.RelationStateFollow, userID)

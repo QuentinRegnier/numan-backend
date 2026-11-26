@@ -9,7 +9,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
-	goredis "github.com/redis/go-redis/v9"
 )
 
 // ############################################################################
@@ -33,7 +32,7 @@ func GetMediaFromObjectCache(ctx context.Context, mediaID int64) (media_models.M
 
 	errRedis := redis.Media.GetObject(ctx, mediaID, &mediaPayload)
 	if errRedis != nil {
-		if errors.Is(errRedis, goredis.Nil) {
+		if errors.Is(errRedis, redis.ErrNotFound) {
 			return media_models.MediaPayload{}, numan_error.NewNotFound(numan_error.CodeNotFound, "Média introuvable dans le cache.", errRedis)
 		}
 		return media_models.MediaPayload{}, numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeCacheError, "Impossible de récupérer le média depuis l'Object Cache.", errRedis)

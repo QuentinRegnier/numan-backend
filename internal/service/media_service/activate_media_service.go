@@ -13,7 +13,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	infraPostgres "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
@@ -407,8 +406,7 @@ func DeactivateAdminMediaBatch(ctx context.Context, candidateMediaIDs []int64, e
 // par au moins un autre article actif (`Visibility >= 0` et `ID != excludeArticleID`).
 func findArticleMediaReferencedInL1(ctx context.Context, candidateIDs []int64, excludeArticleID int64) map[int64]struct{} {
 	referenced := make(map[int64]struct{})
-	objClient := infraRedis.ObjectClient()
-	if len(candidateIDs) == 0 || objClient == nil {
+	if len(candidateIDs) == 0 || !redis.IsObjectPoolReady() {
 		return referenced
 	}
 
@@ -417,7 +415,7 @@ func findArticleMediaReferencedInL1(ctx context.Context, candidateIDs []int64, e
 		candidateSet[id] = struct{}{}
 	}
 
-	allRaw, err := objClient.HGetAll(ctx, variables.RedisKeyArticlesIndexData).Result()
+	allRaw, err := redis.HGetAllOnObjects(ctx, variables.RedisKeyArticlesIndexData)
 	if err != nil || len(allRaw) == 0 {
 		return referenced
 	}

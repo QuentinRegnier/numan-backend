@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cluster_service"
@@ -14,7 +13,7 @@ import (
 )
 
 func TestClusterService_HeartbeatDiscoveryAndGracefulUnregister(t *testing.T) {
-	_ = test.SetupTestRedis(t)
+	srv := test.SetupTestRedis(t)
 	ctx := context.Background()
 
 	// Enregistre un nœud API et un nœud WebSocket dans le datacenter de-fra, et un autre dans fr-par
@@ -73,13 +72,11 @@ func TestClusterService_HeartbeatDiscoveryAndGracefulUnregister(t *testing.T) {
 	assert.Equal(t, int64(0), topoAfterStop.TotalWSConnections)
 
 	// Simulation d'expiration TTL après crash brutal (la clé du nœud expire alors que le SET conserve encore l'entrée)
-	require.NoError(t, redis.Rdb.Del(ctx, "cluster:node:fr-par:monolith:1").Err())
+	srv.DeleteKey("cluster:node:fr-par:monolith:1")
 	topoExpired, appErr := cluster_service.GetDatacenterTopology(ctx, "fr-par")
 	require.Nil(t, appErr)
 	assert.Equal(t, 0, topoExpired.TotalNodes)
 
 	// Vérifie que le membre expiré a bien été purgé du SET du datacenter
-	members, err := redis.Rdb.SMembers(ctx, "cluster:dc:fr-par:nodes").Result()
-	require.NoError(t, err)
-	assert.Empty(t, members)
+	assert.Empty(t, srv.SetMembers("cluster:dc:fr-par:nodes"))
 }

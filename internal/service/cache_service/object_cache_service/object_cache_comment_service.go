@@ -12,7 +12,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
-	goredis "github.com/redis/go-redis/v9"
 )
 
 // ############################################################################
@@ -25,7 +24,7 @@ func GetCommentFromObjectCache(ctx context.Context, commentID int64) (comment_mo
 
 	errRedis := redis.Comments.GetObject(ctx, commentID, &commentPayload)
 	if errRedis != nil {
-		if errors.Is(errRedis, goredis.Nil) {
+		if errors.Is(errRedis, redis.ErrNotFound) {
 			return comment_models.CommentPayload{}, numan_error.NewNotFound(numan_error.CodeNotFound, "Commentaire introuvable dans le cache.", errRedis)
 		}
 		return comment_models.CommentPayload{}, numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeCacheError, "Impossible de récupérer le commentaire depuis l'Object Cache.", errRedis)

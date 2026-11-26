@@ -13,7 +13,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
-	goredis "github.com/redis/go-redis/v9"
 )
 
 func ticketLockKey(reportID int64) string {
@@ -41,7 +40,7 @@ func GetModerationTicket(ctx context.Context, reportID int64) (*moderation_model
 	}
 	var rec moderation_models.ModerationTicketRecord
 	if err := redis.ModerationTickets.GetObject(ctx, reportID, &rec); err != nil {
-		if errors.Is(err, goredis.Nil) {
+		if errors.Is(err, redis.ErrNotFound) {
 			return nil, numan_error.NewNotFound(numan_error.CodeNotFound, "Ticket de modération introuvable", err)
 		}
 		return nil, numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeCacheError, "Impossible de lire le ticket de modération depuis le cache.", err)
@@ -114,7 +113,7 @@ func ListModerationQueueTicketIDs(ctx context.Context, queueName string, offset,
 	stop := offset + limit - 1
 	items, err := redis.ModerationQueues.ZRevRangeWithScores(ctx, queueName, offset, stop)
 	if err != nil {
-		if errors.Is(err, goredis.Nil) {
+		if errors.Is(err, redis.ErrNotFound) {
 			return nil, nil, nil
 		}
 		return nil, nil, numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeCacheError, "Impossible de lister la file de modération.", err)
@@ -209,7 +208,7 @@ func GetExpiredTicketIDs(ctx context.Context, expirationSet string, nowMs int64,
 	}
 	members, err := redis.ModerationExpirations.ZRangeByScoreWithLimit(ctx, expirationSet, nowMs, limit)
 	if err != nil {
-		if errors.Is(err, goredis.Nil) {
+		if errors.Is(err, redis.ErrNotFound) {
 			return nil, nil
 		}
 		return nil, numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeCacheError, "Impossible de lire les échéances expirées.", err)
@@ -233,7 +232,7 @@ func GetOrInitModeratorStats(ctx context.Context, userID int64, defaultGrade int
 	if err == nil && stats.UserID == userID {
 		return &stats, nil
 	}
-	if err != nil && !errors.Is(err, goredis.Nil) {
+	if err != nil && !errors.Is(err, redis.ErrNotFound) {
 		return nil, numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeCacheError, "Impossible de lire les statistiques de gouvernance.", err)
 	}
 

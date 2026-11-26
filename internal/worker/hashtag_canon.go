@@ -20,30 +20,10 @@ import (
 // # WORKER : HASHTAG CANON (RÉSOLUTION DES FAUTES DE FRAPPE & ALIASING)
 // ############################################################################
 
-// startHashtagCanonCron lance un worker qui calcule les similarités (Levenshtein)
-// entre les tags communautaires toutes les 24h pour absorber les fautes de frappe.
-func startHashtagCanonCron(ctx context.Context) {
-	numan_log.Info(ctx).Msg("Démarrage du Canoniseur de Hashtags (Cron 24h)...")
-
-	go func() {
-		ticker := time.NewTicker(variables.HashtagCanonCronInterval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				processHashtagCanonicalization(ctx)
-			}
-		}
-	}()
-}
-
 // processHashtagCanonicalization est le cœur de l'algorithme de nettoyage et de fusion sémantique par langue.
 func processHashtagCanonicalization(ctx context.Context) {
 	token, acquired, errLock := redis.AcquireCronLock(ctx, "hashtag_canon", 10*time.Minute)
-	if errLock == nil && !acquired && token == "" && redis.CronLocks != nil && redis.CronLocks.Client != nil {
+	if errLock == nil && !acquired && token == "" && redis.CronLocks.IsReady() {
 		return
 	}
 	if token != "" {
@@ -61,7 +41,7 @@ func processHashtagCanonicalization(ctx context.Context) {
 	}
 
 	// Traitement également du réservoir legacy "active" sur la langue par défaut
-	if redis.Tags != nil && redis.Tags.Client != nil {
+	if redis.Tags.IsReady() {
 		if legacyTags, err := redis.Tags.SMembers(ctx, "active"); err == nil && len(legacyTags) > 0 {
 			for _, t := range legacyTags {
 				allTagsSet[t] = struct{}{}
@@ -80,7 +60,7 @@ func processHashtagCanonicalization(ctx context.Context) {
 }
 
 func processHashtagCanonForLang(ctx context.Context, lang int) []string {
-	if redis.Tags == nil || redis.Tags.Client == nil {
+	if !redis.Tags.IsReady() {
 		return nil
 	}
 	tags, err := redis.Tags.SMembers(ctx, variables.ActiveTagsSubKey(lang))
@@ -97,7 +77,7 @@ func processHashtagCanonForLang(ctx context.Context, lang int) []string {
 // 3. À longueur égale, ordre lexicographique déterministe.
 func selectCanonicalAndTypo(ctx context.Context, t1, t2 string, lang int) (canon string, typo string) {
 	var pop1, pop2 int64
-	if redis.TagPosts != nil && redis.TagPosts.Client != nil {
+	if redis.TagPosts.IsReady() {
 		pop1, _ = redis.TagPosts.ZCard(ctx, variables.TagIndexSubKey(lang, t1))
 		pop2, _ = redis.TagPosts.ZCard(ctx, variables.TagIndexSubKey(lang, t2))
 	}
@@ -183,21 +163,26 @@ func processTagListForCanon(ctx context.Context, tags []string, lang int) {
 	}
 
 	// ── ÉTAPE 3 : MISE À JOUR DU DICTIONNAIRE D'ALIAS & FUSION DES ZSETS ────
-	if redis.HashtagCanon != nil && redis.HashtagCanon.Client != nil {
-		pipe := redis.HashtagCanon.Pipeline()
+	if redis.HashtagCanon.IsReady() {
 		canonSubKey := variables.HashtagCanonSubKey(lang)
+		langFields := make(map[string]any, len(aliasMap))
 		for typo, canon := range aliasMap {
 			if typo == canon {
 				continue
 			}
-			pipe.HSet(ctx, redis.HashtagCanon.Key(canonSubKey), typo, canon)
-			if lang == variables.DefaultContentLanguage {
-				pipe.HSet(ctx, redis.HashtagCanon.Key("map"), typo, canon)
-			}
+			langFields[typo] = canon
 		}
-		if _, errExec := pipe.Exec(ctx); errExec != nil {
-			numan_log.Error(ctx).Err(errExec).Int("lang", lang).Msg("Échec critique lors de l'enregistrement des alias dans Redis (L1)")
-			return
+		if len(langFields) > 0 {
+			entries := map[any]map[string]any{
+				canonSubKey: langFields,
+			}
+			if lang == variables.DefaultContentLanguage {
+				entries["map"] = langFields
+			}
+			if errExec := redis.HashtagCanon.HSetMapBatch(ctx, entries); errExec != nil {
+				numan_log.Error(ctx).Err(errExec).Int("lang", lang).Msg("Échec critique lors de l'enregistrement des alias dans Redis (L1)")
+				return
+			}
 		}
 	}
 
@@ -216,25 +201,25 @@ func processTagListForCanon(ctx context.Context, tags []string, lang int) {
 }
 
 func mergeAliasTagZSETs(ctx context.Context, lang int, typo, canon, dateStr, weekStr string) {
-	if redis.TagPosts != nil && redis.TagPosts.Client != nil {
+	if redis.TagPosts.IsReady() {
 		canonIdx := variables.TagIndexSubKey(lang, canon)
 		typoIdx := variables.TagIndexSubKey(lang, typo)
 		_ = redis.TagPosts.ZUnionStore(ctx, canonIdx, []any{canonIdx, typoIdx}, "MAX")
 		_ = redis.TagPosts.DeleteObject(ctx, typoIdx)
 	}
-	if redis.TrendTagDaily != nil && redis.TrendTagDaily.Client != nil {
+	if redis.TrendTagDaily.IsReady() {
 		canonDaily := variables.TrendTagDailySubKey(lang, canon, dateStr)
 		typoDaily := variables.TrendTagDailySubKey(lang, typo, dateStr)
 		_ = redis.TrendTagDaily.ZUnionStore(ctx, canonDaily, []any{canonDaily, typoDaily}, "MAX")
 		_ = redis.TrendTagDaily.DeleteObject(ctx, typoDaily)
 	}
-	if redis.TrendTagWeekly != nil && redis.TrendTagWeekly.Client != nil {
+	if redis.TrendTagWeekly.IsReady() {
 		canonWeekly := variables.TrendTagWeeklySubKey(lang, canon, weekStr)
 		typoWeekly := variables.TrendTagWeeklySubKey(lang, typo, weekStr)
 		_ = redis.TrendTagWeekly.ZUnionStore(ctx, canonWeekly, []any{canonWeekly, typoWeekly}, "MAX")
 		_ = redis.TrendTagWeekly.DeleteObject(ctx, typoWeekly)
 	}
-	if redis.Tags != nil && redis.Tags.Client != nil {
+	if redis.Tags.IsReady() {
 		_ = redis.Tags.SRem(ctx, variables.ActiveTagsSubKey(lang), typo)
 	}
 }

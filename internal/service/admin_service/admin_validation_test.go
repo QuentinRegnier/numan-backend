@@ -8,9 +8,9 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/admin_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
+	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -113,7 +113,7 @@ func TestAdminServices_ValidationGuardsBeforeRedis(t *testing.T) {
 	assertAppErrorStatusAndCode(t, err, http.StatusBadRequest, numan_error.CodeInvalidPayload)
 
 	// Guard: Redis must remain completely untouched
-	keys, errKeys := infraRedis.Rdb.Keys(ctx, "*").Result()
+	keys, errKeys := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, errKeys)
 	assert.Empty(t, keys)
 }

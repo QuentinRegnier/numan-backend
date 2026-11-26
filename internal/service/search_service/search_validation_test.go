@@ -7,8 +7,8 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/search_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
+	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/search_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 	"github.com/stretchr/testify/assert"
@@ -44,7 +44,7 @@ func TestSearchServices_ValidationAndPagination(t *testing.T) {
 	_, err = search_service.SearchPosts(ctx, 1, search_models.SearchPostInput{Query: "go", Filter: "bad", Offset: 0, Limit: 10})
 	assertBadRequest(t, err)
 
-	keys, errKeys := infraRedis.Rdb.Keys(ctx, "*").Result()
+	keys, errKeys := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, errKeys)
 	assert.Empty(t, keys)
 

@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
@@ -24,7 +23,7 @@ func assertEmailBadRequest(t *testing.T, err error) {
 }
 
 func TestEmailService_ValidationGuardsAndSuccessEnqueue(t *testing.T) {
-	_ = test.SetupTestRedis(t)
+	srv := test.SetupTestRedis(t)
 	ctx := context.Background()
 
 	// Invalid inputs in DispatchEmail & DispatchSecurityEmail must reject with 400 and never enqueue
@@ -55,9 +54,7 @@ func TestEmailService_ValidationGuardsAndSuccessEnqueue(t *testing.T) {
 		})
 	}
 
-	keys, errKeys := infraRedis.Rdb.Keys(ctx, "*").Result()
-	require.NoError(t, errKeys)
-	assert.Empty(t, keys, "Aucun payload email invalide ne doit atteindre Redis")
+	assert.Empty(t, srv.Keys("*"), "Aucun payload email invalide ne doit atteindre Redis")
 
 	// Valid email enqueues cleanly (with userID=0 bypassing privacy cache)
 	require.NoError(t, DispatchEmail(ctx, 0, "alice@example.com", "welcome", "Bienvenue sur NUMAN", map[string]any{"name": "Alice"}))
@@ -66,9 +63,9 @@ func TestEmailService_ValidationGuardsAndSuccessEnqueue(t *testing.T) {
 	assert.Contains(t, raw, `"recipient_email":"alice@example.com"`)
 	assert.Contains(t, raw, `"template_name":"welcome"`)
 
-	// Valid security email enqueues cleanly (via raw Client.LPush on variables.EmailWorkerQueueName)
+	// Valid security email enqueues cleanly (via raw Core LPush on variables.EmailWorkerQueueName)
 	require.NoError(t, DispatchSecurityEmail(ctx, "bob@example.com", "otp_2fa", "Votre code 2FA", map[string]any{"code": "123456"}))
-	rawSec, errPopSec := infraRedis.Rdb.LPop(ctx, variables.EmailWorkerQueueName).Result()
+	rawSec, errPopSec := redis.LPopOnCore(ctx, variables.EmailWorkerQueueName)
 	require.NoError(t, errPopSec)
 	assert.Contains(t, rawSec, `"recipient_email":"bob@example.com"`)
 }

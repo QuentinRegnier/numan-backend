@@ -9,7 +9,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
-	goredis "github.com/redis/go-redis/v9"
 )
 
 // ############################################################################
@@ -22,7 +21,7 @@ func GetPostFromObjectCache(ctx context.Context, postID int64) (post_models.Post
 
 	errRedis := redis.Posts.GetObject(ctx, postID, &postPayload)
 	if errRedis != nil {
-		if errors.Is(errRedis, goredis.Nil) {
+		if errors.Is(errRedis, redis.ErrNotFound) {
 			return post_models.PostPayload{}, numan_error.NewNotFound(numan_error.CodeNotFound, "Publication introuvable dans le cache.", errRedis)
 		}
 		return post_models.PostPayload{}, numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeCacheError, "Impossible de récupérer le post depuis l'Object Cache.", errRedis)

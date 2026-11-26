@@ -12,7 +12,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/moderation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	infraPostgres "github.com/QuentinRegnier/numan-backend/internal/infrastructure/postgres"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
@@ -21,7 +20,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 	"go.mongodb.org/mongo-driver/bson"
 	libMongo "go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 const (
@@ -131,7 +129,7 @@ func ProcessMonthlyCleanBonus(ctx context.Context) {
 }
 
 func processMonthlyCleanBonus(ctx context.Context) {
-	if infraPostgres.ReadDB() == nil || infraRedis.Rdb == nil {
+	if infraPostgres.ReadDB() == nil || !redis.IsReady() {
 		return
 	}
 	thirtyDaysAgoMs := domain.NowMillis() - int64(30*24*time.Hour/time.Millisecond)
@@ -424,71 +422,4 @@ func enforceHardBanAndSteganoRevocation(ctx context.Context, userID int64, chang
 		Int64("user_id", userID).
 		Bool("major_infraction", change.IsMajorBan).
 		Msg("TrustScore Worker : Hard Ban exécuté, sessions révoquées et identifiant stéganographique banni.")
-}
-
-func startMonthlyTrustScoreCron(ctx context.Context) {
-	numan_log.Info(ctx).Msg("Démarrage du Cron Mensuel de Réputation (+0.02 / 30j sans infraction)...")
-	go func() {
-		cronInt := trustScoreMonthlyCronInt
-		if variables.TrustScoreMonthlyCronTick > 0 {
-			cronInt = variables.TrustScoreMonthlyCronTick
-		}
-		ticker := time.NewTicker(cronInt)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				runWithDistributedCronLock(ctx, "cron:monthly_trust_score", 30*time.Minute, processMonthlyTrustBonus)
-			}
-		}
-	}()
-}
-
-func processMonthlyTrustBonus(ctx context.Context) {
-	if infraPostgres.WriteDB() == nil {
-		return
-	}
-	rows, err := infraPostgres.WriteDB().QueryContext(ctx, "SELECT user_id, new_trust_score FROM auth.func_increment_monthly_trust_scores()")
-	if err != nil {
-		numan_log.Error(ctx).Err(err).Msg("TrustScore Cron : Échec de l'incrémentation mensuelle sur PostgreSQL")
-		return
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-
-	var count int
-	now := domain.NowTime()
-	nowMs := domain.TimeToMillis(now)
-	var mongoModels []libMongo.WriteModel
-
-	for rows.Next() {
-		var uid int64
-		var newScore float64
-		if errScan := rows.Scan(&uid, &newScore); errScan != nil {
-			continue
-		}
-		newScore = ClampTrustScore(newScore)
-		count++
-
-		var liteUser lite_models.UserLiteRequest
-		if errL1 := redis.UsersLite.GetObject(ctx, uid, &liteUser); errL1 == nil && liteUser.ID != 0 {
-			liteUser.TrustScore = newScore
-			_ = redis.UsersLite.SetObject(ctx, uid, liteUser)
-		}
-
-		mongoModels = append(mongoModels, libMongo.NewUpdateOneModel().
-			SetFilter(bson.M{"id": uid}).
-			SetUpdate(bson.M{"$set": bson.M{"trust_score": newScore, "updated_at": nowMs, "last_use": now}}))
-	}
-
-	if len(mongoModels) > 0 && mongo.Users != nil && mongo.Users.DB != nil {
-		_, _ = mongo.Users.DB.Collection(mongo.Users.Name).BulkWrite(ctx, mongoModels, options.BulkWrite().SetOrdered(false))
-	}
-	if count > 0 {
-		numan_log.Info(ctx).Int("rewarded_users", count).Msg("TrustScore Cron : Bonus d'ancienneté (+0.02) appliqué.")
-	}
 }

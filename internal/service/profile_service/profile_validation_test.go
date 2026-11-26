@@ -7,8 +7,8 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/profile_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
+	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/profile_service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,7 +27,7 @@ func TestGetProfile_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 	_ = test.SetupTestRedis(t)
 	ctx := context.Background()
 
-	initialKeys, err := infraRedis.Rdb.Keys(ctx, "*").Result()
+	initialKeys, err := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, err)
 
 	_, err = profile_service.GetProfile(ctx, 0, profile_models.GetProfileInput{})
@@ -45,7 +45,7 @@ func TestGetProfile_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 	_, err = profile_service.GetProfile(ctx, 1, profile_models.GetProfileInput{Offset: -1})
 	assertBadRequest(t, err)
 
-	finalKeys, err := infraRedis.Rdb.Keys(ctx, "*").Result()
+	finalKeys, err := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, initialKeys, finalKeys)
 }

@@ -8,7 +8,7 @@ import (
 	firebase "firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/messaging"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
-	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
+	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
@@ -53,18 +53,16 @@ func startPushNotificationWorker(ctx context.Context) {
 				return // Arrêt gracieux
 			default:
 				// BLPop bloque l'exécution jusqu'à ce qu'un élément soit disponible ou que le timeout expire
-				res, errPop := redis.Rdb.BLPop(ctx, variables.PushWorkerBLPopTimeout, variables.PushWorkerQueueName).Result()
+				rawJob, errPop := repoRedis.WorkerQueue.BLPop(ctx, variables.WorkerQueueFirebase, variables.PushWorkerBLPopTimeout)
 				if errPop != nil {
 					continue // File vide ou timeout atteint, on reboucle
 				}
 
-				if len(res) == 2 {
-					var job pushJob
-					if errUnmarshal := json.Unmarshal([]byte(res[1]), &job); errUnmarshal == nil {
-						processFirebaseJob(ctx, job)
-					} else {
-						numan_log.Warn(ctx).Err(errUnmarshal).Msg("Push Worker : Impossible de désérialiser le job FCM")
-					}
+				var job pushJob
+				if errUnmarshal := json.Unmarshal([]byte(rawJob), &job); errUnmarshal == nil {
+					processFirebaseJob(ctx, job)
+				} else {
+					numan_log.Warn(ctx).Err(errUnmarshal).Msg("Push Worker : Impossible de désérialiser le job FCM")
 				}
 			}
 		}

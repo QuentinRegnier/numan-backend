@@ -37,3 +37,11 @@ func RunReactionCleanupCycle(ctx context.Context) {
 func RunSavedCleanupCycle(ctx context.Context) {
 	processSavedCleanup(ctx)
 }
+
+// RunRedisOrphanCleanupCycle exécute un cycle complet du Redis Orphan Cleaner (SCAN + L3 Postgres + UNLINK)
+// piloté par l'Activity-Aware Job Scheduler (respecte le mode Dry-Run dynamique et la préemption trickle).
+func RunRedisOrphanCleanupCycle(ctx context.Context, onProgress func(keysScanned int64) error) (RedisOrphanCleanupSummary, error) {
+	cfg := DefaultRedisOrphanCleanupConfig()
+	cfg.OnProgress = onProgress
+	return processRedisOrphanCleanup(ctx, cfg)
+}

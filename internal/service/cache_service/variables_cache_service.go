@@ -11,7 +11,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
-	goredis "github.com/redis/go-redis/v9"
 )
 
 const (
@@ -77,7 +76,7 @@ func SaveDynamicVariablesPatchInCache(ctx context.Context, toSet map[string]stri
 func GetDynamicVariablesRemoteVersion(ctx context.Context) (int64, error) {
 	ver, err := redis.DynamicVariables.GetInt64(ctx, variablesVersionKey)
 	if err != nil {
-		if errors.Is(err, goredis.Nil) {
+		if errors.Is(err, redis.ErrNotFound) {
 			return 0, nil
 		}
 		return 0, numan_error.NewAppError(

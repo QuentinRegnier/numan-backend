@@ -7,9 +7,9 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/sync_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
+	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/sync_service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,7 +29,7 @@ func TestSyncServices_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 	_ = pkg.InitSnowflake(1)
 	ctx := context.Background()
 
-	initialKeys, err := infraRedis.Rdb.Keys(ctx, "*").Result()
+	initialKeys, err := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, err)
 
 	_, err = sync_service.GetDeltas(ctx, 1, sync_models.GetDeltasInput{SinceMs: -1})
@@ -56,7 +56,7 @@ func TestSyncServices_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 	_, err = sync_service.SyncMessages(ctx, 1, sync_models.SyncMessagesInput{ConversationID: 10, SinceMs: -1})
 	assertSyncServiceBadRequest(t, err)
 
-	finalKeys, err := infraRedis.Rdb.Keys(ctx, "*").Result()
+	finalKeys, err := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, initialKeys, finalKeys)
 }

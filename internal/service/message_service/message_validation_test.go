@@ -10,9 +10,9 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/member_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/message_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
+	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 	"github.com/stretchr/testify/assert"
@@ -49,7 +49,7 @@ func TestMessageServices_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 		Role:           variables.MemberRoleNormal,
 	}))
 
-	initialKeys, err := infraRedis.Rdb.Keys(ctx, "*").Result()
+	initialKeys, err := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, err)
 
 	// 1. External system message must still return 403 Forbidden (anti-usurpation precedence)
@@ -105,11 +105,11 @@ func TestMessageServices_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 	err = UnreactToMessage(ctx, senderID, message_models.UnreactMessageInput{MessageID: 0})
 	assertMsgServiceError(t, err, http.StatusBadRequest, numan_error.CodeInvalidPayload)
 
-	finalKeys, err := infraRedis.Rdb.Keys(ctx, "*").Result()
+	finalKeys, err := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, initialKeys, finalKeys)
 
-	queueKeys, err := infraRedis.Rdb.Keys(ctx, "request_cache:q:*").Result()
+	queueKeys, err := repoRedis.ScanKeys(ctx, "request_cache:q:*", 200)
 	require.NoError(t, err)
 	assert.Empty(t, queueKeys)
 

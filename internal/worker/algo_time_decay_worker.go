@@ -148,7 +148,7 @@ func runTierCron(ctx context.Context, jobs chan<- scoreJob, interval time.Durati
 			return
 		case <-ticker.C:
 			token, acquired, errLock := redis.AcquireCronLock(ctx, lockName, interval/2)
-			if errLock == nil && !acquired && token == "" && redis.CronLocks != nil && redis.CronLocks.Client != nil {
+			if errLock == nil && !acquired && token == "" && redis.CronLocks.IsReady() {
 				continue // Une autre instance worker_node exécute déjà ce tier
 			}
 

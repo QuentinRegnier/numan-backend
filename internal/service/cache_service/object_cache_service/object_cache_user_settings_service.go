@@ -13,7 +13,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
-	goredis "github.com/redis/go-redis/v9"
 )
 
 // normalizeUserSettings assainit les réglages historiques (ex: ancien mode visibilité privée 3).
@@ -34,7 +33,7 @@ func getUserSettings(ctx context.Context, userID int64) (user_settings_models.Us
 	// On utilise l'ID de l'utilisateur comme clé car c'est une relation 1-to-1 stricte
 	errRedis := redis.UserSettings.GetObject(ctx, userID, &userSettingsPayload)
 	if errRedis != nil {
-		if errors.Is(errRedis, goredis.Nil) {
+		if errors.Is(errRedis, redis.ErrNotFound) {
 			return user_settings_models.UserSettingsPayload{}, numan_error.NewNotFound(numan_error.CodeNotFound, "Paramètres utilisateur introuvables dans le cache.", errRedis)
 		}
 		return user_settings_models.UserSettingsPayload{}, numan_error.NewAppError(http.StatusInternalServerError, numan_error.CodeCacheError, "Impossible de récupérer les paramètres utilisateur depuis l'Object Cache.", errRedis)

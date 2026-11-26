@@ -9,7 +9,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
-	goredis "github.com/redis/go-redis/v9"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -25,7 +24,7 @@ func GetPOIFromObjectCache(ctx context.Context, poiID int64) (map_models.POIPayl
 	var poi map_models.POIPayload
 	errRedis := redis.POIs.GetObject(ctx, poiID, &poi)
 	if errRedis != nil {
-		if errors.Is(errRedis, goredis.Nil) {
+		if errors.Is(errRedis, redis.ErrNotFound) {
 			return map_models.POIPayload{}, numan_error.NewNotFound(numan_error.CodeNotFound, "Point d'intérêt introuvable dans le cache.", errRedis)
 		}
 		return map_models.POIPayload{}, numan_error.NewAppError(
@@ -168,7 +167,7 @@ func DeletePOIsFromObjectCache(ctx context.Context, poiIDs []int64) error {
 func SearchPOIIDsInBBox(ctx context.Context, swLat, swLng, neLat, neLng float64) ([]int64, error) {
 	ids, err := redis.POIsGeo.GeoSearchBBox(ctx, GlobalPOIGeoIndexKey, swLat, swLng, neLat, neLng, variables.MaxPOIGeoSearchCount)
 	if err != nil {
-		if errors.Is(err, goredis.Nil) {
+		if errors.Is(err, redis.ErrNotFound) {
 			return []int64{}, nil
 		}
 		return nil, numan_error.NewAppError(

@@ -13,7 +13,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
-	goredis "github.com/redis/go-redis/v9"
 )
 
 // ############################################################################
@@ -44,7 +43,7 @@ func startHashtagTrendCron(ctx context.Context) {
 // Ce worker est le propriétaire exclusif de redis.HashtagLeaderboard (et synchronise redis.Tags "trending" pour rétrocompatibilité).
 func processHashtagTrends(ctx context.Context) {
 	token, acquired, errLock := redis.AcquireCronLock(ctx, "hashtag_trends", variables.TrendCronInterval/2)
-	if errLock == nil && !acquired && token == "" && redis.CronLocks != nil && redis.CronLocks.Client != nil {
+	if errLock == nil && !acquired && token == "" && redis.CronLocks.IsReady() {
 		return
 	}
 	if token != "" {
@@ -63,7 +62,7 @@ func processHashtagTrends(ctx context.Context) {
 }
 
 func processHashtagTrendsForLang(ctx context.Context, lang int, now time.Time, dateStr, yesterdayStr string) {
-	if redis.TrendGlobalDaily == nil || redis.TrendGlobalDaily.Client == nil {
+	if !redis.TrendGlobalDaily.IsReady() {
 		return
 	}
 
@@ -152,12 +151,12 @@ func processHashtagTrendsForLang(ctx context.Context, lang int, now time.Time, d
 	}
 
 	// 3. Calcul mathématique du score de tendance par tag et plafonnement Top N
-	members := make([]*goredis.Z, 0, len(postScoresByTag))
+	members := make([]redis.ZMember, 0, len(postScoresByTag))
 	for tag, scoresMap := range postScoresByTag {
 		agesMap := postAgesByTag[tag]
 		trendScore := service.ComputeHashtagTrendScore(scoresMap, agesMap)
 		if trendScore > 0 {
-			members = append(members, &goredis.Z{
+			members = append(members, redis.ZMember{
 				Score:  trendScore,
 				Member: tag,
 			})
@@ -179,7 +178,7 @@ func processHashtagTrendsForLang(ctx context.Context, lang int, now time.Time, d
 	}
 
 	// 4. Remplacement atomique dans redis.HashtagLeaderboard par langue (+ "global" et Tags "trending" pour la langue par défaut)
-	if redis.HashtagLeaderboard != nil && redis.HashtagLeaderboard.Client != nil {
+	if redis.HashtagLeaderboard.IsReady() {
 		if err := redis.HashtagLeaderboard.ZSetReplaceAtomic(ctx, variables.HashtagLeaderboardSubKey(lang), members, 0); err != nil {
 			numan_log.Error(ctx).Err(err).Int("lang", lang).Msg("Échec critique lors de l'enregistrement du leaderboard de hashtags par langue")
 			return
@@ -188,7 +187,7 @@ func processHashtagTrendsForLang(ctx context.Context, lang int, now time.Time, d
 			_ = redis.HashtagLeaderboard.ZSetReplaceAtomic(ctx, "global", members, 0)
 		}
 	}
-	if lang == variables.DefaultContentLanguage && redis.Tags != nil && redis.Tags.Client != nil {
+	if lang == variables.DefaultContentLanguage && redis.Tags.IsReady() {
 		_ = redis.Tags.ZSetReplaceAtomic(ctx, "trending", members, 0)
 	}
 }

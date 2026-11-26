@@ -15,7 +15,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
-	goredis "github.com/redis/go-redis/v9"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -84,37 +83,27 @@ func RecordCommunityMessageActivityAt(ctx context.Context, conversationID int64,
 	}
 
 	dateBucket := CommunityRecoDateBucket(at)
-	ttlSec := int64(variables.CommunityRecoTelemetryTTL / time.Second)
-	if ttlSec <= 0 {
-		ttlSec = int64((8 * 24 * time.Hour) / time.Second)
+	ttl := variables.CommunityRecoTelemetryTTL
+	if ttl <= 0 {
+		ttl = 8 * 24 * time.Hour
 	}
 
-	msgCountKey := redis.CommunityRecoMsgCount.Key(dateBucket)
-	authorsKey := redis.CommunityRecoAuthors.Key(CommunityRecoAuthorsKey(conversationID, dateBucket))
-	convField := strconv.FormatInt(conversationID, 10)
-	senderVal := strconv.FormatInt(senderID, 10)
-
-	pipe := redis.CommunityRecoMsgCount.Pipeline()
-	pipe.HIncrBy(ctx, msgCountKey, convField, 1)
-	pipe.Do(ctx, "EXPIRE", msgCountKey, ttlSec, "NX")
-	pipe.PFAdd(ctx, authorsKey, senderVal)
-	pipe.Do(ctx, "EXPIRE", authorsKey, ttlSec, "NX")
-
-	if _, err := pipe.Exec(ctx); err != nil {
-		// Repli tolérant si Redis < 7 rejette l'option NX de EXPIRE
-		fallbackPipe := redis.CommunityRecoMsgCount.Pipeline()
-		fallbackPipe.HIncrBy(ctx, msgCountKey, convField, 1)
-		fallbackPipe.Expire(ctx, msgCountKey, variables.CommunityRecoTelemetryTTL)
-		fallbackPipe.PFAdd(ctx, authorsKey, senderVal)
-		fallbackPipe.Expire(ctx, authorsKey, variables.CommunityRecoTelemetryTTL)
-		if _, fallbackErr := fallbackPipe.Exec(ctx); fallbackErr != nil {
-			numan_log.Warn(ctx).
-				Err(fallbackErr).
-				Int64("conversation_id", conversationID).
-				Int64("sender_id", senderID).
-				Msg("Échec d'enregistrement télémétrie message communauté")
-			return fallbackErr
-		}
+	if err := redis.RecordCommunityMessageActivityPipeline(
+		ctx,
+		redis.CommunityRecoMsgCount,
+		redis.CommunityRecoAuthors,
+		dateBucket,
+		CommunityRecoAuthorsKey(conversationID, dateBucket),
+		strconv.FormatInt(conversationID, 10),
+		strconv.FormatInt(senderID, 10),
+		ttl,
+	); err != nil {
+		numan_log.Warn(ctx).
+			Err(err).
+			Int64("conversation_id", conversationID).
+			Int64("sender_id", senderID).
+			Msg("Échec d'enregistrement télémétrie message communauté")
+		return err
 	}
 	return nil
 }
@@ -135,29 +124,23 @@ func RecordCommunityMemberJoinAt(ctx context.Context, conversationID int64, at t
 	}
 
 	dateBucket := CommunityRecoDateBucket(at)
-	ttlSec := int64(variables.CommunityRecoTelemetryTTL / time.Second)
-	if ttlSec <= 0 {
-		ttlSec = int64((8 * 24 * time.Hour) / time.Second)
+	ttl := variables.CommunityRecoTelemetryTTL
+	if ttl <= 0 {
+		ttl = 8 * 24 * time.Hour
 	}
 
-	growthKey := redis.CommunityRecoGrowth.Key(dateBucket)
-	convField := strconv.FormatInt(conversationID, 10)
-
-	pipe := redis.CommunityRecoGrowth.Pipeline()
-	pipe.HIncrBy(ctx, growthKey, convField, 1)
-	pipe.Do(ctx, "EXPIRE", growthKey, ttlSec, "NX")
-
-	if _, err := pipe.Exec(ctx); err != nil {
-		fallbackPipe := redis.CommunityRecoGrowth.Pipeline()
-		fallbackPipe.HIncrBy(ctx, growthKey, convField, 1)
-		fallbackPipe.Expire(ctx, growthKey, variables.CommunityRecoTelemetryTTL)
-		if _, fallbackErr := fallbackPipe.Exec(ctx); fallbackErr != nil {
-			numan_log.Warn(ctx).
-				Err(fallbackErr).
-				Int64("conversation_id", conversationID).
-				Msg("Échec d'enregistrement télémétrie croissance communauté")
-			return fallbackErr
-		}
+	if _, err := redis.CommunityRecoGrowth.HIncrByWithExpireNX(
+		ctx,
+		dateBucket,
+		strconv.FormatInt(conversationID, 10),
+		1,
+		ttl,
+	); err != nil {
+		numan_log.Warn(ctx).
+			Err(err).
+			Int64("conversation_id", conversationID).
+			Msg("Échec d'enregistrement télémétrie croissance communauté")
+		return err
 	}
 	return nil
 }
@@ -184,19 +167,7 @@ func AddUserPublicCommunitiesBatch(ctx context.Context, memberships map[int64][]
 	if len(memberships) == 0 || !isCommunityRecoCacheReady() {
 		return nil
 	}
-	pipe := redis.UserPublicComms.Pipeline()
-	for userID, convIDs := range memberships {
-		if userID <= 0 || len(convIDs) == 0 {
-			continue
-		}
-		args := make([]any, len(convIDs))
-		for i, cid := range convIDs {
-			args[i] = cid
-		}
-		pipe.SAdd(ctx, redis.UserPublicComms.Key(userID), args...)
-	}
-	_, err := pipe.Exec(ctx)
-	return err
+	return redis.UserPublicComms.SAddBatch(ctx, memberships)
 }
 
 // RemoveUserPublicCommunity retire une communauté publique du SET d'un utilisateur.
@@ -232,14 +203,12 @@ func GetDirectFriendIDsCapped(ctx context.Context, userID int64, capLimit int) (
 		return []int64{}, nil
 	}
 
-	inKey := redis.SpeedRelationsIndex.Key(fmt.Sprintf("in:%d:%d", variables.RelationStateFriend, userID))
-	outKey := redis.SpeedRelationsIndex.Key(fmt.Sprintf("out:%d:%d", variables.RelationStateFriend, userID))
-
-	pipe := redis.SpeedRelationsIndex.Pipeline()
-	inCmd := pipe.ZRevRange(ctx, inKey, 0, int64(capLimit-1))
-	outCmd := pipe.ZRevRange(ctx, outKey, 0, int64(capLimit-1))
-	_, err := pipe.Exec(ctx)
-	if err != nil && !errors.Is(err, goredis.Nil) {
+	ids := []any{
+		fmt.Sprintf("in:%d:%d", variables.RelationStateFriend, userID),
+		fmt.Sprintf("out:%d:%d", variables.RelationStateFriend, userID),
+	}
+	lists, err := redis.SpeedRelationsIndex.ZRevRangeBatch(ctx, ids, 0, int64(capLimit-1))
+	if err != nil {
 		return nil, err
 	}
 
@@ -263,13 +232,11 @@ func GetDirectFriendIDsCapped(ctx context.Context, userID int64, capLimit int) (
 		}
 	}
 
-	if inRes, errIn := inCmd.Result(); errIn == nil {
-		appendList(inRes)
+	if len(lists) > 0 {
+		appendList(lists[0])
 	}
-	if len(friends) < capLimit {
-		if outRes, errOut := outCmd.Result(); errOut == nil {
-			appendList(outRes)
-		}
+	if len(friends) < capLimit && len(lists) > 1 {
+		appendList(lists[1])
 	}
 	return friends, nil
 }
@@ -282,20 +249,14 @@ func GetFriendsPublicCommunities(ctx context.Context, friendIDs []int64) (map[in
 		return counts, nil
 	}
 
-	pipe := redis.UserPublicComms.Pipeline()
-	cmds := make([]*goredis.StringSliceCmd, len(friendIDs))
-	for i, fid := range friendIDs {
-		cmds[i] = pipe.SMembers(ctx, redis.UserPublicComms.Key(fid))
-	}
-
-	_, err := pipe.Exec(ctx)
-	if err != nil && !errors.Is(err, goredis.Nil) {
+	membersByFriend, err := redis.UserPublicComms.SMembersBatch(ctx, friendIDs)
+	if err != nil {
 		return nil, err
 	}
 
-	for _, cmd := range cmds {
-		members, errCmd := cmd.Result()
-		if errCmd != nil {
+	for _, fid := range friendIDs {
+		members := membersByFriend[fid]
+		if len(members) == 0 {
 			continue
 		}
 		// Déduplication par sécurité sur un même ami
@@ -364,12 +325,12 @@ func ReplaceRankedCommunitiesByLang(ctx context.Context, lang string, entries []
 	if !isCommunityRecoCacheReady() {
 		return errors.New("community reco redis collections not initialized")
 	}
-	members := make([]*goredis.Z, 0, len(entries))
+	members := make([]redis.ZMember, 0, len(entries))
 	for _, e := range entries {
 		if e.ConversationID <= 0 {
 			continue
 		}
-		members = append(members, &goredis.Z{
+		members = append(members, redis.ZMember{
 			Score:  e.Score,
 			Member: strconv.FormatInt(e.ConversationID, 10),
 		})
@@ -392,7 +353,7 @@ func GetRankedCommunityScore(ctx context.Context, lang string, conversationID in
 	}
 	score, err := redis.CommunityRecoRanked.ZScore(ctx, lang, strconv.FormatInt(conversationID, 10))
 	if err != nil {
-		if errors.Is(err, goredis.Nil) {
+		if errors.Is(err, redis.ErrNotFound) {
 			return 0, false, nil
 		}
 		return 0, false, err
@@ -418,9 +379,9 @@ func GetCommunityPinsByLang(ctx context.Context, lang string) (map[int]int64, er
 	if lang == "" || !isCommunityRecoCacheReady() {
 		return pins, nil
 	}
-	raw, err := redis.CommunityRecoPins.HGetAll(ctx, lang).Result()
+	raw, err := redis.CommunityRecoPins.HGetAll(ctx, lang)
 	if err != nil {
-		if errors.Is(err, goredis.Nil) {
+		if errors.Is(err, redis.ErrNotFound) {
 			return pins, nil
 		}
 		return nil, err
@@ -515,22 +476,17 @@ func sumDailyHashCounts(ctx context.Context, col *redis.Collection, conversation
 		fields[i] = strconv.FormatInt(cid, 10)
 	}
 
-	pipe := col.Pipeline()
-	cmds := make([]*goredis.SliceCmd, len(dates))
-	for i, dateBucket := range dates {
-		cmds[i] = pipe.HMGet(ctx, col.Key(dateBucket), fields...)
+	dateIDs := make([]any, len(dates))
+	for i, d := range dates {
+		dateIDs[i] = d
 	}
 
-	_, err := pipe.Exec(ctx)
-	if err != nil && !errors.Is(err, goredis.Nil) {
+	rows, err := col.HMGetBatch(ctx, dateIDs, fields)
+	if err != nil {
 		return nil, err
 	}
 
-	for _, cmd := range cmds {
-		vals, errCmd := cmd.Result()
-		if errCmd != nil {
-			continue
-		}
+	for _, vals := range rows {
 		for idx, raw := range vals {
 			if raw == nil || idx >= len(conversationIDs) {
 				continue
@@ -553,41 +509,29 @@ func sumDailyHashCounts(ctx context.Context, col *redis.Collection, conversation
 }
 
 // GetCommunity7DayUniqueAuthors calcule la cardinalité union sur les 7 buckets HyperLogLog
-// pour chaque communauté via un Pipeline Redis de commandes PFCOUNT multi-clés.
+// pour chaque communauté via PFCountBatch (Cluster-safe).
 func GetCommunity7DayUniqueAuthors(ctx context.Context, conversationIDs []int64, dates []string) (map[int64]int64, error) {
 	result := make(map[int64]int64, len(conversationIDs))
 	if len(conversationIDs) == 0 || len(dates) == 0 || !isCommunityRecoCacheReady() {
 		return result, nil
 	}
 
-	const chunkSize = 250
-	for start := 0; start < len(conversationIDs); start += chunkSize {
-		end := start + chunkSize
-		if end > len(conversationIDs) {
-			end = len(conversationIDs)
+	groups := make([][]any, len(conversationIDs))
+	for i, cid := range conversationIDs {
+		group := make([]any, len(dates))
+		for j, dateBucket := range dates {
+			group[j] = CommunityRecoAuthorsKey(cid, dateBucket)
 		}
-		batch := conversationIDs[start:end]
+		groups[i] = group
+	}
 
-		pipe := redis.CommunityRecoAuthors.Pipeline()
-		cmds := make([]*goredis.IntCmd, len(batch))
-		for i, cid := range batch {
-			keys := make([]string, len(dates))
-			for j, dateBucket := range dates {
-				keys[j] = redis.CommunityRecoAuthors.Key(CommunityRecoAuthorsKey(cid, dateBucket))
-			}
-			cmds[i] = pipe.PFCount(ctx, keys...)
-		}
-
-		_, err := pipe.Exec(ctx)
-		if err != nil && !errors.Is(err, goredis.Nil) {
-			return nil, err
-		}
-
-		for i, cmd := range cmds {
-			count, errCmd := cmd.Result()
-			if errCmd == nil && count > 0 {
-				result[batch[i]] = count
-			}
+	counts, err := redis.CommunityRecoAuthors.PFCountBatch(ctx, groups)
+	if err != nil {
+		return nil, err
+	}
+	for i, count := range counts {
+		if count > 0 {
+			result[conversationIDs[i]] = count
 		}
 	}
 	return result, nil
@@ -649,15 +593,10 @@ func GetCommunityMemberCountsBatch(ctx context.Context, conversationIDs []int64)
 	}
 
 	if len(missing) > 0 && redis.ConvParticipants != nil {
-		pipe := redis.ConvParticipants.Pipeline()
-		cmds := make([]*goredis.IntCmd, len(missing))
-		for i, cid := range missing {
-			cmds[i] = pipe.SCard(ctx, redis.ConvParticipants.Key(cid))
-		}
-		if _, err := pipe.Exec(ctx); err == nil || errors.Is(err, goredis.Nil) {
-			for i, cmd := range cmds {
-				if card, errCard := cmd.Result(); errCard == nil && card > 0 {
-					counts[missing[i]] = int(card)
+		if cards, err := redis.ConvParticipants.SCardBatch(ctx, missing); err == nil {
+			for cid, card := range cards {
+				if card > 0 {
+					counts[cid] = int(card)
 				}
 			}
 		}

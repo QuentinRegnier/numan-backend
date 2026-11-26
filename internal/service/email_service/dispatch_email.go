@@ -82,7 +82,7 @@ func DispatchSecurityEmail(ctx context.Context, targetEmail string, templateName
 		numan_log.Error(ctx).Err(errMarshal).Str("recipient", targetEmail).Msg("DispatchSecurityEmail : échec de sérialisation")
 		return numan_error.NewInternal(errMarshal)
 	}
-	if errQueue := redis.WorkerQueue.Client.LPush(ctx, variables.EmailWorkerQueueName, payloadBytes).Err(); errQueue != nil {
+	if errQueue := redis.LPushOnCore(ctx, variables.EmailWorkerQueueName, payloadBytes); errQueue != nil {
 		numan_log.Error(ctx).Err(errQueue).Str("recipient", targetEmail).Msg("DispatchSecurityEmail : échec critique LPush Redis")
 		return numan_error.NewInternal(errQueue)
 	}

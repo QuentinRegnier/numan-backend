@@ -16,7 +16,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
-	goredis "github.com/redis/go-redis/v9"
 )
 
 const (
@@ -96,7 +95,7 @@ func GetSchedulerGlobalPause(ctx context.Context) (bool, string, bool) {
 		}
 		return true, "paused", true
 	}
-	if errors.Is(err, goredis.Nil) {
+	if errors.Is(err, repoRedis.ErrNotFound) {
 		return false, "", true
 	}
 	return false, "", false

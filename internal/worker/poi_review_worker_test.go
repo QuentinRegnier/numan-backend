@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/map_models"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/stretchr/testify/assert"
@@ -51,7 +50,7 @@ func TestPOIReviewMapper(t *testing.T) {
 }
 
 func TestInteractionWorker_POIReviewAggregation(t *testing.T) {
-	_ = test.SetupTestRedis(t)
+	srv := test.SetupTestRedis(t)
 	ctx := context.Background()
 
 	// Simule plusieurs avis/mises à jour/suppressions dans la même fenêtre de flush
@@ -68,21 +67,10 @@ func TestInteractionWorker_POIReviewAggregation(t *testing.T) {
 	processCacheUpdates(ctx, batch)
 
 	// Vérifie que seul 1 événement EntityPOICounter pour POI 5001 a été empilé dans Redis
-	keys, err := infraRedis.Rdb.Keys(ctx, "request_cache:q:*").Result()
-	require.NoError(t, err)
-
 	var counterEvents []redis.AsyncEvent
-	for _, k := range keys {
-		items, errL := infraRedis.Rdb.LRange(ctx, k, 0, -1).Result()
-		require.NoError(t, errL)
-		for _, raw := range items {
-			var evt redis.AsyncEvent
-			dec := json.NewDecoder(strings.NewReader(raw))
-			dec.UseNumber()
-			require.NoError(t, dec.Decode(&evt))
-			if evt.Type == redis.EntityPOICounter {
-				counterEvents = append(counterEvents, evt)
-			}
+	for _, evt := range test.ReadWriteBehindEvents(t, srv) {
+		if evt.Type == redis.EntityPOICounter {
+			counterEvents = append(counterEvents, evt)
 		}
 	}
 

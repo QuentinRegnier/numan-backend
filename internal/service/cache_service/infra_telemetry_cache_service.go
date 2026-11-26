@@ -11,7 +11,6 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/infra_telemetry_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 )
 
@@ -212,7 +211,7 @@ func CollectRedis3TierSnapshot(ctx context.Context) infra_telemetry_models.Redis
 	}
 }
 
-func mapTierTelemetry(tel infraRedis.TierTelemetrySnapshot, sharedWithCore bool) infra_telemetry_models.RedisTierSnapshot {
+func mapTierTelemetry(tel repoRedis.TierTelemetrySnapshot, sharedWithCore bool) infra_telemetry_models.RedisTierSnapshot {
 	details := make([]infra_telemetry_models.RedisShardSnapshot, 0, len(tel.Shards))
 	nodeSet := make(map[string]struct{}, len(tel.Shards))
 	replicas := 0

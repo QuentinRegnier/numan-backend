@@ -8,9 +8,9 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/moderation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
+	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -156,7 +156,7 @@ func TestModerationServices_ValidationGuardsBeforeRedis(t *testing.T) {
 	err = PublishTrustScoreEvent(ctx, 42, "UNKNOWN_EVENT", 10, "motif")
 	assertModBadRequest(t, err)
 
-	keys, errKeys := infraRedis.Rdb.Keys(ctx, "*").Result()
+	keys, errKeys := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, errKeys)
 	assert.Empty(t, keys, "No invalid moderation call should write to Redis")
 }

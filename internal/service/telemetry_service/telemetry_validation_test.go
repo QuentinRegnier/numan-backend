@@ -7,8 +7,8 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/telemetry_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
+	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/telemetry_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 	"github.com/stretchr/testify/assert"
@@ -51,7 +51,7 @@ func TestProcessSyncTelemetry_ValidationAndSideEffectGuard(t *testing.T) {
 	require.ErrorAs(t, err, &appErr)
 	assert.Equal(t, http.StatusBadRequest, appErr.HTTPStatus)
 
-	keys, errKeys := infraRedis.Rdb.Keys(ctx, "*").Result()
+	keys, errKeys := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, errKeys)
 	assert.Empty(t, keys)
 
@@ -60,7 +60,7 @@ func TestProcessSyncTelemetry_ValidationAndSideEffectGuard(t *testing.T) {
 	require.NoError(t, errValid)
 	assert.Equal(t, "accepted", out.Status)
 
-	keysAfter, errKeysAfter := infraRedis.Rdb.Keys(ctx, "*").Result()
+	keysAfter, errKeysAfter := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, errKeysAfter)
 	assert.NotEmpty(t, keysAfter)
 }

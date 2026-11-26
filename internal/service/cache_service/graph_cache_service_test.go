@@ -56,7 +56,7 @@ func TestGraphCacheService(t *testing.T) {
 
 		// Wait briefly for async lazy pruning goroutine (HDel)
 		time.Sleep(20 * time.Millisecond)
-		_, errDead := redis.GraphEdges.HGet(ctx, "golang", "dead_tag").Bytes()
+		_, errDead := redis.GraphEdges.HGetBytes(ctx, "golang", "dead_tag")
 		assert.Error(t, errDead)
 	})
 

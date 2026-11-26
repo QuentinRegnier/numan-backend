@@ -7,8 +7,8 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/user_settings_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
+	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/user_settings_service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,7 +27,7 @@ func TestUserSettingsServices_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 	_ = test.SetupTestRedis(t)
 	ctx := context.Background()
 
-	initialKeys, err := infraRedis.Rdb.Keys(ctx, "*").Result()
+	initialKeys, err := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, err)
 
 	// 1. CheckUsernameAvailability rejects malformed usernames immediately
@@ -81,11 +81,11 @@ func TestUserSettingsServices_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 	assertBadRequest(t, err)
 
 	// Assert zero Redis or queue mutations occurred
-	finalKeys, err := infraRedis.Rdb.Keys(ctx, "*").Result()
+	finalKeys, err := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, initialKeys, finalKeys)
 
-	queueKeys, err := infraRedis.Rdb.Keys(ctx, "request_cache:q:*").Result()
+	queueKeys, err := repoRedis.ScanKeys(ctx, "request_cache:q:*", 200)
 	require.NoError(t, err)
 	assert.Empty(t, queueKeys)
 }

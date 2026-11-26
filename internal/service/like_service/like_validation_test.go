@@ -8,9 +8,9 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/like_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/post_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
+	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/like_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
@@ -40,9 +40,9 @@ func TestLikeServices_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 	}
 	require.NoError(t, object_cache_service.SetPostInObjectCache(ctx, seedPost))
 
-	initialKeys, err := infraRedis.Rdb.Keys(ctx, "*").Result()
+	initialKeys, err := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, err)
-	initialQueueKeys, err := infraRedis.Rdb.Keys(ctx, "request_cache:q:*").Result()
+	initialQueueKeys, err := repoRedis.ScanKeys(ctx, "request_cache:q:*", 200)
 	require.NoError(t, err)
 
 	// 1. TogglePostLike invalid payloads & invalid caller
@@ -64,7 +64,7 @@ func TestLikeServices_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 	assertLikeBadRequest(t, err)
 
 	// Verify zero idempotency keys, counter mutations, or queued events
-	finalKeys, err := infraRedis.Rdb.Keys(ctx, "*").Result()
+	finalKeys, err := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, initialKeys, finalKeys)
 
@@ -72,7 +72,7 @@ func TestLikeServices_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, afterPost.LikeCount)
 
-	queueKeys, err := infraRedis.Rdb.Keys(ctx, "request_cache:q:*").Result()
+	queueKeys, err := repoRedis.ScanKeys(ctx, "request_cache:q:*", 200)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, initialQueueKeys, queueKeys)
 }

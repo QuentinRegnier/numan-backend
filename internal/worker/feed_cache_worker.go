@@ -19,26 +19,6 @@ import (
 // # WORKER : FEED WARM-UP & SOCIAL FAN-OUT
 // ############################################################################
 
-// startFeedWarmupCron orchestre l'auto-génération des flux d'actualités par lots pour les utilisateurs inactifs.
-// S'exécute à intervalles réguliers sans jamais scanner l'intégralité de la BDD (O(log(N) + M)).
-func startFeedWarmupCron(ctx context.Context) {
-	numan_log.Info(ctx).Msg("Démarrage du Moteur de Warm-up Algorithmique (Feed)...")
-
-	go func() {
-		ticker := time.NewTicker(variables.FeedWarmupCronInterval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				processScheduledWarmups(ctx)
-			}
-		}
-	}()
-}
-
 // processScheduledWarmups identifie et régénère les flux des utilisateurs dont le cache L1 a expiré.
 func processScheduledWarmups(ctx context.Context) {
 	lockToken, acquired, errLock := redis.AcquireCronLock(ctx, "cron:feed_warmup", variables.FeedWarmupCronInterval)
@@ -175,22 +155,9 @@ func handleSocialFanOut(ctx context.Context, events []redis.AsyncEvent) {
 				continue // Aucune audience, annulation du FanOut
 			}
 
-			// ── ÉTAPE 3 : DISTRIBUTION DE MASSE VIA PIPELINE REDIS ──────────
-			pipe := redis.FeedsMailbox.Pipeline()
+			// ── ÉTAPE 3 : DISTRIBUTION DE MASSE VIA BATCH REDIS (CLUSTER-SAFE) ─
 			score := float64(domain.NowMillis())
-
-			for _, followerID := range targetIDs {
-				mailboxKey := redis.FeedsMailbox.Key(followerID)
-
-				// Injection du PostID au sommet chronologique
-				pipe.Do(ctx, "ZADD", mailboxKey, score, postID)
-
-				// Purge glissante (Capacité stricte à 500 posts par mailbox)
-				pipe.Do(ctx, "ZREMRANGEBYRANK", mailboxKey, 0, variables.FanOutRetentionLimit)
-			}
-
-			_, errPipe := pipe.Exec(ctx)
-			if errPipe != nil {
+			if errPipe := redis.FeedsMailbox.ZAddAndTrimBatch(ctx, targetIDs, score, postID, int64(variables.FanOutRetentionLimit)); errPipe != nil {
 				numan_log.Error(ctx).Err(errPipe).Int64("post_id", postID).Msg("Échec de l'exécution du pipeline de distribution FanOut.")
 			}
 		}

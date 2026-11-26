@@ -11,7 +11,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
-	goredis "github.com/redis/go-redis/v9"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -83,14 +82,14 @@ func updateEdge(ctx context.Context, sourceKey, targetTag string, currentTimesta
 	var currentEdge tagEdge
 
 	// 1. Lecture de l'état actuel via la Collection abstraite Redis
-	binaryData, errRedis := redis.GraphEdges.HGet(ctx, sourceKey, targetTag).Bytes()
+	binaryData, errRedis := redis.GraphEdges.HGetBytes(ctx, sourceKey, targetTag)
 	if errRedis == nil {
 		err := msgpack.Unmarshal(binaryData, &currentEdge)
 		if err != nil {
 			numan_log.Error(ctx).Err(err).Msg("Échec de la désérialisation MessagePack pour une arête de graphe")
 			return
 		}
-	} else if !errors.Is(errRedis, goredis.Nil) {
+	} else if !errors.Is(errRedis, redis.ErrNotFound) {
 		numan_log.Warn(ctx).Err(errRedis).Str("source_key", sourceKey).Str("target_tag", targetTag).Msg("Échec de la lecture Redis pour une arête du graphe de Markov")
 		return
 	}
@@ -136,13 +135,13 @@ func GetRelatedTagsLazy(ctx context.Context, sourceTag string, lang ...int) map[
 	if len(lang) > 0 {
 		resolvedLang := variables.NormalizeLangForCache(lang[0])
 		langKey := variables.GraphEdgesSubKey(resolvedLang, sanitizedSourceTag)
-		edgesMapJSON, errRedis := redis.GraphEdges.HGetAll(ctx, langKey).Result()
+		edgesMapJSON, errRedis := redis.GraphEdges.HGetAll(ctx, langKey)
 		if errRedis == nil && len(edgesMapJSON) > 0 {
 			return evaluateAndPruneEdges(ctx, langKey, edgesMapJSON)
 		}
 	}
 
-	edgesMapJSON, errRedis := redis.GraphEdges.HGetAll(ctx, lookupKey).Result()
+	edgesMapJSON, errRedis := redis.GraphEdges.HGetAll(ctx, lookupKey)
 	if errRedis != nil {
 		numan_log.Warn(ctx).Err(errRedis).Str("tag", lookupKey).Msg("Échec de la lecture HGetAll du Graph Cache")
 		return nil

@@ -16,8 +16,8 @@ func TestRegisterAllDefaultJobsCatalog(t *testing.T) {
 	scheduler_service.RegisterAllDefaultJobs(eng)
 
 	ov := eng.StatusSnapshot(context.Background())
-	// 8 hygiène + 5 BDD/stockage + 4 algo/cache + 7 crons migrés = 24 jobs individuels couvrant les 18 domaines
-	require.Len(t, ov.Jobs, 24)
+	// 8 hygiène + 5 BDD/stockage + 5 algo/cache (incl. redis_orphan_cleanup) + 7 crons migrés = 25 jobs individuels
+	require.Len(t, ov.Jobs, 25)
 
 	names := make(map[string]bool, len(ov.Jobs))
 	for _, j := range ov.Jobs {
@@ -31,4 +31,5 @@ func TestRegisterAllDefaultJobsCatalog(t *testing.T) {
 	assert.True(t, names["most_cache_surgical_purify"])
 	assert.True(t, names["object_pool_morning_prewarm"])
 	assert.True(t, names["algo_time_decay_deep"])
+	assert.True(t, names["redis_orphan_cleanup"])
 }

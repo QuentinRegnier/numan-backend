@@ -9,9 +9,9 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/comment_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/post_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
+	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/comment_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
@@ -41,7 +41,7 @@ func TestCommentServices_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 	}
 	require.NoError(t, object_cache_service.SetPostInObjectCache(ctx, seedPost))
 
-	initialKeys, err := infraRedis.Rdb.Keys(ctx, "*").Result()
+	initialKeys, err := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, err)
 
 	// 1. CreateComment invalid cases
@@ -87,7 +87,7 @@ func TestCommentServices_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 	assertBadRequest(t, err)
 
 	// Ensure zero Redis side effects occurred
-	finalKeys, err := infraRedis.Rdb.Keys(ctx, "*").Result()
+	finalKeys, err := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, initialKeys, finalKeys)
 
@@ -95,7 +95,7 @@ func TestCommentServices_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, afterPost.CommentCount)
 
-	queueKeys, err := infraRedis.Rdb.Keys(ctx, "request_cache:q:*").Result()
+	queueKeys, err := repoRedis.ScanKeys(ctx, "request_cache:q:*", 200)
 	require.NoError(t, err)
 	assert.Empty(t, queueKeys)
 }
@@ -123,7 +123,7 @@ func TestCreateComment_ValidInput_UpdatesCacheAndEnqueues(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, afterPost.CommentCount)
 
-	queueKeys, err := infraRedis.Rdb.Keys(ctx, "request_cache:q:*").Result()
+	queueKeys, err := repoRedis.ScanKeys(ctx, "request_cache:q:*", 200)
 	require.NoError(t, err)
 	assert.NotEmpty(t, queueKeys)
 }

@@ -13,7 +13,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
-	goredis "github.com/redis/go-redis/v9"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -59,7 +58,7 @@ func updateCommunityMemberCountInSpeedCache(ctx context.Context, communityID int
 
 	// On modifie silencieusement seulement si la communauté est bien présente en L1
 	errGet := redis.SpeedCommunity.GetObject(ctx, communityID, &communityLitePayload)
-	if errGet != nil && !errors.Is(errGet, goredis.Nil) {
+	if errGet != nil && !errors.Is(errGet, redis.ErrNotFound) {
 		numan_log.Warn(ctx).Err(errGet).Int64("community_id", communityID).Msg("Erreur Redis lors de la lecture de la communauté en L1")
 	}
 	if errGet == nil && communityLitePayload.ID != 0 {

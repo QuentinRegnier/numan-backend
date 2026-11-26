@@ -13,7 +13,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
-	goredis "github.com/redis/go-redis/v9"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -30,7 +29,7 @@ func GetPOIReviewFromObjectCache(ctx context.Context, reviewID int64) (map_model
 	var review map_models.POIReviewPayload
 	errRedis := redis.POIReviews.GetObject(ctx, reviewID, &review)
 	if errRedis != nil {
-		if errors.Is(errRedis, goredis.Nil) {
+		if errors.Is(errRedis, redis.ErrNotFound) {
 			return map_models.POIReviewPayload{}, numan_error.NewNotFound(numan_error.CodeNotFound, "Avis POI introuvable dans le cache.", errRedis)
 		}
 		return map_models.POIReviewPayload{}, numan_error.NewAppError(
@@ -130,7 +129,7 @@ func DeletePOIReviewFromObjectCache(ctx context.Context, reviewID int64) error {
 func GetUserPOIReviewID(ctx context.Context, poiID, userID int64) (int64, error) {
 	id, err := redis.POIReviewUserIndex.GetInt64(ctx, userPOIReviewIndexKey(poiID, userID))
 	if err != nil {
-		if errors.Is(err, goredis.Nil) {
+		if errors.Is(err, redis.ErrNotFound) {
 			return 0, numan_error.NewNotFound(numan_error.CodeNotFound, "Index utilisateur/avis POI introuvable dans le cache.", err)
 		}
 		return 0, numan_error.NewAppError(

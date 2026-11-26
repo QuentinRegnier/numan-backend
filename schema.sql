@@ -2994,6 +2994,43 @@ AS $$
     SELECT pg_advisory_unlock(p_lock_id);
 $$;
 
+-- 6) Vérification batch L3 d'existence d'entités pour le Redis Orphan Cleaner (Phase 4)
+-- NB : 'post_physical' ne filtre PAS sur visibility >= 0 afin de préserver le Tombstone Pattern de redis.Posts.
+CREATE OR REPLACE FUNCTION util.func_filter_existing_entity_ids(p_entity TEXT, p_ids BIGINT[])
+RETURNS TABLE(id BIGINT)
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF p_ids IS NULL OR COALESCE(array_length(p_ids, 1), 0) = 0 THEN
+        RETURN;
+    END IF;
+
+    CASE p_entity
+        WHEN 'user' THEN
+            RETURN QUERY SELECT u.id FROM auth.users u WHERE u.id = ANY(p_ids);
+        WHEN 'post_physical' THEN
+            RETURN QUERY SELECT p.id FROM content.posts p WHERE p.id = ANY(p_ids);
+        WHEN 'post_active' THEN
+            RETURN QUERY SELECT p.id FROM content.posts p WHERE p.id = ANY(p_ids) AND p.visibility >= 0;
+        WHEN 'comment_active' THEN
+            RETURN QUERY SELECT c.id FROM content.comments c WHERE c.id = ANY(p_ids) AND c.visibility <> -1;
+        WHEN 'media_active' THEN
+            RETURN QUERY SELECT m.id FROM content.media m WHERE m.id = ANY(p_ids) AND m.visibility >= 0;
+        WHEN 'conversation' THEN
+            RETURN QUERY SELECT c.id FROM messaging.conversations c WHERE c.id = ANY(p_ids);
+        WHEN 'message_active' THEN
+            RETURN QUERY SELECT m.id FROM messaging.messages m WHERE m.id = ANY(p_ids) AND m.visibility = true;
+        WHEN 'poi_active' THEN
+            RETURN QUERY SELECT p.id FROM content.pois p WHERE p.id = ANY(p_ids) AND p.visibility >= 0;
+        WHEN 'poi_review_active' THEN
+            RETURN QUERY SELECT r.id FROM content.poi_reviews r WHERE r.id = ANY(p_ids) AND r.visibility >= 0;
+        ELSE
+            RAISE EXCEPTION 'Unsupported entity type for func_filter_existing_entity_ids: %', p_entity;
+    END CASE;
+END;
+$$;
+
 /* =============================================================================
    END OF SCHEMA
    ============================================================================= */

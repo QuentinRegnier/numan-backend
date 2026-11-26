@@ -10,7 +10,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
-	goredis "github.com/redis/go-redis/v9"
 )
 
 // ############################################################################
@@ -65,9 +64,8 @@ func StoreTagInSpeedCache(ctx context.Context, newTag string) error {
 func IsTagTrending(ctx context.Context, targetTag string) bool {
 	// Le Leaderboard stocke les tags avec leur score de hype.
 	// Si le ZScore renvoie une valeur (err == nil), c'est que le tag est dans le classement.
-	leaderboardKey := redis.HashtagLeaderboard.Key("global")
-	_, errRedis := redis.HashtagLeaderboard.Client.ZScore(ctx, leaderboardKey, targetTag).Result()
-	if errRedis != nil && !errors.Is(errRedis, goredis.Nil) {
+	_, errRedis := redis.HashtagLeaderboard.ZScore(ctx, "global", targetTag)
+	if errRedis != nil && !errors.Is(errRedis, redis.ErrNotFound) {
 		numan_log.Warn(ctx).Err(errRedis).Str("tag", targetTag).Msg("Erreur Redis ZScore lors de la vérification de tendance du tag")
 	}
 

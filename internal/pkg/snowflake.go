@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
@@ -22,6 +23,20 @@ func InitSnowflake(nodeID int64) error {
 // GenerateID : LA fameuse fonction simple que tu voulais
 func GenerateID() int64 {
 	return generator.generate()
+}
+
+// ExtractSnowflakeTime décode le timestamp UTC de création embarqué dans un identifiant Snowflake.
+// Retourne (zero, false) si l'ID est <= 0 ou ne correspond pas à une date postérieure à variables.Epoch.
+func ExtractSnowflakeTime(id int64) (time.Time, bool) {
+	if id <= 0 {
+		return time.Time{}, false
+	}
+	deltaMs := id >> variables.TimeShift
+	if deltaMs <= 0 {
+		return time.Time{}, false
+	}
+	tsMs := deltaMs + variables.Epoch
+	return time.UnixMilli(tsMs).UTC(), true
 }
 
 // node est la structure qui génère les IDs

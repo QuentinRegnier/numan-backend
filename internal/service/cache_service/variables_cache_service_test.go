@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 	"github.com/stretchr/testify/assert"
@@ -97,10 +96,9 @@ func TestVariablesCacheService(t *testing.T) {
 		srv.SetFailCmd("SET", nil)
 
 		// Redis not ready in ApplyAndBroadcastDynamicVariablesPatch
-		prevRdb := infraRedis.Rdb
-		infraRedis.Rdb = nil
+		restore := test.DisableTestRedis(t)
 		_, err = ApplyAndBroadcastDynamicVariablesPatch(ctx, &variables.PreparedPatch{})
-		infraRedis.Rdb = prevRdb
+		restore()
 		require.ErrorAs(t, err, &appErr)
 		assert.Equal(t, numan_error.CodeCacheError, appErr.Code)
 	})

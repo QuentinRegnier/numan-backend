@@ -195,7 +195,7 @@ func updateMostCache(ctx context.Context, events []redis.AsyncEvent) {
 // a atteint le seuil de consensus multi-utilisateurs (variables.IndirectTagConsensusMinUsers).
 func shouldPromoteIndirectTag(ctx context.Context, postID int64, normTag string, commenterID int64) bool {
 	minUsers := variables.IndirectTagConsensusMinUsers
-	if minUsers <= 1 || redis.IndirectTagConsensus == nil || redis.IndirectTagConsensus.Client == nil {
+	if minUsers <= 1 || !redis.IndirectTagConsensus.IsReady() {
 		return true
 	}
 	memberID := commenterID
@@ -205,7 +205,7 @@ func shouldPromoteIndirectTag(ctx context.Context, postID int64, normTag string,
 	}
 	subKey := fmt.Sprintf("%d:%s", postID, normTag)
 	_ = redis.IndirectTagConsensus.SAdd(ctx, subKey, memberID)
-	_ = redis.IndirectTagConsensus.Expire(ctx, subKey, variables.IndirectTagSetTTL)
+	_ = redis.IndirectTagConsensus.RefreshTTL(ctx, subKey)
 	count, err := redis.IndirectTagConsensus.SCard(ctx, subKey)
 	if err != nil {
 		return false

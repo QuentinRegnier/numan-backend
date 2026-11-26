@@ -15,7 +15,7 @@ const (
 )
 
 var (
-	TwoFactorPreAuthTTL  = 5 * time.Minute  // Durée de vie d'un challenge 2FA en RAM L1
+	TwoFactorPreAuthTTL  = VeryShortTTL     // Durée de vie d'un challenge 2FA en RAM L1 (5m, modifiable à chaud)
 	TwoFactorMaxAttempts = 5                // Nombre max d'essais avant destruction du challenge
 	WebAuthnTimeoutMs    = 90 * time.Second // Timeout client WebAuthn (90s)
 )

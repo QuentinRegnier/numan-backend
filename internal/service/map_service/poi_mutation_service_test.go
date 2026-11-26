@@ -9,7 +9,6 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/map_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
@@ -21,7 +20,7 @@ import (
 )
 
 func TestPOIMutationServices_ImportSetUpdateDelete(t *testing.T) {
-	_ = test.SetupTestRedis(t)
+	srv := test.SetupTestRedis(t)
 	_ = pkg.InitSnowflake(1)
 	ctx := context.Background()
 	adminID := int64(9000)
@@ -147,23 +146,13 @@ func TestPOIMutationServices_ImportSetUpdateDelete(t *testing.T) {
 	assert.Equal(t, "Place Vendôme", bboxAfterDel.POIs[0].Title)
 
 	// Verify Soft Delete payloads (visibility = -1) were enqueued to Redis queue for PostgreSQL
-	keys, err := infraRedis.Rdb.Keys(ctx, "request_cache:q:*").Result()
-	require.NoError(t, err)
 	var softDeletedIDs []int64
-	for _, k := range keys {
-		items, errL := infraRedis.Rdb.LRange(ctx, k, 0, -1).Result()
-		require.NoError(t, errL)
-		for _, raw := range items {
-			var evt redis.AsyncEvent
-			dec := json.NewDecoder(strings.NewReader(raw))
-			dec.UseNumber()
-			require.NoError(t, dec.Decode(&evt))
-			if evt.Type == redis.EntityPOI && evt.Action == redis.ActionDelete {
-				payloadMap, ok := evt.Payload.(map[string]any)
-				require.True(t, ok)
-				assert.Equal(t, json.Number("-1"), payloadMap["visibility"])
-				softDeletedIDs = append(softDeletedIDs, evt.ID)
-			}
+	for _, evt := range test.ReadWriteBehindEvents(t, srv) {
+		if evt.Type == redis.EntityPOI && evt.Action == redis.ActionDelete {
+			payloadMap, ok := evt.Payload.(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, json.Number("-1"), payloadMap["visibility"])
+			softDeletedIDs = append(softDeletedIDs, evt.ID)
 		}
 	}
 	assert.ElementsMatch(t, []int64{10001, 10003}, softDeletedIDs)

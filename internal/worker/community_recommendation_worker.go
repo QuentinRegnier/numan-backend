@@ -30,42 +30,6 @@ type CommunityRecoCronStats struct {
 	DurationMs           int64
 }
 
-func resolveCommunityRecoCronInterval() time.Duration {
-	interval := variables.CommunityRecoCronInterval
-	if interval < variables.CommunityRecoMinCronInterval {
-		interval = variables.CommunityRecoMinCronInterval
-	}
-	if interval > variables.CommunityRecoMaxCronInterval {
-		interval = variables.CommunityRecoMaxCronInterval
-	}
-	return interval
-}
-
-// startCommunityRecommendationCron lance la tâche planifiée (par défaut toutes les 2h)
-// qui recalcule les scores globaux S_global de toutes les communautés publiques actives
-// et remplace atomiquement les ZSETs Redis community:reco:ranked:{lang}.
-func startCommunityRecommendationCron(ctx context.Context) {
-	numan_log.Info(ctx).
-		Str("interval", resolveCommunityRecoCronInterval().String()).
-		Msg("Démarrage du Cron de calcul global des recommandations de communautés publiques...")
-
-	go func() {
-		timer := time.NewTimer(resolveCommunityRecoCronInterval())
-		defer timer.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				numan_log.Info(ctx).Msg("Arrêt gracieux du Cron de recommandation de communautés publiques.")
-				return
-			case <-timer.C:
-				_, _ = RunCommunityRecommendationCronCycle(ctx)
-				timer.Reset(resolveCommunityRecoCronInterval())
-			}
-		}
-	}()
-}
-
 // RunCommunityRecommendationCronCycle exécute un cycle complet de recalcul des scores
 // globaux de toutes les communautés publiques actives, protégé par verrou distribué Redis.
 func RunCommunityRecommendationCronCycle(ctx context.Context) (CommunityRecoCronStats, error) {
@@ -84,7 +48,7 @@ func RunCommunityRecommendationCronCycle(ctx context.Context) (CommunityRecoCron
 		stats.DurationMs = time.Since(startTime).Milliseconds()
 		return stats, errLock
 	}
-	if !acquired && lockToken == "" && redis.CronLocks != nil && redis.CronLocks.Client != nil {
+	if !acquired && lockToken == "" && redis.CronLocks.IsReady() {
 		numan_log.Info(ctx).Msg("CommunityRecoCron : cycle ignoré (verrou déjà détenu par une autre instance)")
 		stats.SkippedLocked = true
 		stats.DurationMs = time.Since(startTime).Milliseconds()

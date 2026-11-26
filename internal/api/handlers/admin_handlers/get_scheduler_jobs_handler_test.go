@@ -50,7 +50,7 @@ func TestGetSchedulerJobsHandler(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
 
-	t.Run("200 OK returns 24 scheduled jobs", func(t *testing.T) {
+	t.Run("200 OK returns 25 scheduled jobs", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/admin/scheduler/jobs", bytes.NewBufferString(`{"datacenter":"dc-eu-1"}`))
 		req.Header.Set("Content-Type", "application/json")
@@ -60,6 +60,6 @@ func TestGetSchedulerJobsHandler(t *testing.T) {
 		var out admin_models.GetSchedulerJobsOutput
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
 		assert.Equal(t, "dc-eu-1", out.Datacenter)
-		assert.Len(t, out.Jobs, 24)
+		assert.Len(t, out.Jobs, 25)
 	})
 }

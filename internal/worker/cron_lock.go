@@ -12,7 +12,7 @@ import (
 // exécute un cycle de cron périodique donné sur un cluster Kubernetes multi-réplicas.
 // Retourne true si le cycle a été exécuté, false s'il a été ignoré (verrou déjà détenu ou erreur).
 func runWithDistributedCronLock(ctx context.Context, lockKey string, ttl time.Duration, fn func(context.Context)) bool {
-	if redis.CronLocks == nil || redis.CronLocks.Client == nil {
+	if !redis.CronLocks.IsReady() {
 		// Permet aux tests unitaires isolés sans Redis initialisé d'exécuter fn directement.
 		fn(ctx)
 		return true

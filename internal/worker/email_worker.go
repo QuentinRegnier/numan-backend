@@ -12,7 +12,7 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/email_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
-	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
+	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/templates"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
 	"github.com/wneessen/go-mail"
@@ -36,18 +36,16 @@ func startEmailWorker(ctx context.Context) {
 			return // Arrêt gracieux commandé par le manager
 		default:
 			// Dépilement bloquant sur la queue email
-			res, errPop := redis.Rdb.BLPop(ctx, blpopTimeout, variables.EmailWorkerQueueName).Result()
+			rawJob, errPop := repoRedis.BLPopOnCore(ctx, variables.EmailWorkerQueueName, blpopTimeout)
 			if errPop != nil {
 				continue // File vide ou timeout atteint, on reboucle
 			}
 
-			if len(res) == 2 {
-				var payload email_models.EmailPayload
-				if errUnmarshal := json.Unmarshal([]byte(res[1]), &payload); errUnmarshal == nil {
-					processEmailJob(ctx, payload)
-				} else {
-					numan_log.Warn(ctx).Err(errUnmarshal).Msg("Email Worker : Impossible de désérialiser le job")
-				}
+			var payload email_models.EmailPayload
+			if errUnmarshal := json.Unmarshal([]byte(rawJob), &payload); errUnmarshal == nil {
+				processEmailJob(ctx, payload)
+			} else {
+				numan_log.Warn(ctx).Err(errUnmarshal).Msg("Email Worker : Impossible de désérialiser le job")
 			}
 		}
 	}

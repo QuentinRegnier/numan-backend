@@ -6,7 +6,7 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/redis/go-redis/v9"
+	goredis "github.com/redis/go-redis/v9"
 )
 
 // GeoLocationItem représente un point géographique indexé dans une collection GEO Redis.
@@ -18,7 +18,10 @@ type GeoLocationItem struct {
 
 // GeoAdd indexe un point géographique unique (longitude, latitude) dans le sous-ensemble `id` de la collection.
 func (c *Collection) GeoAdd(ctx context.Context, id any, longitude, latitude float64, member any) error {
-	return c.Client.GeoAdd(ctx, c.Key(id), &redis.GeoLocation{
+	if err := c.checkReady(); err != nil {
+		return err
+	}
+	return c.client.GeoAdd(ctx, c.Key(id), &goredis.GeoLocation{
 		Name:      fmt.Sprintf("%v", member),
 		Longitude: longitude,
 		Latitude:  latitude,
@@ -27,30 +30,36 @@ func (c *Collection) GeoAdd(ctx context.Context, id any, longitude, latitude flo
 
 // GeoAddBatch indexe un lot de points géographiques en une seule commande atomique `GEOADD`.
 func (c *Collection) GeoAddBatch(ctx context.Context, id any, items []GeoLocationItem) error {
+	if err := c.checkReady(); err != nil {
+		return err
+	}
 	if len(items) == 0 {
 		return nil
 	}
-	locations := make([]*redis.GeoLocation, 0, len(items))
+	locations := make([]*goredis.GeoLocation, 0, len(items))
 	for _, it := range items {
-		locations = append(locations, &redis.GeoLocation{
+		locations = append(locations, &goredis.GeoLocation{
 			Name:      strconv.FormatInt(it.MemberID, 10),
 			Longitude: it.Longitude,
 			Latitude:  it.Latitude,
 		})
 	}
-	return c.Client.GeoAdd(ctx, c.Key(id), locations...).Err()
+	return c.client.GeoAdd(ctx, c.Key(id), locations...).Err()
 }
 
 // GeoSearchBox recherche les identifiants situés dans une boîte englobante centrée sur (centerLon, centerLat)
 // de dimensions (widthKm x heightKm) en kilomètres via `GEOSEARCH ... FROMLONLAT ... BYBOX`.
 func (c *Collection) GeoSearchBox(ctx context.Context, id any, centerLon, centerLat, widthKm, heightKm float64, count int) ([]string, error) {
+	if err := c.checkReady(); err != nil {
+		return nil, err
+	}
 	if widthKm <= 0 {
 		widthKm = 0.01
 	}
 	if heightKm <= 0 {
 		heightKm = 0.01
 	}
-	query := &redis.GeoSearchQuery{
+	query := &goredis.GeoSearchQuery{
 		Longitude: centerLon,
 		Latitude:  centerLat,
 		BoxWidth:  widthKm,
@@ -60,7 +69,7 @@ func (c *Collection) GeoSearchBox(ctx context.Context, id any, centerLon, center
 		Count:     count,
 		CountAny:  false,
 	}
-	return c.Client.GeoSearch(ctx, c.Key(id), query).Result()
+	return c.client.GeoSearch(ctx, c.Key(id), query).Result()
 }
 
 // GeoSearchBBox convertit une Bounding Box WGS84 (SWLat, SWLng, NELat, NELng) en requête `GEOSEARCH BYBOX`
@@ -83,10 +92,13 @@ func (c *Collection) GeoSearchBBox(ctx context.Context, id any, swLat, swLng, ne
 
 // GeoRem supprime un ou plusieurs membres de l'index GEO Redis (stocké sous forme de ZSET sous-jacent).
 func (c *Collection) GeoRem(ctx context.Context, id any, members ...any) error {
+	if err := c.checkReady(); err != nil {
+		return err
+	}
 	if len(members) == 0 {
 		return nil
 	}
-	return c.Client.ZRem(ctx, c.Key(id), members...).Err()
+	return c.client.ZRem(ctx, c.Key(id), members...).Err()
 }
 
 // BBoxToGeoBox calcule le centre (lat, lon) et les dimensions (widthKm, heightKm) d'une Bounding Box WGS84.

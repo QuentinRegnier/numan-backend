@@ -13,26 +13,19 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/article_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
-	goredis "github.com/redis/go-redis/v9"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
 var rebuildArticlesMu sync.Mutex
 
-func articleRedisClient() goredis.UniversalClient {
-	return infraRedis.ObjectClient()
-}
-
 // SetArticleInCache enregistre ou met à jour un article dans l'index Redis L1 persistant (TTL = 0 / non-évictable sous volatile-lfu).
 // Si l'article a une visibilité < 0 (soft-deleted), il est immédiatement retiré de l'index actif L1.
 func SetArticleInCache(ctx context.Context, article article_models.ArticlePayload) error {
-	rdb := articleRedisClient()
-	if rdb == nil {
+	if !repoRedis.IsObjectPoolReady() {
 		return numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeCacheError,
@@ -64,7 +57,7 @@ func SetArticleInCache(ctx context.Context, article article_models.ArticlePayloa
 	}
 
 	idStr := strconv.FormatInt(article.ID, 10)
-	if err := rdb.HSet(ctx, variables.RedisKeyArticlesIndexData, idStr, string(rawBytes)).Err(); err != nil {
+	if err := repoRedis.HSetOnObjects(ctx, variables.RedisKeyArticlesIndexData, idStr, string(rawBytes)); err != nil {
 		return numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeCacheError,
@@ -73,10 +66,7 @@ func SetArticleInCache(ctx context.Context, article article_models.ArticlePayloa
 		)
 	}
 
-	if err := rdb.ZAdd(ctx, variables.RedisKeyArticlesIndexOrder, goredis.Z{
-		Score:  float64(article.CreatedAt),
-		Member: idStr,
-	}).Err(); err != nil {
+	if err := repoRedis.ZAddOnObjects(ctx, variables.RedisKeyArticlesIndexOrder, float64(article.CreatedAt), idStr); err != nil {
 		return numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeCacheError,
@@ -86,14 +76,13 @@ func SetArticleInCache(ctx context.Context, article article_models.ArticlePayloa
 	}
 
 	// Marqueur d'initialisation persistant (TTL = 0 -> aucune expiration)
-	_ = rdb.Set(ctx, variables.RedisKeyArticlesIndexInit, "1", 0).Err()
+	_ = repoRedis.SetOnObjects(ctx, variables.RedisKeyArticlesIndexInit, "1", 0)
 	return nil
 }
 
 // SetArticlesBatchInCache enregistre un lot d'articles actifs dans l'index Redis L1 persistant (TTL = 0).
 func SetArticlesBatchInCache(ctx context.Context, articles []article_models.ArticlePayload) error {
-	rdb := articleRedisClient()
-	if rdb == nil {
+	if !repoRedis.IsObjectPoolReady() {
 		return numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeCacheError,
@@ -115,7 +104,7 @@ func SetArticlesBatchInCache(ctx context.Context, articles []article_models.Arti
 		}
 	}
 
-	if err := rdb.Set(ctx, variables.RedisKeyArticlesIndexInit, "1", 0).Err(); err != nil {
+	if err := repoRedis.SetOnObjects(ctx, variables.RedisKeyArticlesIndexInit, "1", 0); err != nil {
 		return numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeCacheError,
@@ -128,8 +117,7 @@ func SetArticlesBatchInCache(ctx context.Context, articles []article_models.Arti
 
 // DeleteArticleFromCache retire un article de l'index Redis L1 (HASH data + ZSET order).
 func DeleteArticleFromCache(ctx context.Context, articleID int64) error {
-	rdb := articleRedisClient()
-	if rdb == nil {
+	if !repoRedis.IsObjectPoolReady() {
 		return numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeCacheError,
@@ -142,7 +130,7 @@ func DeleteArticleFromCache(ctx context.Context, articleID int64) error {
 	}
 
 	idStr := strconv.FormatInt(articleID, 10)
-	if err := rdb.HDel(ctx, variables.RedisKeyArticlesIndexData, idStr).Err(); err != nil {
+	if err := repoRedis.HDelOnObjects(ctx, variables.RedisKeyArticlesIndexData, idStr); err != nil {
 		return numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeCacheError,
@@ -150,7 +138,7 @@ func DeleteArticleFromCache(ctx context.Context, articleID int64) error {
 			err,
 		)
 	}
-	if err := rdb.ZRem(ctx, variables.RedisKeyArticlesIndexOrder, idStr).Err(); err != nil {
+	if err := repoRedis.ZRemOnObjects(ctx, variables.RedisKeyArticlesIndexOrder, idStr); err != nil {
 		return numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeCacheError,
@@ -184,8 +172,8 @@ func GetArticleFromCache(ctx context.Context, articleID int64) (article_models.A
 	idStr := strconv.FormatInt(articleID, 10)
 
 	// 1. Tentative L1 (Redis HASH sur Tier 2 Object Pool)
-	if rdb := articleRedisClient(); rdb != nil {
-		rawStr, errHGet := rdb.HGet(ctx, variables.RedisKeyArticlesIndexData, idStr).Result()
+	if repoRedis.IsObjectPoolReady() {
+		rawStr, errHGet := repoRedis.HGetOnObjects(ctx, variables.RedisKeyArticlesIndexData, idStr)
 		if errHGet == nil && len(rawStr) > 0 {
 			var article article_models.ArticlePayload
 			if errUnmarshal := msgpack.Unmarshal([]byte(rawStr), &article); errUnmarshal == nil && article.ID > 0 {
@@ -246,8 +234,7 @@ func GetArticleFromCache(ctx context.Context, articleID int64) (article_models.A
 // ListArticlesFromCache retourne tous les articles actifs depuis l'index Redis L1, triés par created_at DESC puis id DESC.
 // Si l'index n'est pas initialisé ou désynchronisé, il déclenche une auto-réparation depuis L2/L3.
 func ListArticlesFromCache(ctx context.Context) ([]article_models.ArticlePayload, error) {
-	rdb := articleRedisClient()
-	if rdb == nil {
+	if !repoRedis.IsObjectPoolReady() {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeCacheError,
@@ -256,8 +243,8 @@ func ListArticlesFromCache(ctx context.Context) ([]article_models.ArticlePayload
 		)
 	}
 
-	idStrs, errZ := rdb.ZRevRange(ctx, variables.RedisKeyArticlesIndexOrder, 0, -1).Result()
-	if errZ != nil && !errors.Is(errZ, goredis.Nil) {
+	idStrs, errZ := repoRedis.ZRevRangeOnObjects(ctx, variables.RedisKeyArticlesIndexOrder, 0, -1)
+	if errZ != nil && !errors.Is(errZ, repoRedis.ErrNotFound) {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeCacheError,
@@ -267,9 +254,9 @@ func ListArticlesFromCache(ctx context.Context) ([]article_models.ArticlePayload
 	}
 
 	if len(idStrs) == 0 {
-		initCount, errInit := rdb.Exists(ctx, variables.RedisKeyArticlesIndexInit).Result()
-		if errInit == nil && initCount > 0 {
-			hLen, errHLen := rdb.HLen(ctx, variables.RedisKeyArticlesIndexData).Result()
+		initExists, errInit := repoRedis.ExistsOnObjects(ctx, variables.RedisKeyArticlesIndexInit)
+		if errInit == nil && initExists {
+			hLen, errHLen := repoRedis.HLenOnObjects(ctx, variables.RedisKeyArticlesIndexData)
 			if errHLen == nil && hLen == 0 {
 				return []article_models.ArticlePayload{}, nil
 			}
@@ -277,7 +264,7 @@ func ListArticlesFromCache(ctx context.Context) ([]article_models.ArticlePayload
 		return RebuildArticlesIndex(ctx)
 	}
 
-	rawVals, errHMGet := rdb.HMGet(ctx, variables.RedisKeyArticlesIndexData, idStrs...).Result()
+	rawVals, errHMGet := repoRedis.HMGetOnObjects(ctx, variables.RedisKeyArticlesIndexData, idStrs...)
 	if errHMGet != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
@@ -293,7 +280,7 @@ func ListArticlesFromCache(ctx context.Context) ([]article_models.ArticlePayload
 	for i, idStr := range idStrs {
 		parsedID, errParse := strconv.ParseInt(idStr, 10, 64)
 		if errParse != nil || parsedID <= 0 {
-			_ = rdb.ZRem(ctx, variables.RedisKeyArticlesIndexOrder, idStr).Err()
+			_ = repoRedis.ZRemOnObjects(ctx, variables.RedisKeyArticlesIndexOrder, idStr)
 			continue
 		}
 
@@ -378,8 +365,7 @@ func healMissingArticlesByIDs(ctx context.Context, missingIDs []int64) []article
 // RebuildArticlesIndex reconstruit intégralement l'index Redis L1 des articles actifs depuis L3 (ou L2 en fallback),
 // avec protection singleflight / verrou Redis contre les tempêtes de reconstruction.
 func RebuildArticlesIndex(ctx context.Context) ([]article_models.ArticlePayload, error) {
-	rdb := articleRedisClient()
-	if rdb == nil {
+	if !repoRedis.IsObjectPoolReady() {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeCacheError,
@@ -391,14 +377,14 @@ func RebuildArticlesIndex(ctx context.Context) ([]article_models.ArticlePayload,
 	rebuildArticlesMu.Lock()
 	defer rebuildArticlesMu.Unlock()
 
-	if initCount, errInit := rdb.Exists(ctx, variables.RedisKeyArticlesIndexInit).Result(); errInit == nil && initCount > 0 {
-		idStrs, errZ := rdb.ZRevRange(ctx, variables.RedisKeyArticlesIndexOrder, 0, -1).Result()
-		hLen, errH := rdb.HLen(ctx, variables.RedisKeyArticlesIndexData).Result()
+	if initExists, errInit := repoRedis.ExistsOnObjects(ctx, variables.RedisKeyArticlesIndexInit); errInit == nil && initExists {
+		idStrs, errZ := repoRedis.ZRevRangeOnObjects(ctx, variables.RedisKeyArticlesIndexOrder, 0, -1)
+		hLen, errH := repoRedis.HLenOnObjects(ctx, variables.RedisKeyArticlesIndexData)
 		if errZ == nil && errH == nil && int64(len(idStrs)) == hLen {
 			if len(idStrs) == 0 {
 				return []article_models.ArticlePayload{}, nil
 			}
-			if rawVals, errHM := rdb.HMGet(ctx, variables.RedisKeyArticlesIndexData, idStrs...).Result(); errHM == nil {
+			if rawVals, errHM := repoRedis.HMGetOnObjects(ctx, variables.RedisKeyArticlesIndexData, idStrs...); errHM == nil {
 				cached := make([]article_models.ArticlePayload, 0, len(idStrs))
 				allValid := true
 				for _, rv := range rawVals {
@@ -425,14 +411,10 @@ func RebuildArticlesIndex(ctx context.Context) ([]article_models.ArticlePayload,
 		}
 	}
 
-	// Acquisition optionnelle du verrou distribué sur Tier 1 Core (ou ObjectClient)
-	lockClient := infraRedis.CoreClient()
-	if lockClient == nil {
-		lockClient = rdb
-	}
-	_ = lockClient.SetNX(ctx, variables.RedisKeyArticlesRebuildLck, "1", 10*time.Second).Err()
+	// Acquisition optionnelle du verrou distribué sur Tier 1 Core (repli Object Pool)
+	_, _ = repoRedis.AcquireRawLockOnCore(ctx, variables.RedisKeyArticlesRebuildLck, 10*time.Second)
 	defer func() {
-		_ = lockClient.Del(ctx, variables.RedisKeyArticlesRebuildLck).Err()
+		_ = repoRedis.ReleaseRawLockOnCore(ctx, variables.RedisKeyArticlesRebuildLck)
 	}()
 
 	var activeArticles []article_models.ArticlePayload
@@ -450,7 +432,7 @@ func RebuildArticlesIndex(ctx context.Context) ([]article_models.ArticlePayload,
 	}
 
 	// Suppression Cluster-safe (Pipeline de DEL unitaires, zéro CROSSSLOT)
-	_ = repoRedis.DelKeysOnClient(ctx, rdb, variables.RedisKeyArticlesIndexData, variables.RedisKeyArticlesIndexOrder)
+	_ = repoRedis.DeleteKeysOnObjects(ctx, variables.RedisKeyArticlesIndexData, variables.RedisKeyArticlesIndexOrder)
 
 	validArticles := make([]article_models.ArticlePayload, 0, len(activeArticles))
 	for _, art := range activeArticles {
@@ -464,7 +446,7 @@ func RebuildArticlesIndex(ctx context.Context) ([]article_models.ArticlePayload,
 		validArticles = append(validArticles, art)
 	}
 
-	if err := rdb.Set(ctx, variables.RedisKeyArticlesIndexInit, "1", 0).Err(); err != nil {
+	if err := repoRedis.SetOnObjects(ctx, variables.RedisKeyArticlesIndexInit, "1", 0); err != nil {
 		return nil, numan_error.NewAppError(
 			http.StatusInternalServerError,
 			numan_error.CodeCacheError,

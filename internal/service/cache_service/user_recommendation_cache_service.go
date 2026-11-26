@@ -14,7 +14,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
-	goredis "github.com/redis/go-redis/v9"
 )
 
 // ############################################################################
@@ -449,8 +448,8 @@ func GetUserRecommendationIDs(ctx context.Context, userID int64, sortMode string
 	return ids, true, nil
 }
 
-// toRedisZSlice convertit une tranche de UserRecoScoredEntry en []*goredis.Z (tronquée à UserRecoTopK).
-func toRedisZSlice(entries []UserRecoScoredEntry) []*goredis.Z {
+// toRedisZSlice convertit une tranche de UserRecoScoredEntry en []redis.ZMember (tronquée à UserRecoTopK).
+func toRedisZSlice(entries []UserRecoScoredEntry) []redis.ZMember {
 	maxItems := variables.UserRecoTopK
 	if maxItems <= 0 {
 		maxItems = 150
@@ -458,18 +457,18 @@ func toRedisZSlice(entries []UserRecoScoredEntry) []*goredis.Z {
 	if len(entries) > maxItems {
 		entries = entries[:maxItems]
 	}
-	zSlice := make([]*goredis.Z, 0, len(entries))
+	zSlice := make([]redis.ZMember, 0, len(entries))
 	for _, e := range entries {
 		if e.UserID <= 0 {
 			continue
 		}
-		zSlice = append(zSlice, &goredis.Z{
+		zSlice = append(zSlice, redis.ZMember{
 			Score:  e.Score,
 			Member: strconv.FormatInt(e.UserID, 10),
 		})
 	}
 	if len(zSlice) == 0 {
-		zSlice = append(zSlice, &goredis.Z{
+		zSlice = append(zSlice, redis.ZMember{
 			Score:  0,
 			Member: variables.SpeedCacheEmptyMarker,
 		})

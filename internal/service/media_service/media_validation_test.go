@@ -13,9 +13,9 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/media_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	infraMinio "github.com/QuentinRegnier/numan-backend/internal/infrastructure/minio"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
+	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/media_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
@@ -60,7 +60,7 @@ func TestMediaServices_ValidationAndIAScorePersistence(t *testing.T) {
 	require.ErrorAs(t, err, &appErr)
 	assert.Equal(t, http.StatusBadRequest, appErr.HTTPStatus)
 
-	keys, errKeys := infraRedis.Rdb.Keys(ctx, "*").Result()
+	keys, errKeys := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, errKeys)
 	assert.Empty(t, keys)
 

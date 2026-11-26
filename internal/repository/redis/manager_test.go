@@ -7,7 +7,6 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
-	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -62,7 +61,7 @@ func TestUserRecommendationRedisCollectionsAndPrimitives(t *testing.T) {
 	assert.False(t, batchExists[104])
 
 	// 4. ZSetReplaceAtomic
-	require.NoError(t, redis.UserRecoListGlobal.ZSetReplaceAtomic(ctx, 42, []*goredis.Z{
+	require.NoError(t, redis.UserRecoListGlobal.ZSetReplaceAtomic(ctx, 42, []redis.ZMember{
 		{Score: 100.0, Member: 201},
 		{Score: 90.0, Member: 202},
 	}, time.Hour))
@@ -72,7 +71,7 @@ func TestUserRecommendationRedisCollectionsAndPrimitives(t *testing.T) {
 	assert.Equal(t, []string{"201", "202"}, members)
 
 	// Replace with new members atomically
-	require.NoError(t, redis.UserRecoListGlobal.ZSetReplaceAtomic(ctx, 42, []*goredis.Z{
+	require.NoError(t, redis.UserRecoListGlobal.ZSetReplaceAtomic(ctx, 42, []redis.ZMember{
 		{Score: 200.0, Member: 301},
 	}, time.Hour))
 	membersAfter, err := redis.UserRecoListGlobal.ZRevRange(ctx, 42, 0, -1)
@@ -146,7 +145,7 @@ func TestCommunityRecommendationRedisCollectionsAndPrimitives(t *testing.T) {
 		"1": "1001",
 		"3": "1003",
 	}, 0))
-	rawPins, err := redis.CommunityRecoPins.HGetAll(ctx, "fr").Result()
+	rawPins, err := redis.CommunityRecoPins.HGetAll(ctx, "fr")
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"1": "1001", "3": "1003"}, rawPins)
 
@@ -154,12 +153,12 @@ func TestCommunityRecommendationRedisCollectionsAndPrimitives(t *testing.T) {
 	require.NoError(t, redis.CommunityRecoPins.HashReplaceAtomic(ctx, "fr", map[string]any{
 		"2": "1002",
 	}, 0))
-	rawPinsAfter, err := redis.CommunityRecoPins.HGetAll(ctx, "fr").Result()
+	rawPinsAfter, err := redis.CommunityRecoPins.HGetAll(ctx, "fr")
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"2": "1002"}, rawPinsAfter)
 
 	// 6. ZSetReplaceAtomic (MULTI/EXEC)
-	require.NoError(t, redis.CommunityRecoRanked.ZSetReplaceAtomic(ctx, "fr", []*goredis.Z{
+	require.NoError(t, redis.CommunityRecoRanked.ZSetReplaceAtomic(ctx, "fr", []redis.ZMember{
 		{Score: 5.5, Member: "1001"},
 		{Score: 9.2, Member: "1002"},
 	}, 0))

@@ -12,7 +12,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
-	goredis "github.com/redis/go-redis/v9"
 )
 
 // ############################################################################
@@ -84,9 +83,9 @@ func collectSingleBasket(ctx context.Context, userID int64, activeSeed int64, qu
 }
 
 // readHashtagLeaderboard lit le leaderboard de hashtags pour une langue avec fallback sur les clés legacy.
-func readHashtagLeaderboard(ctx context.Context, lang int, stop int64) ([]goredis.Z, error) {
+func readHashtagLeaderboard(ctx context.Context, lang int, stop int64) ([]redis.ZMember, error) {
 	normLang := variables.NormalizeLangForCache(lang)
-	if redis.HashtagLeaderboard != nil && redis.HashtagLeaderboard.Client != nil {
+	if redis.HashtagLeaderboard.IsReady() {
 		if data, err := redis.HashtagLeaderboard.ZRevRangeWithScores(ctx, variables.HashtagLeaderboardSubKey(normLang), 0, stop); err == nil && len(data) > 0 {
 			return data, nil
 		}
@@ -94,7 +93,7 @@ func readHashtagLeaderboard(ctx context.Context, lang int, stop int64) ([]goredi
 			return data, nil
 		}
 	}
-	if redis.Tags != nil && redis.Tags.Client != nil {
+	if redis.Tags.IsReady() {
 		if data, err := redis.Tags.ZRevRangeWithScores(ctx, "trending", 0, stop); err == nil && len(data) > 0 {
 			return data, nil
 		}

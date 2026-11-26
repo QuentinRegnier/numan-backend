@@ -13,7 +13,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/mongo"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/postgres"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
-	goredis "github.com/redis/go-redis/v9"
 )
 
 // ############################################################################
@@ -70,7 +69,7 @@ func LoadSessionFromCache(ctx context.Context, userID int64, firebaseInstallatio
 
 		if errRedisIndex == nil {
 			resolvedSessionID = retrievedID
-		} else if !errors.Is(errRedisIndex, goredis.Nil) {
+		} else if !errors.Is(errRedisIndex, redis.ErrNotFound) {
 			numan_log.Warn(timeoutCtx).Err(errRedisIndex).Int64("user_id", userID).Msg("Erreur Redis lors de la lecture de l'index de session")
 		}
 	}

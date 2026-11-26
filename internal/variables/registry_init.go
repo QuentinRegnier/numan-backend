@@ -71,6 +71,12 @@ func init() {
 	registerDuration("MediaCleanupCronInterval", "cleaner", &MediaCleanupCronInterval, positiveDuration, nil)
 	registerDuration("ReactionCleanupCronInterval", "cleaner", &ReactionCleanupCronInterval, positiveDuration, nil)
 	registerDuration("SavedCleanupCronInterval", "cleaner", &SavedCleanupCronInterval, positiveDuration, nil)
+	registerBool("RedisOrphanCleanerDryRun", "cleaner", &RedisOrphanCleanerDryRun)
+	registerDuration("RedisOrphanGraceWindow", "cleaner", &RedisOrphanGraceWindow, positiveDuration, nil)
+	registerInt("RedisOrphanScanCount", "cleaner", &RedisOrphanScanCount, positiveInt)
+	registerInt("RedisOrphanPostgresBatchSize", "cleaner", &RedisOrphanPostgresBatchSize, positiveInt)
+	registerInt("RedisOrphanUnlinkBatchSize", "cleaner", &RedisOrphanUnlinkBatchSize, positiveInt)
+	registerInt("RedisOrphanMaxKeysPerCycle", "cleaner", &RedisOrphanMaxKeysPerCycle, positiveInt)
 
 	// 3. comment_constants.go
 	registerInt("CommentPriorityMultiplier", "comment", &CommentPriorityMultiplier, nonNegativeInt)

@@ -18,7 +18,6 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
-	goredis "github.com/redis/go-redis/v9"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -120,7 +119,7 @@ func UpdateUserSpeedCachePrivacy(ctx context.Context, userID int64, conversation
 	var userLitePayload lite_models.UserLiteRequest
 
 	errGet := redis.UsersLite.GetObject(ctx, userID, &userLitePayload)
-	if errGet != nil && !errors.Is(errGet, goredis.Nil) {
+	if errGet != nil && !errors.Is(errGet, redis.ErrNotFound) {
 		numan_log.Warn(ctx).Err(errGet).Int64("user_id", userID).Msg("Erreur Redis lors de la lecture du profil allégé pour mise à jour de confidentialité")
 	}
 	if errGet == nil && userLitePayload.ID != 0 {

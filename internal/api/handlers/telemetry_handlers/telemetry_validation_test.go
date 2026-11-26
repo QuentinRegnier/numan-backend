@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/QuentinRegnier/numan-backend/internal/api/handlers/telemetry_handlers"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
+	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -46,7 +46,7 @@ func TestSyncTelemetryHandler_InvalidPayload_NoRedisWrites(t *testing.T) {
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 
-	keys, errKeys := infraRedis.Rdb.Keys(context.Background(), "*").Result()
+	keys, errKeys := repoRedis.ScanKeys(context.Background(), "*", 200)
 	require.NoError(t, errKeys)
 	assert.Empty(t, keys)
 }

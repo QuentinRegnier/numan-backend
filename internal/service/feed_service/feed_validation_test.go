@@ -7,8 +7,8 @@ import (
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/feed_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
+	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/feed_service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,7 +31,7 @@ func TestGetFeed_Validation(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, appErr.HTTPStatus)
 	assert.Equal(t, numan_error.CodeInvalidPayload, appErr.Code)
 
-	keys, err := infraRedis.Rdb.Keys(ctx, "*").Result()
+	keys, err := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, err)
 	assert.Empty(t, keys)
 }

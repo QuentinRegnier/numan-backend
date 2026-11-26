@@ -28,12 +28,12 @@ func TrustScoreMiddleware() gin.HandlerFunc {
 		}
 
 		// 1. Vérification O(1) du bannissement stéganographique
-		if redis.SteganoBanlist != nil && redis.SteganoBanlist.Client != nil {
-			isSteganoBanned, errBan := redis.SteganoBanlist.Client.SIsMember(
+		if redis.SteganoBanlist.IsReady() {
+			isSteganoBanned, errBan := redis.SteganoBanlist.SIsMember(
 				c.Request.Context(),
-				redis.SteganoBanlist.Key("global"),
+				"global",
 				fmt.Sprintf("%d", callerID),
-			).Result()
+			)
 			if errBan == nil && isSteganoBanned {
 				numan_error.RespondWithError(c, numan_error.NewForbidden(
 					numan_error.CodeSteganoBanned,

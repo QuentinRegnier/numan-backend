@@ -40,7 +40,8 @@ type Registry struct {
 	queueDepthFn   func(ctx context.Context) (int64, bool)
 	redisEvictedFn func(ctx context.Context) (int64, bool)
 
-	ext *extendedState
+	ext    *extendedState
+	orphan *orphanCleanerMetricsState
 }
 
 var defaultRegistry = NewRegistry()
@@ -51,6 +52,7 @@ func NewRegistry() *Registry {
 		startTime:    time.Now(),
 		httpCounters: make(map[httpMetricKey]*atomic.Uint64),
 		ext:          newExtendedState(),
+		orphan:       newOrphanCleanerMetricsState(),
 	}
 }
 
@@ -322,6 +324,7 @@ func (r *Registry) Render(ctx context.Context) string {
 	}
 
 	r.renderExtendedMetrics(ctx, &b)
+	r.renderOrphanCleanerMetrics(&b)
 
 	return b.String()
 }

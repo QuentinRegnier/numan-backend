@@ -26,13 +26,13 @@ const (
 	StrictTypeViews  = "views"
 	StrictTypeRecent = "recent"
 
-	// TTLs obligatoires des ZSETs éphémères du Magasin (MOST Cache)
+	// TTLs métier des ZSETs & SETs éphémères du Magasin (MOST Cache)
 	TrendGlobalHourlyTTL = 48 * time.Hour
 	TrendGlobalDailyTTL  = 72 * time.Hour
 	TrendTagDailyTTL     = 72 * time.Hour
 	TrendTagWeeklyTTL    = 14 * 24 * time.Hour
 	AuthorPostWindowTTL  = 24 * time.Hour
-	TagQuarantineTTL     = 24 * time.Hour
+	TagQuarantineTTL     = ShortTTL
 	IndirectTagSetTTL    = 7 * 24 * time.Hour
 )
 

@@ -10,9 +10,9 @@ import (
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/conversation_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/models/member_models"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
-	infraRedis "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/infrastructure/test"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
+	repoRedis "github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service/cache_service/object_cache_service"
 	"github.com/QuentinRegnier/numan-backend/internal/service/conversation_service"
 	"github.com/QuentinRegnier/numan-backend/internal/variables"
@@ -43,7 +43,7 @@ func TestConversationServices_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 	}
 	require.NoError(t, object_cache_service.SetConversationInObjectCache(ctx, seedConv))
 
-	initialKeys, err := infraRedis.Rdb.Keys(ctx, "*").Result()
+	initialKeys, err := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, err)
 
 	// 1. CreateConversation invalid inputs & 403 preservation for communities
@@ -162,11 +162,11 @@ func TestConversationServices_InvalidPayloads_NoRedisSideEffects(t *testing.T) {
 	assertConvServiceError(t, err, http.StatusBadRequest, numan_error.CodeInvalidPayload)
 
 	// Verify no Redis side effects or queued DB writes occurred
-	finalKeys, err := infraRedis.Rdb.Keys(ctx, "*").Result()
+	finalKeys, err := repoRedis.ScanKeys(ctx, "*", 200)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, initialKeys, finalKeys)
 
-	queueKeys, err := infraRedis.Rdb.Keys(ctx, "request_cache:q:*").Result()
+	queueKeys, err := repoRedis.ScanKeys(ctx, "request_cache:q:*", 200)
 	require.NoError(t, err)
 	assert.Empty(t, queueKeys)
 }

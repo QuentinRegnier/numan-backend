@@ -8,7 +8,7 @@ import (
 	"time"
 
 	redisgo "github.com/QuentinRegnier/numan-backend/internal/infrastructure/redis"
-	"github.com/redis/go-redis/v9"
+	goredis "github.com/redis/go-redis/v9"
 )
 
 // ============================================================================
@@ -38,15 +38,18 @@ end
 return redis.call('ZSCORE', key, member)
 `
 
-var zaddCapCompiled = redis.NewScript(zaddCapScript)
+var zaddCapCompiled = goredis.NewScript(zaddCapScript)
 
 // ============================================================================
-// 2. MÉTHODES DDD DE LA STRUCTURE "Collection" (Nouvelle Architecture)
+// 2. MÉTHODES DDD DE LA STRUCTURE "Collection"
 // ============================================================================
 
 // ZAdd ajoute un élément avec un score (ou met à jour son score).
 func (c *Collection) ZAdd(ctx context.Context, id any, score float64, member any) error {
-	return c.Client.ZAdd(ctx, c.Key(id), redis.Z{
+	if err := c.checkReady(); err != nil {
+		return err
+	}
+	return c.client.ZAdd(ctx, c.Key(id), goredis.Z{
 		Score:  score,
 		Member: member,
 	}).Err()
@@ -54,39 +57,92 @@ func (c *Collection) ZAdd(ctx context.Context, id any, score float64, member any
 
 // ZAddWithCap insère un élément, plafonne le ZSET et applique le DefaultTTL de la collection en une seule passe atomique via Lua (EVALSHA).
 func (c *Collection) ZAddWithCap(ctx context.Context, id any, score float64, member any, maxSize int) error {
+	if err := c.checkReady(); err != nil {
+		return err
+	}
 	ttlSeconds := int64(c.DefaultTTL.Seconds())
-	return zaddCapCompiled.Run(ctx, c.Client, []string{c.Key(id)}, score, member, maxSize, ttlSeconds).Err()
+	return zaddCapCompiled.Run(ctx, c.client, []string{c.Key(id)}, score, member, maxSize, ttlSeconds).Err()
 }
 
 // ZAddWithCapAndTTL insère un élément, plafonne le ZSET et applique un TTL explicite en une seule passe atomique via Lua (EVALSHA).
 func (c *Collection) ZAddWithCapAndTTL(ctx context.Context, id any, score float64, member any, maxSize int, ttl time.Duration) error {
+	if err := c.checkReady(); err != nil {
+		return err
+	}
 	ttlSeconds := int64(ttl.Seconds())
-	return zaddCapCompiled.Run(ctx, c.Client, []string{c.Key(id)}, score, member, maxSize, ttlSeconds).Err()
+	return zaddCapCompiled.Run(ctx, c.client, []string{c.Key(id)}, score, member, maxSize, ttlSeconds).Err()
 }
 
 // ZIncrBy incrémente le score d'un membre existant.
 func (c *Collection) ZIncrBy(ctx context.Context, id any, increment float64, member any) error {
+	if err := c.checkReady(); err != nil {
+		return err
+	}
 	memberStr := fmt.Sprintf("%v", member)
-	return c.Client.ZIncrBy(ctx, c.Key(id), increment, memberStr).Err()
+	return c.client.ZIncrBy(ctx, c.Key(id), increment, memberStr).Err()
 }
 
 // ZRem supprime un ou plusieurs membres d'un ZSET.
 func (c *Collection) ZRem(ctx context.Context, id any, members ...any) error {
-	return c.Client.ZRem(ctx, c.Key(id), members...).Err()
+	if err := c.checkReady(); err != nil {
+		return err
+	}
+	if len(members) == 0 {
+		return nil
+	}
+	return c.client.ZRem(ctx, c.Key(id), members...).Err()
 }
 
 // ZRemRangeByRank supprime les éléments selon leur position (rang) dans le tri.
 func (c *Collection) ZRemRangeByRank(ctx context.Context, id any, start, stop int64) error {
-	return c.Client.ZRemRangeByRank(ctx, c.Key(id), start, stop).Err()
+	if err := c.checkReady(); err != nil {
+		return err
+	}
+	return c.client.ZRemRangeByRank(ctx, c.Key(id), start, stop).Err()
 }
 
 // ZRemRangeByScore supprime les éléments dont le score est compris entre min et max.
 func (c *Collection) ZRemRangeByScore(ctx context.Context, id any, min, max string) error {
-	return c.Client.ZRemRangeByScore(ctx, c.Key(id), min, max).Err()
+	if err := c.checkReady(); err != nil {
+		return err
+	}
+	return c.client.ZRemRangeByScore(ctx, c.Key(id), min, max).Err()
+}
+
+// ZSetReplaceAtomic remplace atomiquement le contenu d'un ZSET (DEL + ZADD + EXPIRE via MULTI/EXEC)
+// sans jamais exposer de liste partiellement écrite aux lecteurs concurrents.
+func (c *Collection) ZSetReplaceAtomic(ctx context.Context, id any, members []ZMember, ttl time.Duration) error {
+	if err := c.checkReady(); err != nil {
+		return err
+	}
+	key := c.Key(id)
+	if ttl <= 0 {
+		ttl = c.DefaultTTL
+	}
+	pipe := c.client.TxPipeline()
+	pipe.Del(ctx, key)
+	if len(members) > 0 {
+		zVals := make([]goredis.Z, 0, len(members))
+		for _, m := range members {
+			zVals = append(zVals, goredis.Z{
+				Score:  m.Score,
+				Member: m.Member,
+			})
+		}
+		pipe.ZAdd(ctx, key, zVals...)
+		if ttl > 0 {
+			pipe.Expire(ctx, key, ttl)
+		}
+	}
+	_, err := pipe.Exec(ctx)
+	return err
 }
 
 // ZUnionStore fusionne plusieurs ZSETs de la collection vers un identifiant destination (Cluster-safe).
 func (c *Collection) ZUnionStore(ctx context.Context, destID any, sourceIDs []any, aggregate string) error {
+	if err := c.checkReady(); err != nil {
+		return err
+	}
 	if len(sourceIDs) == 0 {
 		return nil
 	}
@@ -99,20 +155,23 @@ func (c *Collection) ZUnionStore(ctx context.Context, destID any, sourceIDs []an
 	}
 	destKey := c.Key(destID)
 
-	if redisgo.IsClusterClient(c.Client) {
-		pipe := c.Client.Pipeline()
-		cmds := make([]*redis.ZSliceCmd, len(keys))
+	if redisgo.IsClusterClient(c.client) {
+		pipe := c.client.Pipeline()
+		cmds := make([]*goredis.ZSliceCmd, len(keys))
 		for i, k := range keys {
 			cmds[i] = pipe.ZRangeWithScores(ctx, k, 0, -1)
 		}
-		if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+		if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, goredis.Nil) {
 			return err
 		}
 		merged := make(map[string]float64)
 		for _, cmd := range cmds {
 			zs, errZ := cmd.Result()
 			if errZ != nil {
-				continue
+				if errors.Is(errZ, goredis.Nil) {
+					continue
+				}
+				return errZ
 			}
 			for _, z := range zs {
 				m := fmt.Sprintf("%v", z.Member)
@@ -135,38 +194,47 @@ func (c *Collection) ZUnionStore(ctx context.Context, destID any, sourceIDs []an
 				}
 			}
 		}
-		members := make([]*redis.Z, 0, len(merged))
+		members := make([]ZMember, 0, len(merged))
 		for m, sc := range merged {
-			members = append(members, &redis.Z{Score: sc, Member: m})
+			members = append(members, ZMember{Score: sc, Member: m})
 		}
 		return c.ZSetReplaceAtomic(ctx, destID, members, c.DefaultTTL)
 	}
 
-	if err := c.Client.ZUnionStore(ctx, destKey, &redis.ZStore{
+	if err := c.client.ZUnionStore(ctx, destKey, &goredis.ZStore{
 		Keys:      keys,
 		Aggregate: aggregate,
 	}).Err(); err != nil {
 		return err
 	}
 	if c.DefaultTTL > 0 {
-		_ = c.Client.Expire(ctx, destKey, c.DefaultTTL).Err()
+		_ = c.client.Expire(ctx, destKey, c.DefaultTTL).Err()
 	}
 	return nil
 }
 
 // ZRevRange récupère une liste d'éléments triés du plus grand score au plus petit.
 func (c *Collection) ZRevRange(ctx context.Context, id any, start, stop int64) ([]string, error) {
-	return c.Client.ZRevRange(ctx, c.Key(id), start, stop).Result()
+	if err := c.checkReady(); err != nil {
+		return nil, err
+	}
+	return c.client.ZRevRange(ctx, c.Key(id), start, stop).Result()
 }
 
 // ZRange récupère une liste d'éléments triés du plus petit score au plus grand.
 func (c *Collection) ZRange(ctx context.Context, id any, start, stop int64) ([]string, error) {
-	return c.Client.ZRange(ctx, c.Key(id), start, stop).Result()
+	if err := c.checkReady(); err != nil {
+		return nil, err
+	}
+	return c.client.ZRange(ctx, c.Key(id), start, stop).Result()
 }
 
 // ZRangeByScoreWithLimit extrait les membres dont le score est inférieur ou égal à un seuil maximum (Batching).
 func (c *Collection) ZRangeByScoreWithLimit(ctx context.Context, id any, maxScore int64, limit int64) ([]string, error) {
-	return c.Client.ZRangeByScore(ctx, c.Key(id), &redis.ZRangeBy{
+	if err := c.checkReady(); err != nil {
+		return nil, err
+	}
+	return c.client.ZRangeByScore(ctx, c.Key(id), &goredis.ZRangeBy{
 		Min:    "-inf",
 		Max:    strconv.FormatInt(maxScore, 10),
 		Offset: 0,
@@ -176,7 +244,10 @@ func (c *Collection) ZRangeByScoreWithLimit(ctx context.Context, id any, maxScor
 
 // ZRevRangeByScore extrait les membres triés par score décroissant avec limite.
 func (c *Collection) ZRevRangeByScore(ctx context.Context, id any, max string, min string, limit int64) ([]string, error) {
-	return c.Client.ZRevRangeByScore(ctx, c.Key(id), &redis.ZRangeBy{
+	if err := c.checkReady(); err != nil {
+		return nil, err
+	}
+	return c.client.ZRevRangeByScore(ctx, c.Key(id), &goredis.ZRangeBy{
 		Max:    max,
 		Min:    min,
 		Offset: 0,
@@ -186,7 +257,10 @@ func (c *Collection) ZRevRangeByScore(ctx context.Context, id any, max string, m
 
 // ZRangeByScore extrait les membres triés par score croissant avec limite.
 func (c *Collection) ZRangeByScore(ctx context.Context, id any, min string, max string, limit int64) ([]string, error) {
-	return c.Client.ZRangeByScore(ctx, c.Key(id), &redis.ZRangeBy{
+	if err := c.checkReady(); err != nil {
+		return nil, err
+	}
+	return c.client.ZRangeByScore(ctx, c.Key(id), &goredis.ZRangeBy{
 		Min:    min,
 		Max:    max,
 		Offset: 0,
@@ -196,7 +270,10 @@ func (c *Collection) ZRangeByScore(ctx context.Context, id any, min string, max 
 
 // ZAddLex ajoute un élément avec un score absolu de 0 pour un tri purement lexicographique.
 func (c *Collection) ZAddLex(ctx context.Context, id any, member any) error {
-	return c.Client.ZAdd(ctx, c.Key(id), redis.Z{
+	if err := c.checkReady(); err != nil {
+		return err
+	}
+	return c.client.ZAdd(ctx, c.Key(id), goredis.Z{
 		Score:  0,
 		Member: member,
 	}).Err()
@@ -204,75 +281,56 @@ func (c *Collection) ZAddLex(ctx context.Context, id any, member any) error {
 
 // ZRangeByLex cherche des éléments par préfixe (Auto-complétion).
 func (c *Collection) ZRangeByLex(ctx context.Context, id any, prefix string, offset, limit int64) ([]string, error) {
+	if err := c.checkReady(); err != nil {
+		return nil, err
+	}
 	if prefix == "" {
 		return []string{}, nil
 	}
-	opt := &redis.ZRangeBy{
+	opt := &goredis.ZRangeBy{
 		Min:    "[" + prefix,
 		Max:    "[" + prefix + "\xff",
 		Offset: offset,
 		Count:  limit,
 	}
-	return c.Client.ZRangeByLex(ctx, c.Key(id), opt).Result()
+	return c.client.ZRangeByLex(ctx, c.Key(id), opt).Result()
 }
 
 // ZScore récupère le score actuel d'un membre.
 func (c *Collection) ZScore(ctx context.Context, id any, member any) (float64, error) {
-	return c.Client.ZScore(ctx, c.Key(id), fmt.Sprintf("%v", member)).Result()
-}
-
-// ZScores abstrait la récupération de plusieurs scores en un seul aller-retour TCP (Pipeline).
-// Si un membre n'est pas présent dans le ZSET (redis.Nil), son score vaut 0 sans interrompre le lot.
-func (c *Collection) ZScores(ctx context.Context, id any, members []string) ([]float64, error) {
-	if len(members) == 0 {
-		return nil, nil
+	if err := c.checkReady(); err != nil {
+		return 0, err
 	}
-
-	pipe := c.Client.Pipeline()
-	for _, member := range members {
-		pipe.ZScore(ctx, c.Key(id), member)
-	}
-
-	cmds, err := pipe.Exec(ctx)
-	if err != nil && !errors.Is(err, redis.Nil) {
-		return nil, err
-	}
-
-	scores := make([]float64, len(members))
-	for i, cmd := range cmds {
-		if fCmd, ok := cmd.(*redis.FloatCmd); ok {
-			val, errCmd := fCmd.Result()
-			if errCmd != nil {
-				if errors.Is(errCmd, redis.Nil) {
-					scores[i] = 0
-					continue
-				}
-				return nil, errCmd
-			}
-			scores[i] = val
-		}
-	}
-	return scores, nil
+	return c.client.ZScore(ctx, c.Key(id), fmt.Sprintf("%v", member)).Result()
 }
 
 // ZCount compte le nombre d'éléments entre min et max score.
 func (c *Collection) ZCount(ctx context.Context, id any, min, max string) (int64, error) {
-	return c.Client.ZCount(ctx, c.Key(id), min, max).Result()
+	if err := c.checkReady(); err != nil {
+		return 0, err
+	}
+	return c.client.ZCount(ctx, c.Key(id), min, max).Result()
 }
 
 // ZCard donne la taille totale du set (nombre d'éléments).
 func (c *Collection) ZCard(ctx context.Context, id any) (int64, error) {
-	return c.Client.ZCard(ctx, c.Key(id)).Result()
+	if err := c.checkReady(); err != nil {
+		return 0, err
+	}
+	return c.client.ZCard(ctx, c.Key(id)).Result()
 }
 
 // ZRevRangeByRanks utilise un Pipeline Redis pour récupérer une liste de rangs spécifiques.
 func (c *Collection) ZRevRangeByRanks(ctx context.Context, id any, ranks []int64) ([]string, error) {
+	if err := c.checkReady(); err != nil {
+		return nil, err
+	}
 	if len(ranks) == 0 {
 		return nil, nil
 	}
 
-	pipe := c.Client.Pipeline()
-	cmds := make([]*redis.StringSliceCmd, 0, len(ranks))
+	pipe := c.client.Pipeline()
+	cmds := make([]*goredis.StringSliceCmd, 0, len(ranks))
 	key := c.Key(id)
 
 	for _, rank := range ranks {
@@ -280,7 +338,7 @@ func (c *Collection) ZRevRangeByRanks(ctx context.Context, id any, ranks []int64
 	}
 
 	_, err := pipe.Exec(ctx)
-	if err != nil && !errors.Is(err, redis.Nil) {
+	if err != nil && !errors.Is(err, goredis.Nil) {
 		return nil, err
 	}
 
@@ -288,144 +346,33 @@ func (c *Collection) ZRevRangeByRanks(ctx context.Context, id any, ranks []int64
 	for _, cmd := range cmds {
 		res, err := cmd.Result()
 		if err != nil {
-			return nil, err
-		}
-		if len(res) > 0 {
-			results = append(results, res[0])
-		}
-	}
-	return results, nil
-}
-
-// ZRevRangeWithScores récupère une liste d'éléments triés avec leurs scores respectifs.
-func (c *Collection) ZRevRangeWithScores(ctx context.Context, id any, start, stop int64) ([]redis.Z, error) {
-	return c.Client.ZRevRangeWithScores(ctx, c.Key(id), start, stop).Result()
-}
-
-// ============================================================================
-// 3. FONCTIONS GLOBALES (LEGACY)
-// ============================================================================
-
-func ZAdd(ctx context.Context, key string, score float64, member interface{}) error {
-	return redisgo.CoreClient().ZAdd(ctx, key, redis.Z{Score: score, Member: member}).Err()
-}
-
-func ZIncrBy(ctx context.Context, key string, increment float64, member interface{}) error {
-	return redisgo.CoreClient().ZIncrBy(ctx, key, increment, fmt.Sprintf("%v", member)).Err()
-}
-
-func ZRevRange(ctx context.Context, key string, start, stop int64) ([]string, error) {
-	return redisgo.CoreClient().ZRevRange(ctx, key, start, stop).Result()
-}
-
-func ZRange(ctx context.Context, key string, start, stop int64) ([]string, error) {
-	return redisgo.CoreClient().ZRange(ctx, key, start, stop).Result()
-}
-
-func ZRemRangeByRank(ctx context.Context, key string, start, stop int64) error {
-	return redisgo.CoreClient().ZRemRangeByRank(ctx, key, start, stop).Err()
-}
-
-func ZScore(ctx context.Context, key string, member interface{}) (float64, error) {
-	return redisgo.CoreClient().ZScore(ctx, key, fmt.Sprintf("%v", member)).Result()
-}
-
-func ZCount(ctx context.Context, key, min, max string) (int64, error) {
-	return redisgo.CoreClient().ZCount(ctx, key, min, max).Result()
-}
-
-func ZCard(ctx context.Context, key string) (int64, error) {
-	return redisgo.CoreClient().ZCard(ctx, key).Result()
-}
-
-func ZRevRangeByRanks(ctx context.Context, key string, ranks []int64) ([]string, error) {
-	if len(ranks) == 0 {
-		return nil, nil
-	}
-	pipe := redisgo.CoreClient().Pipeline()
-	cmds := make([]*redis.StringSliceCmd, 0, len(ranks))
-	for _, rank := range ranks {
-		cmds = append(cmds, pipe.ZRevRange(ctx, key, rank, rank))
-	}
-	_, err := pipe.Exec(ctx)
-	if err != nil && !errors.Is(err, redis.Nil) {
-		return nil, err
-	}
-	results := make([]string, 0, len(ranks))
-	for _, cmd := range cmds {
-		res, err := cmd.Result()
-		if err != nil {
-			return nil, err
-		}
-		if len(res) > 0 {
-			results = append(results, res[0])
-		}
-	}
-	return results, nil
-}
-
-func ZAddWithCap(ctx context.Context, key string, score float64, member any, maxSize int) error {
-	return zaddCapCompiled.Run(ctx, redisgo.CoreClient(), []string{key}, score, member, maxSize, 0).Err()
-}
-
-func ZRevRangeWithScores(ctx context.Context, key string, start, stop int64) ([]redis.Z, error) {
-	return redisgo.CoreClient().ZRevRangeWithScores(ctx, key, start, stop).Result()
-}
-
-func Del(ctx context.Context, keys ...string) error {
-	return delKeysClusterSafe(ctx, redisgo.CoreClient(), keys)
-}
-
-func ZScores(ctx context.Context, key string, members []string) ([]float64, error) {
-	if len(members) == 0 {
-		return nil, nil
-	}
-	pipe := redisgo.CoreClient().Pipeline()
-	for _, member := range members {
-		pipe.ZScore(ctx, key, member)
-	}
-	cmds, err := pipe.Exec(ctx)
-	if err != nil && !errors.Is(err, redis.Nil) {
-		return nil, err
-	}
-	scores := make([]float64, len(members))
-	for i, cmd := range cmds {
-		if fCmd, ok := cmd.(*redis.FloatCmd); ok {
-			val, errCmd := fCmd.Result()
-			if errCmd != nil {
-				if errors.Is(errCmd, redis.Nil) {
-					scores[i] = 0
-					continue
-				}
-				return nil, errCmd
+			if errors.Is(err, goredis.Nil) {
+				continue
 			}
-			scores[i] = val
+			return nil, err
+		}
+		if len(res) > 0 {
+			results = append(results, res[0])
 		}
 	}
-	return scores, nil
+	return results, nil
 }
 
-// ZAddMultiple ajoute plusieurs éléments dans des ZSETs distincts (une clé = un ZSET)
-// avec le même membre et le même score, en un seul appel réseau via Pipeline.
-// Utile pour le système de Sync Ledger (ex: "ajouter le convID à tous les participants").
-func (c *Collection) ZAddMultiple(ctx context.Context, ids []int64, score float64, member string) error {
-	if len(ids) == 0 {
-		return nil
+// ZRevRangeWithScores récupère une liste d'éléments triés avec leurs scores respectifs (sans fuiter go-redis.Z).
+func (c *Collection) ZRevRangeWithScores(ctx context.Context, id any, start, stop int64) ([]ZMember, error) {
+	if err := c.checkReady(); err != nil {
+		return nil, err
 	}
-
-	pipe := c.Client.Pipeline()
-	for _, id := range ids {
-		key := c.Key(id)
-		pipe.ZAdd(ctx, key, redis.Z{
-			Score:  score,
-			Member: member,
-		})
-		// Si la collection a un TTL par défaut défini (comme le Ledger), on l'applique
-		if c.DefaultTTL > 0 {
-			pipe.Expire(ctx, key, c.DefaultTTL)
+	raw, err := c.client.ZRevRangeWithScores(ctx, c.Key(id), start, stop).Result()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ZMember, len(raw))
+	for i, z := range raw {
+		out[i] = ZMember{
+			Score:  z.Score,
+			Member: z.Member,
 		}
 	}
-
-	_, err := pipe.Exec(ctx)
-	return err
+	return out, nil
 }
