@@ -30,11 +30,12 @@ func collectCandidates(ctx context.Context, userID int64, seeds [3]int64, quotas
 	}
 
 	baskets := newFeedBaskets(quotas.MaxCandidates, seeds[0], seeds[1], seeds[2])
+	socialQuota, _, _ := quotas.getQuotaSizes()
 
 	// ─────────────────────────────────────────────────────────────────────────────
-	// ÉTAPE 1 : Le Socle Social (Boîte aux lettres)
+	// ÉTAPE 1 : Le Socle Social (Boîte aux lettres plafonnée par SocialRatio & par auteur)
 	// ─────────────────────────────────────────────────────────────────────────────
-	err := baskets.loadSocialMailbox(ctx, userID)
+	_, err := baskets.loadSocialMailbox(ctx, userID, socialQuota)
 	if err != nil {
 		numan_log.Error(ctx).Err(err).Msg("collectCandidates: Échec du chargement de la boîte aux lettres")
 		return nil, err
@@ -67,14 +68,13 @@ func collectSingleBasket(ctx context.Context, userID int64, activeSeed int64, qu
 		resolvedLang = variables.NormalizeLangForCache(lang[0])
 	}
 
-	baskets := newFeedBaskets(quotas.MaxCandidates, activeSeed, activeSeed, activeSeed)
-	err := baskets.loadSocialMailbox(ctx, userID)
-	if err != nil {
+	singleBasket := newCandidateBasket(quotas.MaxCandidates, activeSeed)
+	socialQuota, _, _ := quotas.getQuotaSizes()
+	if _, err := loadSocialMailboxIntoBaskets(ctx, userID, socialQuota, singleBasket); err != nil {
 		numan_log.Error(ctx).Err(err).Msg("collectSingleBasket: Échec du chargement de la boîte aux lettres")
 		return nil, err
 	}
 
-	singleBasket := baskets.FeedA
 	semanticTagCloud := buildTagCloud(ctx, userID, resolvedLang)
 
 	fillBasket(ctx, userID, singleBasket, quotas, semanticTagCloud, resolvedLang)
@@ -217,7 +217,14 @@ func fillBasket(ctx context.Context, userID int64, basket *candidateBasket, quot
 		resolvedLang = variables.NormalizeLangForCache(lang[0])
 	}
 
-	// Application de TagVariance de l'ADN du panier (±15%) entre TagRatio et GlobalRatio
+	remainingCapacity := basket.Capacity - basket.size()
+	if remainingCapacity <= 0 {
+		return
+	}
+
+	// Application de TagVariance de l'ADN du panier (±15%) entre TagRatio et GlobalRatio,
+	// puis redistribution proportionnelle de toute la capacité restante (y compris la part
+	// de SocialRatio non consommée par la Mailbox) pour garantir un panier plein à 100%.
 	effectiveTagRatio := quotas.TagRatio + basket.Personality.TagVariance
 	effectiveGlobalRatio := quotas.GlobalRatio - basket.Personality.TagVariance
 	if effectiveTagRatio < 0.05 {
@@ -227,8 +234,9 @@ func fillBasket(ctx context.Context, userID int64, basket *candidateBasket, quot
 		effectiveGlobalRatio = 0.05
 	}
 
-	globalTargetQuota := int(math.Round(float64(quotas.MaxCandidates) * effectiveGlobalRatio))
-	tagTargetQuota := int(math.Round(float64(quotas.MaxCandidates) * effectiveTagRatio))
+	nonSocialSum := effectiveTagRatio + effectiveGlobalRatio
+	globalTargetQuota := int(math.Round(float64(remainingCapacity) * (effectiveGlobalRatio / nonSocialSum)))
+	tagTargetQuota := remainingCapacity - globalTargetQuota
 	if globalTargetQuota < 0 {
 		globalTargetQuota = 0
 	}

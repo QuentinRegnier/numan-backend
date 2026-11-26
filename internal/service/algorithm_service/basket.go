@@ -4,14 +4,16 @@ import (
 	"context"
 	"math"
 	"math/rand"
+	"strconv"
+	"strings"
 	"sync"
 
+	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_log"
 	"github.com/QuentinRegnier/numan-backend/internal/pkg"
-
-	"github.com/QuentinRegnier/numan-backend/internal/domain/numan_error"
 	"github.com/QuentinRegnier/numan-backend/internal/repository/redis"
 	"github.com/QuentinRegnier/numan-backend/internal/service"
+	"github.com/QuentinRegnier/numan-backend/internal/variables"
 )
 
 // ############################################################################
@@ -148,6 +150,27 @@ func (basket *candidateBasket) Add(ctx context.Context, userID int64, postID int
 	return false
 }
 
+// addWithoutSeenCheck insère un post dans le panier sans relancer le Cuckoo Filter
+// (utilisé lorsque la vérification HasSeen a déjà été effectuée en amont pour un lot A/B/C).
+func (basket *candidateBasket) addWithoutSeenCheck(postID int64, origin candidateOrigin) bool {
+	basket.mutex.Lock()
+	defer basket.mutex.Unlock()
+
+	if basket.IsFull {
+		return false
+	}
+	if _, exists := basket.UniquePostIDsMap[postID]; exists {
+		return false
+	}
+
+	basket.Items = append(basket.Items, basketItem{PostID: postID, Origin: origin})
+	basket.UniquePostIDsMap[postID] = struct{}{}
+	if len(basket.Items) >= basket.Capacity {
+		basket.IsFull = true
+	}
+	return true
+}
+
 // size retourne la taille actuelle du panier de manière thread-safe
 func (basket *candidateBasket) size() int {
 	basket.mutex.RLock()
@@ -242,30 +265,118 @@ func newFeedBaskets(capacity int, seedA, seedB, seedC int64) *feedBaskets {
 	}
 }
 
-// loadSocialMailbox lit le ZSET préparé par le Worker asynchrone et injecte TOUS les posts
-// des abonnements/amis dans les 3 paniers sans distinction (Valeurs sûres).
-func (feedBaskets *feedBaskets) loadSocialMailbox(ctx context.Context, userID int64) error {
-	mailboxKey := redis.FeedsMailbox.Key(userID)
+// parseMailboxMember décode un membre stocké dans FeedsMailbox.
+// Supporte le format enrichi "{postID}:{authorID}" ainsi que le format legacy "{postID}".
+func parseMailboxMember(raw string) (postID int64, authorID int64, ok bool) {
+	if raw == "" {
+		return 0, 0, false
+	}
+	if idx := strings.IndexByte(raw, ':'); idx >= 0 {
+		pid, errPost := strconv.ParseInt(raw[:idx], 10, 64)
+		if errPost != nil || pid <= 0 {
+			return 0, 0, false
+		}
+		aid, errAuthor := strconv.ParseInt(raw[idx+1:], 10, 64)
+		if errAuthor != nil || aid < 0 {
+			aid = 0
+		}
+		return pid, aid, true
+	}
 
-	idStrings, err := redis.ZRevRange(ctx, mailboxKey, 0, -1)
+	pid, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || pid <= 0 {
+		return 0, 0, false
+	}
+	return pid, 0, true
+}
+
+// loadSocialMailbox lit le ZSET préparé par le Worker asynchrone et injecte les posts sociaux
+// dans les 3 paniers en respectant le quota social global (SocialRatio) et le plafond par auteur.
+func (feedBaskets *feedBaskets) loadSocialMailbox(ctx context.Context, userID int64, socialQuota int) (int, error) {
+	return loadSocialMailboxIntoBaskets(ctx, userID, socialQuota, feedBaskets.FeedA, feedBaskets.FeedB, feedBaskets.FeedC)
+}
+
+// loadSocialMailboxIntoBaskets lit la Mailbox du plus récent au plus ancien, plafonne le nombre total
+// de candidats injectés (socialQuota) ainsi que le nombre de posts par auteur (MailboxMaxPostsPerAuthor),
+// puis supprime sélectivement (ZREM) les posts consommés, déjà vus ou excédentaires d'un même auteur.
+func loadSocialMailboxIntoBaskets(ctx context.Context, userID int64, socialQuota int, targets ...*candidateBasket) (int, error) {
+	if socialQuota <= 0 || len(targets) == 0 {
+		return 0, nil
+	}
+
+	rawMembers, err := redis.FeedsMailbox.ZRevRange(ctx, userID, 0, -1)
 	if err != nil {
-		// On masque l'erreur Redis brute sous une AppError standardisée
-		return err
+		return 0, err
 	}
-	parsedPostIDs := pkg.ParseInt64List(idStrings)
-	for _, postID := range parsedPostIDs {
-		feedBaskets.FeedA.Add(ctx, userID, postID, originSocial)
-		feedBaskets.FeedB.Add(ctx, userID, postID, originSocial)
-		feedBaskets.FeedC.Add(ctx, userID, postID, originSocial)
+	if len(rawMembers) == 0 {
+		return 0, nil
 	}
 
-	// VIDAGE DE LA BOÎTE AUX LETTRES
-	// On la purge pour éviter que la prochaine génération ne recycle les mêmes posts.
-	err = redis.Del(ctx, mailboxKey)
-	if err != nil {
-		numan_log.Error(ctx).Err(err).Str("mailboxKey", mailboxKey).Msg("loadSocialMailbox: Échec du vidage de la boîte aux lettres")
-		return numan_error.NewInternal()
+	maxPerAuthor := variables.MailboxMaxPostsPerAuthor
+	authorCounts := make(map[int64]int)
+	seenInBatch := make(map[int64]struct{}, socialQuota)
+	membersToRemove := make([]any, 0, len(rawMembers))
+	addedCount := 0
+
+	for _, rawMember := range rawMembers {
+		postID, authorID, ok := parseMailboxMember(rawMember)
+		if !ok {
+			membersToRemove = append(membersToRemove, rawMember)
+			continue
+		}
+
+		// Dédoublonnage intra-mailbox (ex. transition format legacy -> "postID:authorID")
+		if _, dup := seenInBatch[postID]; dup {
+			membersToRemove = append(membersToRemove, rawMember)
+			continue
+		}
+
+		// Plafond par auteur : si l'auteur a déjà atteint MailboxMaxPostsPerAuthor dans ce panier,
+		// on écarte ET on supprime ses publications plus anciennes de la mailbox pour éviter
+		// qu'elles ne reviennent saturer les scrolls suivants.
+		if maxPerAuthor > 0 && authorID > 0 && authorCounts[authorID] >= maxPerAuthor {
+			membersToRemove = append(membersToRemove, rawMember)
+			continue
+		}
+
+		// Plafond global de la Mailbox dans le panier (SocialRatio) :
+		// une fois le quota atteint, les posts d'autres auteurs restent dans la mailbox
+		// pour les générations/extensions suivantes (bornés par FanOutRetentionLimit et StandardTTL).
+		if addedCount >= socialQuota {
+			continue
+		}
+
+		// Vérification Cuckoo Filter : un post déjà vu est purgé de la mailbox sans consommer de quota.
+		if service.HasSeen(ctx, userID, postID) {
+			membersToRemove = append(membersToRemove, rawMember)
+			continue
+		}
+
+		insertedAny := false
+		for _, target := range targets {
+			if target != nil && target.addWithoutSeenCheck(postID, originSocial) {
+				insertedAny = true
+			}
+		}
+
+		if insertedAny {
+			seenInBatch[postID] = struct{}{}
+			if authorID > 0 {
+				authorCounts[authorID]++
+			}
+			addedCount++
+			membersToRemove = append(membersToRemove, rawMember)
+		}
 	}
 
-	return nil
+	// Suppression sélective (ZREM) : sans race condition avec un Fan-Out concurrent
+	// et sans perte des posts non consommés d'autres amis au-delà du quota social.
+	if len(membersToRemove) > 0 {
+		if errRem := redis.FeedsMailbox.ZRem(ctx, userID, membersToRemove...); errRem != nil {
+			numan_log.Error(ctx).Err(errRem).Int64("user_id", userID).Int("count", len(membersToRemove)).Msg("loadSocialMailbox: Échec de la suppression sélective dans la boîte aux lettres")
+			return addedCount, numan_error.NewInternal()
+		}
+	}
+
+	return addedCount, nil
 }

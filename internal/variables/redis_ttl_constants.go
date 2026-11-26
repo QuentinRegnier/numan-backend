@@ -47,7 +47,7 @@ var (
 // ============================================================================
 //
 // L'ordre des 12 familles ci-dessous reflète exactement la déclaration et
-// l'initialisation des 100 collections dans internal/repository/redis/collections.go.
+// l'initialisation des 101 collections dans internal/repository/redis/collections.go.
 //
 // Famille 1  — OBJECT Cache (Tier 2)                 : StandardTTL (7j) | POIs: NoTTL (0)
 // Famille 2  — Auth, Sessions & 2FA (Tier 1)         : Sessions/Passkeys/SessionIndexes: StandardTTL (7j)
@@ -55,7 +55,7 @@ var (
 //                                                      PreAuth: TwoFactorPreAuthTTL (5m = VeryShortTTL)
 // Famille 3  — SPEED Cache (Tier 1)                  : UsersLite/Lex/Relations*: NoTTL (0)
 //                                                      ConvMeta/ConvMembers/SpeedAddable/SpeedCommunity: StandardTTL (7j)
-// Famille 4  — FEED Cache & Cuckoo (Tier 1)          : FeedsObject/FeedsPersonalized/CuckooSeen: ShortTTL (24h)
+// Famille 4  — FEED Cache & Cuckoo (Tier 1)          : FeedsObject/FeedsPersonalized/CuckooSeen/FanOutAuthorWindows: ShortTTL (24h)
 //                                                      FeedsMailbox: StandardTTL (7j) | FeedSchedule: NoTTL (0)
 // Famille 5  — Algorithme, MOST Cache & Tags (Tier 1): ContentVectors/LSHBuckets/IndirectTagConsensus: StandardTTL (7j)
 //                                                      RankedPosts/TagPosts/HashtagLeaderboard/Tags/HashtagCanon/GraphEdges: NoTTL (0)

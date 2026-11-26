@@ -335,12 +335,39 @@ func InvalidatePersonalizedFeedCache(ctx context.Context, userID int64, oldVecto
 }
 
 func extractIDsFromCandidates(candidates []postCandidate, limit int) []int64 {
+	if limit <= 0 || len(candidates) == 0 {
+		return []int64{}
+	}
 	if limit > len(candidates) {
 		limit = len(candidates)
 	}
-	extractedIDs := make([]int64, limit)
-	for i := 0; i < limit; i++ {
-		extractedIDs[i] = candidates[i].PostID
+
+	maxPerAuthor := variables.FeedMaxPostsPerAuthor
+	extractedIDs := make([]int64, 0, limit)
+	authorCounts := make(map[int64]int)
+	deferred := make([]int64, 0)
+
+	for _, c := range candidates {
+		if len(extractedIDs) >= limit {
+			break
+		}
+		if maxPerAuthor > 0 && c.AuthorID > 0 && authorCounts[c.AuthorID] >= maxPerAuthor {
+			deferred = append(deferred, c.PostID)
+			continue
+		}
+		extractedIDs = append(extractedIDs, c.PostID)
+		if c.AuthorID > 0 {
+			authorCounts[c.AuthorID]++
+		}
 	}
+
+	// Repli souple si la contrainte par auteur n'a pas permis d'atteindre limit
+	for _, postID := range deferred {
+		if len(extractedIDs) >= limit {
+			break
+		}
+		extractedIDs = append(extractedIDs, postID)
+	}
+
 	return extractedIDs
 }

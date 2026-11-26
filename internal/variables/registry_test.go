@@ -255,3 +255,40 @@ func TestRegistry_TrustScoreVariablesValidation(t *testing.T) {
 		t.Fatal("attendu un rejet pour TrustScoreInitial > 1.0")
 	}
 }
+
+func TestRegistry_FeedMailboxAndAuthorDiversityVariables(t *testing.T) {
+	resetAllVariablesForTest()
+	defer resetAllVariablesForTest()
+
+	if SocialRatio != 0.3 || FanOutRetentionLimit != -501 || FanOutMaxPostsPerAuthorPerDay != 5 || MailboxMaxPostsPerAuthor != 3 || FeedMaxPostsPerAuthor != 3 {
+		t.Fatalf("valeurs par défaut inattendues: SocialRatio=%v, FanOutRetentionLimit=%d, FanOutMaxPostsPerAuthorPerDay=%d, MailboxMaxPostsPerAuthor=%d, FeedMaxPostsPerAuthor=%d",
+			SocialRatio, FanOutRetentionLimit, FanOutMaxPostsPerAuthorPerDay, MailboxMaxPostsPerAuthor, FeedMaxPostsPerAuthor)
+	}
+
+	// Patch à chaud valide (mix PascalCase + UPPER_SNAKE_CASE)
+	prep, err := ValidateAndPreparePatch(map[string]json.RawMessage{
+		"SocialRatio":                   json.RawMessage(`0.25`),
+		"FAN_OUT_RETENTION_LIMIT":       json.RawMessage(`-201`),
+		"FanOutMaxPostsPerAuthorPerDay": json.RawMessage(`4`),
+		"MAILBOX_MAX_POSTS_PER_AUTHOR":  json.RawMessage(`2`),
+		"FEED_MAX_POSTS_PER_AUTHOR":     json.RawMessage(`2`),
+	})
+	if err != nil {
+		t.Fatalf("patch feed/mailbox valide rejeté : %v", err)
+	}
+	ApplyPreparedPatchInMemory(prep, 20)
+
+	if SocialRatio != 0.25 || FanOutRetentionLimit != -201 || FanOutMaxPostsPerAuthorPerDay != 4 || MailboxMaxPostsPerAuthor != 2 || FeedMaxPostsPerAuthor != 2 {
+		t.Fatalf("patch feed/mailbox mal appliqué")
+	}
+
+	// Validation stricte : valeurs <= 0 rejetées pour les plafonds positifs
+	for _, key := range []string{"FanOutMaxPostsPerAuthorPerDay", "MailboxMaxPostsPerAuthor", "FeedMaxPostsPerAuthor"} {
+		if _, errBad := ValidateAndPreparePatch(map[string]json.RawMessage{key: json.RawMessage(`0`)}); errBad == nil {
+			t.Errorf("attendu un rejet pour %s = 0", key)
+		}
+	}
+	if _, errBadRet := ValidateAndPreparePatch(map[string]json.RawMessage{"FanOutRetentionLimit": json.RawMessage(`50`)}); errBadRet == nil {
+		t.Error("attendu un rejet pour FanOutRetentionLimit >= 0")
+	}
+}

@@ -65,12 +65,13 @@ func TestCollectionsTTLRegistryAndRefreshStandardTTL(t *testing.T) {
 		{"SpeedAddable", repoRedis.SpeedAddable, variables.StandardTTL, true},
 		{"SpeedCommunity", repoRedis.SpeedCommunity, variables.StandardTTL, true},
 
-		// Famille 4 : FEED Cache & Cuckoo (5)
+		// Famille 4 : FEED Cache & Cuckoo (6)
 		{"FeedsObject", repoRedis.FeedsObject, variables.ShortTTL, false},
 		{"FeedsPersonalized", repoRedis.FeedsPersonalized, variables.ShortTTL, false},
 		{"FeedsMailbox", repoRedis.FeedsMailbox, variables.StandardTTL, true},
 		{"FeedSchedule", repoRedis.FeedSchedule, variables.NoTTL, false},
 		{"CuckooSeen", repoRedis.CuckooSeen, variables.ShortTTL, false},
+		{"FanOutAuthorWindows", repoRedis.FanOutAuthorWindows, variables.ShortTTL, false},
 
 		// Famille 5 : Algorithme, MOST Cache, Tags & LSH (15)
 		{"ContentVectors", repoRedis.ContentVectors, variables.StandardTTL, true},
@@ -150,7 +151,7 @@ func TestCollectionsTTLRegistryAndRefreshStandardTTL(t *testing.T) {
 		{"DynamicVariablesSync", repoRedis.DynamicVariablesSync, variables.UltraShortTTL, false},
 	}
 
-	require.Len(t, specs, 100, "all 100 Redis collections must be covered")
+	require.Len(t, specs, 101, "all 101 Redis collections must be covered")
 
 	for _, s := range specs {
 		require.NotNil(t, s.col, "collection %s must be initialized", s.name)

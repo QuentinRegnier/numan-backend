@@ -161,6 +161,9 @@ func (c *Collection) ZAddAndTrimBatch(ctx context.Context, ids []int64, score fl
 			key := c.Key(id)
 			pipe.Do(ctx, "ZADD", key, score, member)
 			pipe.Do(ctx, "ZREMRANGEBYRANK", key, 0, trimStop)
+			if c.DefaultTTL > 0 {
+				pipe.Expire(ctx, key, c.DefaultTTL)
+			}
 		}
 		if _, err := pipe.Exec(ctx); err != nil {
 			return err

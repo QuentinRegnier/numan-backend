@@ -58,11 +58,12 @@ var (
 	SpeedCommunity      *Collection
 
 	// --- FAMILLE 4 : FEED Cache & FILTRE CUCKOO (Tier 1 Core) ---
-	FeedsObject       *Collection
-	FeedsPersonalized *Collection
-	FeedsMailbox      *Collection
-	FeedSchedule      *Collection
-	CuckooSeen        *Collection
+	FeedsObject         *Collection
+	FeedsPersonalized   *Collection
+	FeedsMailbox        *Collection
+	FeedSchedule        *Collection
+	CuckooSeen          *Collection
+	FanOutAuthorWindows *Collection // ZSET glissant 24h anti-flood Fan-Out par auteur
 
 	// --- FAMILLE 5 : ALGORITHME, MOST Cache, TAGS & LSH (Tier 1 Core) ---
 	ContentVectors       *Collection
@@ -196,6 +197,7 @@ func InitCacheDatabase() {
 	FeedsMailbox = newCoreCollection("feed_cache:mailbox", variables.StandardTTL)
 	FeedSchedule = newCoreCollection("feed:precompute:schedule", variables.NoTTL)
 	CuckooSeen = newCoreCollection("cuckoo:seen", variables.ShortTTL)
+	FanOutAuthorWindows = newCoreCollection("feed_cache:fanout:author_window", variables.ShortTTL)
 
 	// --- FAMILLE 5 : ALGORITHME, MOST Cache, TAGS & LSH (Tier 1 Core) ---
 	ContentVectors = newCoreCollection("most_cache:vec", variables.StandardTTL)

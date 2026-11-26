@@ -98,6 +98,9 @@ func init() {
 	registerInt64("FeedWarmupBatchSize", "feed", &FeedWarmupBatchSize, positiveInt64)
 	registerInt64("FanOutVIPThreshold", "feed", &FanOutVIPThreshold, positiveInt64)
 	registerInt("FanOutRetentionLimit", "feed", &FanOutRetentionLimit, negativeInt)
+	registerInt("FanOutMaxPostsPerAuthorPerDay", "feed", &FanOutMaxPostsPerAuthorPerDay, positiveInt)
+	registerInt("MailboxMaxPostsPerAuthor", "feed", &MailboxMaxPostsPerAuthor, positiveInt)
+	registerInt("FeedMaxPostsPerAuthor", "feed", &FeedMaxPostsPerAuthor, positiveInt)
 
 	// 6. graph_constants.go
 	registerFloat64("GraphDecayLambda", "graph", &GraphDecayLambda, positiveFloat)

@@ -291,20 +291,26 @@ func runMMR(candidates []postCandidate, similarityMatrix []float32, matrixDimens
 
 	selectedCandidates := make([]postCandidate, 0, requestedLimit)
 	selectedMatrixIndexes := make([]int, 0, requestedLimit)
+	selectedAuthorCounts := make(map[int64]int)
+	maxPerAuthor := variables.FeedMaxPostsPerAuthor
 
 	isAvailable := make([]bool, totalCandidates)
 	for i := range isAvailable {
 		isAvailable[i] = true
 	}
 
-	// Boucle principale : on tire les posts 1 par 1 jusqu'à atteindre la limite demandée
-	for len(selectedCandidates) < requestedLimit {
+	pickBest := func(enforceAuthorCap bool) int {
 		var bestMarginalScore = math.Inf(-1)
-		bestCandidateIndex := -1
+		bestIdx := -1
 
 		// Évaluation marginale de tous les candidats restants
 		for i := range candidates {
 			if !isAvailable[i] {
+				continue
+			}
+
+			// Garde-fou final de diversité par auteur dans le lot généré
+			if enforceAuthorCap && maxPerAuthor > 0 && candidates[i].AuthorID > 0 && selectedAuthorCounts[candidates[i].AuthorID] >= maxPerAuthor {
 				continue
 			}
 
@@ -338,8 +344,20 @@ func runMMR(candidates []postCandidate, similarityMatrix []float32, matrixDimens
 			// Retenir le candidat ayant le meilleur score net (Pertinence - Redondance)
 			if marginalScore > bestMarginalScore {
 				bestMarginalScore = marginalScore
-				bestCandidateIndex = i
+				bestIdx = i
 			}
+		}
+
+		return bestIdx
+	}
+
+	// Boucle principale : on tire les posts 1 par 1 jusqu'à atteindre la limite demandée
+	for len(selectedCandidates) < requestedLimit {
+		bestCandidateIndex := pickBest(true)
+		if bestCandidateIndex < 0 {
+			// Repli souple (Cold-Start) : si le pool restant ne contient plus que des auteurs
+			// déjà au plafond, on relâche la contrainte plutôt que de renvoyer un feed tronqué.
+			bestCandidateIndex = pickBest(false)
 		}
 
 		// Rupture si on n'a plus rien à évaluer
@@ -350,6 +368,9 @@ func runMMR(candidates []postCandidate, similarityMatrix []float32, matrixDimens
 		// Validation et verrouillage du candidat élu
 		selectedCandidates = append(selectedCandidates, candidates[bestCandidateIndex])
 		selectedMatrixIndexes = append(selectedMatrixIndexes, bestCandidateIndex)
+		if candidates[bestCandidateIndex].AuthorID > 0 {
+			selectedAuthorCounts[candidates[bestCandidateIndex].AuthorID]++
+		}
 		isAvailable[bestCandidateIndex] = false
 	}
 

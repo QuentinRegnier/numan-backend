@@ -16,4 +16,9 @@ var (
 	FeedWarmupBatchSize    int64 = 500             // Nombre maximum d'utilisateurs réhydratés par cycle
 	FanOutVIPThreshold     int64 = 50000           // Limite d'abonnés déclenchant le coupe-circuit "Justin Bieber"
 	FanOutRetentionLimit         = -501            // Purge ZSET (ZREMRANGEBYRANK) pour conserver les 500 derniers posts
+
+	// Garde-fous anti-saturation de la Mailbox & diversité par auteur (Modifiables à chaud)
+	FanOutMaxPostsPerAuthorPerDay = 5 // Nombre max de posts d'un même auteur distribués en Fan-Out sur 24h glissantes
+	MailboxMaxPostsPerAuthor      = 3 // Nombre max de posts d'un même auteur extraits de la Mailbox par panier
+	FeedMaxPostsPerAuthor         = 3 // Nombre max de posts d'un même auteur par lot final généré (Caissière / MMR)
 )

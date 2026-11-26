@@ -2,6 +2,8 @@ package worker
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/QuentinRegnier/numan-backend/internal/domain"
@@ -108,6 +110,48 @@ func getTelemetryData(ctx context.Context, userID int64) (time.Time, bool) {
 	return lastActiveAt, isOnline
 }
 
+// formatMailboxMember encode le membre stocké dans FeedsMailbox sous la forme "{postID}:{authorID}"
+// afin de permettre le filtrage par auteur en O(1) à la lecture du panier sans requête réseau supplémentaire.
+func formatMailboxMember(postID, authorID int64) string {
+	if authorID > 0 {
+		return fmt.Sprintf("%d:%d", postID, authorID)
+	}
+	return strconv.FormatInt(postID, 10)
+}
+
+// isAuthorFanOutThrottled vérifie si un auteur a déjà atteint son quota quotidien de Fan-Out
+// sur une fenêtre glissante de 24h (variables.FanOutMaxPostsPerAuthorPerDay).
+func isAuthorFanOutThrottled(ctx context.Context, authorID, postID int64) bool {
+	maxPerDay := variables.FanOutMaxPostsPerAuthorPerDay
+	if maxPerDay <= 0 || authorID <= 0 || redis.FanOutAuthorWindows == nil || !redis.FanOutAuthorWindows.IsReady() {
+		return false
+	}
+
+	cutoffMs := domain.TimeToMillis(domain.NowTime().Add(-variables.ShortTTL))
+	_ = redis.FanOutAuthorWindows.ZRemRangeByScore(ctx, authorID, "-inf", strconv.FormatInt(cutoffMs, 10))
+
+	count, err := redis.FanOutAuthorWindows.ZCard(ctx, authorID)
+	if err != nil || count < int64(maxPerDay) {
+		return false
+	}
+
+	// Idempotence : autoriser un éventuel rejeu pour un post déjà comptabilisé dans la fenêtre
+	if _, errScore := redis.FanOutAuthorWindows.ZScore(ctx, authorID, strconv.FormatInt(postID, 10)); errScore == nil {
+		return false
+	}
+	return true
+}
+
+// recordAuthorFanOut comptabilise le post dans la fenêtre glissante 24h de Fan-Out de l'auteur.
+func recordAuthorFanOut(ctx context.Context, authorID, postID int64) {
+	if authorID <= 0 || redis.FanOutAuthorWindows == nil || !redis.FanOutAuthorWindows.IsReady() {
+		return
+	}
+	nowMs := float64(domain.NowMillis())
+	_ = redis.FanOutAuthorWindows.ZAdd(ctx, authorID, nowMs, strconv.FormatInt(postID, 10))
+	_ = redis.FanOutAuthorWindows.Expire(ctx, authorID, variables.ShortTTL)
+}
+
 // handleSocialFanOut intercepte les créations de posts pour distribuer l'ID
 // dans les boîtes aux lettres Redis (Mailboxes) du graphe social de l'auteur.
 func handleSocialFanOut(ctx context.Context, events []redis.AsyncEvent) {
@@ -122,6 +166,17 @@ func handleSocialFanOut(ctx context.Context, events []redis.AsyncEvent) {
 			}
 
 			authorID := p.UserID
+
+			// ── ÉTAPE 1.5 : COUPE-CIRCUIT ANTI-FLOOD PAR AUTEUR (24H GLISSANTES) ─
+			if isAuthorFanOutThrottled(ctx, authorID, postID) {
+				numan_log.Info(ctx).
+					Int64("author_id", authorID).
+					Int64("post_id", postID).
+					Int("max_per_day", variables.FanOutMaxPostsPerAuthorPerDay).
+					Msg("FanOut annulé : plafond quotidien par auteur atteint (protection anti-flood Mailbox).")
+				continue
+			}
+
 			var targetIDs []int64
 			var errGraph error
 
@@ -157,9 +212,12 @@ func handleSocialFanOut(ctx context.Context, events []redis.AsyncEvent) {
 
 			// ── ÉTAPE 3 : DISTRIBUTION DE MASSE VIA BATCH REDIS (CLUSTER-SAFE) ─
 			score := float64(domain.NowMillis())
-			if errPipe := redis.FeedsMailbox.ZAddAndTrimBatch(ctx, targetIDs, score, postID, int64(variables.FanOutRetentionLimit)); errPipe != nil {
+			member := formatMailboxMember(postID, authorID)
+			if errPipe := redis.FeedsMailbox.ZAddAndTrimBatch(ctx, targetIDs, score, member, int64(variables.FanOutRetentionLimit)); errPipe != nil {
 				numan_log.Error(ctx).Err(errPipe).Int64("post_id", postID).Msg("Échec de l'exécution du pipeline de distribution FanOut.")
+				continue
 			}
+			recordAuthorFanOut(ctx, authorID, postID)
 		}
 	}
 }
